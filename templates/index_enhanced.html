@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF2LaTeX - PDF转LaTeX在线工具</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
+    <!-- Prism.js for code highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-latex.min.js"></script>
+    <!-- Socket.IO for real-time progress -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <h1>📄 PDF2LaTeX Enhanced</h1>
+            <p class="subtitle">智能PDF转LaTeX工具 - 实时进度 · Token统计 · 美化展示</p>
+        </header>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 上传区域 -->
+            <div class="upload-section">
+                <div id="dropZone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="drop-text">拖拽PDF文件到这里</p>
+                        <p class="drop-text-or">或</p>
+                        <div class="button-group">
+                            <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                浏览文件
+                            </button>
+                            <button class="browse-btn-secondary" onclick="document.getElementById('batchFileInput').click()">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <rect x="3" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="14" width="7" height="7"></rect>
+                                    <rect x="3" y="14" width="7" height="7"></rect>
+                                </svg>
+                                批量选择
+                            </button>
+                        </div>
+                        <input type="file" id="fileInput" accept=".pdf" style="display: none;">
+                        <input type="file" id="batchFileInput" accept=".pdf" multiple style="display: none;">
+                        <p class="file-hint">支持最大50MB的PDF文件 | 批量最多10个文件</p>
+                    </div>
+                </div>
+
+                <!-- 选项区域 -->
+                <div class="options-section" id="optionsSection" style="display: none;">
+                    <h3>转换选项</h3>
+                    
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="translateOption">
+                            <span>翻译成中文</span>
+                            <span class="hint">（会调用两次API）</span>
+                        </label>
+                    </div>
+
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="wrapperOption" checked>
+                            <span>添加文档结构</span>
+                        </label>
+                    </div>
+
+                    <div class="option-group">
+                        <label>
+                            <span>指定页码</span>
+                            <span class="hint">（可选，如: 1,2,3）</span>
+                        </label>
+                        <input type="text" id="pagesInput" placeholder="例如: 1,2,3" class="text-input">
+                    </div>
+
+                    <button class="convert-btn" id="convertBtn">
+                        <span>开始转换</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 实时进度区域 -->
+            <div class="progress-section" id="progressSection" style="display: none;">
+                <div class="progress-content">
+                    <div class="spinner"></div>
+                    <p class="progress-text" id="progressText">准备开始...</p>
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" id="progressBarFill"></div>
+                    </div>
+                    <p class="progress-detail" id="progressDetail">0 / 0</p>
+                    
+                    <!-- Token 统计实时显示 -->
+                    <div class="token-stats" id="tokenStats" style="display: none;">
+                        <h4>📊 Token 使用统计</h4>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="stat-label">输入 Tokens:</span>
+                                <span class="stat-value" id="promptTokens">0</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">输出 Tokens:</span>
+                                <span class="stat-value" id="completionTokens">0</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">总计:</span>
+                                <span class="stat-value" id="totalTokens">0</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">估算成本:</span>
+                                <span class="stat-value" id="estimatedCost">$0.00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 结果区域 -->
+            <div class="result-section" id="resultSection" style="display: none;">
+                <div class="result-header">
+                    <h3>✅ 转换完成</h3>
+                    <button class="btn-secondary" onclick="resetApp()">转换新文件</button>
+                </div>
+
+                <!-- Token 统计卡片 -->
+                <div class="stats-card">
+                    <h4>📊 转换统计</h4>
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-icon">📄</div>
+                            <div class="stat-info">
+                                <div class="stat-label">处理页数</div>
+                                <div class="stat-value" id="resultPages">0</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">🔤</div>
+                            <div class="stat-info">
+                                <div class="stat-label">总 Tokens</div>
+                                <div class="stat-value" id="resultTokens">0</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">💰</div>
+                            <div class="stat-info">
+                                <div class="stat-label">估算成本</div>
+                                <div class="stat-value" id="resultCost">$0.00</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">⏱️</div>
+                            <div class="stat-info">
+                                <div class="stat-label">处理时间</div>
+                                <div class="stat-value" id="resultTime">0s</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="result-actions">
+                    <button class="btn-primary" id="downloadBtn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        下载 .tex 文件
+                    </button>
+                    <button class="btn-secondary" onclick="copyToClipboard()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        复制代码
+                    </button>
+                    <button class="btn-accent" onclick="renderLatex()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                        </svg>
+                        在线渲染
+                    </button>
+                </div>
+
+                <!-- 美化的代码预览 -->
+                <div class="code-preview">
+                    <div class="code-header">
+                        <span>LaTeX 代码预览</span>
+                        <div class="code-header-right">
+                            <span class="code-lines" id="codeLines">0 行</span>
+                            <button class="icon-btn" onclick="toggleFullscreen()" title="全屏">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <pre class="language-latex"><code class="language-latex" id="codeContent"></code></pre>
+                </div>
+            </div>
+
+            <!-- 错误提示 -->
+            <div class="error-section" id="errorSection" style="display: none;">
+                <div class="error-content">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <h3>转换失败</h3>
+                    <p id="errorMessage"></p>
+                    <button class="btn-secondary" onclick="resetApp()">重试</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- 页脚 -->
+        <footer class="footer">
+            <p>使用 DeepSeek API 提供支持 | 
+                <a href="https://github.com" target="_blank">GitHub</a> | 
+                <a href="https://platform.deepseek.com/" target="_blank">获取API密钥</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script_enhanced.js') }}"></script>
+</body>
+</html>

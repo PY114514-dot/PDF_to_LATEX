@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF2LaTeX - PDF转LaTeX在线工具</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <h1>📄 PDF2LaTeX</h1>
+            <p class="subtitle">智能PDF转LaTeX工具 - 支持中文翻译</p>
+        </header>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 上传区域 -->
+            <div class="upload-section">
+                <div id="dropZone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="drop-text">拖拽PDF文件到这里</p>
+                        <p class="drop-text-or">或</p>
+                        <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
+                            浏览文件
+                        </button>
+                        <input type="file" id="fileInput" accept=".pdf" style="display: none;">
+                        <p class="file-hint">支持最大50MB的PDF文件</p>
+                    </div>
+                </div>
+
+                <!-- 选项区域 -->
+                <div class="options-section" id="optionsSection" style="display: none;">
+                    <h3>转换选项</h3>
+                    
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="translateOption">
+                            <span>翻译成中文</span>
+                            <span class="hint">（会调用两次API，费用翻倍）</span>
+                        </label>
+                    </div>
+
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="wrapperOption" checked>
+                            <span>添加文档结构</span>
+                            <span class="hint">（包含\documentclass等）</span>
+                        </label>
+                    </div>
+
+                    <div class="option-group">
+                        <label>
+                            <span>指定页码</span>
+                            <span class="hint">（可选，如: 1,2,3 或留空转换全部）</span>
+                        </label>
+                        <input type="text" id="pagesInput" placeholder="例如: 1,2,3" class="text-input">
+                    </div>
+
+                    <button class="convert-btn" id="convertBtn">
+                        <span>开始转换</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 进度区域 -->
+            <div class="progress-section" id="progressSection" style="display: none;">
+                <div class="progress-content">
+                    <div class="spinner"></div>
+                    <p class="progress-text" id="progressText">正在处理...</p>
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" id="progressBarFill"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 结果区域 -->
+            <div class="result-section" id="resultSection" style="display: none;">
+                <div class="result-header">
+                    <h3>✅ 转换完成</h3>
+                    <button class="btn-secondary" onclick="resetApp()">转换新文件</button>
+                </div>
+
+                <div class="result-actions">
+                    <button class="btn-primary" id="downloadBtn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        下载 .tex 文件
+                    </button>
+                    <button class="btn-secondary" onclick="copyToClipboard()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        复制代码
+                    </button>
+                </div>
+
+                <div class="code-preview">
+                    <div class="code-header">
+                        <span>LaTeX代码预览</span>
+                        <span class="code-lines" id="codeLines">0 行</span>
+                    </div>
+                    <pre id="codeContent"><code></code></pre>
+                </div>
+            </div>
+
+            <!-- 错误提示 -->
+            <div class="error-section" id="errorSection" style="display: none;">
+                <div class="error-content">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <h3>转换失败</h3>
+                    <p id="errorMessage"></p>
+                    <button class="btn-secondary" onclick="resetApp()">重试</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- 页脚 -->
+        <footer class="footer">
+            <p>使用 DeepSeek API 提供支持 | 
+                <a href="https://github.com" target="_blank">GitHub</a> | 
+                <a href="https://platform.deepseek.com/" target="_blank">获取API密钥</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
