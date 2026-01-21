@@ -233,6 +233,21 @@
                     <button class="btn-secondary" onclick="resetApp()">重试</button>
                 </div>
             </div>
+
+            <!-- 历史记录区域 -->
+            <div class="history-section" id="historySection">
+                <div class="history-header">
+                    <h3>📜 转换历史</h3>
+                    <button class="btn-secondary" onclick="refreshHistory()" style="padding: 0.5rem 1rem;">
+                        🔄 刷新
+                    </button>
+                </div>
+                <div class="history-list" id="historyList">
+                    <div class="loading-history">
+                        <p>加载历史记录中...</p>
+                    </div>
+                </div>
+            </div>
         </main>
 
         <!-- 页脚 -->

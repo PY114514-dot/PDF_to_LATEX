@@ -8,6 +8,36 @@ let socket = null;
 let currentTaskId = null;
 let isBatchMode = false;  // 是否批量模式
 
+// 安全的localStorage访问（避免跟踪保护阻止）
+const safeStorage = {
+    setItem: (key, value) => {
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (e) {
+            console.warn('localStorage 被阻止:', e.message);
+            return false;
+        }
+    },
+    getItem: (key) => {
+        try {
+            return localStorage.getItem(key);
+        } catch (e) {
+            console.warn('localStorage 被阻止:', e.message);
+            return null;
+        }
+    },
+    removeItem: (key) => {
+        try {
+            localStorage.removeItem(key);
+            return true;
+        } catch (e) {
+            console.warn('localStorage 被阻止:', e.message);
+            return false;
+        }
+    }
+};
+
 // DOM元素
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -33,47 +63,73 @@ document.addEventListener('DOMContentLoaded', () => {
     setupConvertButton();
     initWebSocket();
     loadAvailableModels();
+    loadHistory();
 });
 
 // 初始化WebSocket
 function initWebSocket() {
     socket = io({
-        transports: ['websocket', 'polling'],  // 支持多种传输方式
+        transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        reconnectionAttempts: 5,
-        timeout: 120000,  // 120秒超时
-        pingTimeout: 120000,
-        pingInterval: 25000
+        reconnectionAttempts: Infinity,  // 无限重连
+        timeout: 300000,  // 5分钟超时
+        pingTimeout: 300000,  // 5分钟ping超时
+        pingInterval: 25000,  // 25秒ping间隔
+        upgrade: false,  // 禁用传输升级，保持稳定
+        forceNew: false
     });
     
     socket.on('connect', () => {
-        console.log('WebSocket 已连接');
+        console.log('✅ WebSocket 已连接');
     });
     
     socket.on('disconnect', (reason) => {
-        console.log('WebSocket 已断开:', reason);
-        if (reason === 'io server disconnect') {
-            // 服务器主动断开，尝试重连
-            socket.connect();
+        console.warn('⚠️ WebSocket 已断开:', reason);
+        // 如果是ping timeout，尝试重连
+        if (reason === 'ping timeout' || reason === 'transport close') {
+            console.log('🔄 尝试重新连接...');
+            setTimeout(() => socket.connect(), 1000);
         }
     });
     
     socket.on('connect_error', (error) => {
-        console.error('WebSocket 连接错误:', error);
+        console.error('❌ WebSocket 连接错误:', error.message);
     });
     
     socket.on('reconnect', (attemptNumber) => {
-        console.log('WebSocket 重连成功，尝试次数:', attemptNumber);
+        console.log('✅ WebSocket 重连成功，尝试次数:', attemptNumber);
     });
     
     socket.on('reconnect_error', (error) => {
-        console.error('WebSocket 重连失败:', error);
+        console.error('❌ WebSocket 重连失败:', error.message);
+    });
+    
+    socket.on('reconnect_attempt', () => {
+        console.log('🔄 WebSocket 尝试重连...');
     });
     
     socket.on('progress', (data) => {
         updateProgress(data);
+    });
+    
+    // 添加心跳保活机制
+    let heartbeatInterval;
+    socket.on('connect', () => {
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+        heartbeatInterval = setInterval(() => {
+            if (socket.connected) {
+                socket.emit('heartbeat', { timestamp: Date.now() });
+            }
+        }, 20000); // 每20秒发送心跳
+    });
+    
+    socket.on('disconnect', () => {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
     });
 }
 
@@ -81,21 +137,58 @@ function initWebSocket() {
 function updateProgress(data) {
     console.log('进度更新:', data);
     
-    progressBarFill.style.width = `${data.percent}%`;
-    progressText.textContent = data.message;
-    progressDetail.textContent = `${data.current} / ${data.total}`;
+    // 平滑动画更新进度条
+    progressBarFill.style.transition = 'width 0.3s ease';
+    progressBarFill.style.width = `${Math.min(data.percent, 100)}%`;
     
-    // 根据状态显示不同的消息
-    if (data.status === 'extracting') {
-        progressText.textContent = `📄 ${data.message}`;
-    } else if (data.status === 'translating') {
-        progressText.textContent = `🌏 ${data.message}`;
-        tokenStats.style.display = 'block';
-    } else if (data.status === 'converting') {
-        progressText.textContent = `⚙️ ${data.message}`;
-        tokenStats.style.display = 'block';
-    } else if (data.status === 'completed') {
-        progressText.textContent = `✅ ${data.message}`;
+    // 根据状态显示不同的消息和图标
+    let message = data.message;
+    let icon = '';
+    
+    switch (data.status) {
+        case 'preparing':
+            icon = '⏳';
+            break;
+        case 'uploading':
+            icon = '📤';
+            break;
+        case 'extracting':
+            icon = '📄';
+            message = data.message;
+            break;
+        case 'translating':
+            icon = '🌏';
+            tokenStats.style.display = 'block';
+            break;
+        case 'converting':
+            icon = '⚙️';
+            tokenStats.style.display = 'block';
+            break;
+        case 'processing':
+            icon = '🔄';
+            break;
+        case 'completed':
+            icon = '✅';
+            progressBarFill.style.width = '100%';
+            break;
+        default:
+            icon = '📊';
+    }
+    
+    // 更新文本（如果消息中没有图标，则添加）
+    if (!message.match(/^[📄📤⏳🌏⚙️✅🔄📊📦]/)) {
+        progressText.textContent = `${icon} ${message}`;
+    } else {
+        progressText.textContent = message;
+    }
+    
+    // 更新详细信息
+    if (data.status === 'uploading') {
+        // 上传时显示字节数
+        progressDetail.textContent = `${data.percent}%`;
+    } else {
+        // 其他时候显示当前/总数
+        progressDetail.textContent = `${data.current} / ${data.total}`;
     }
 }
 
@@ -250,6 +343,7 @@ async function startSingleConversion() {
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
     const pages = document.getElementById('pagesInput').value.trim();
+    const model = document.getElementById('modelSelect').value;
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'block';
@@ -258,10 +352,10 @@ async function startSingleConversion() {
     tokenStats.style.display = 'none';
 
     updateProgress({
-        percent: 5,
+        percent: 0,
         current: 0,
         total: 100,
-        message: '准备上传文件...',
+        message: '📤 准备上传文件...',
         status: 'preparing'
     });
 
@@ -270,29 +364,68 @@ async function startSingleConversion() {
         formData.append('file', selectedFile);
         formData.append('translate', translate);
         formData.append('add_wrapper', addWrapper);
+        formData.append('model', model);
         if (pages) {
             formData.append('pages', pages);
         }
 
-        updateProgress({
-            percent: 10,
-            current: 1,
-            total: 100,
-            message: '正在上传文件...',
-            status: 'uploading'
+        // 使用 XMLHttpRequest 监控上传进度
+        const xhr = new XMLHttpRequest();
+        
+        // 上传进度监控
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const percentComplete = Math.round((e.loaded / e.total) * 15); // 上传占15%
+                updateProgress({
+                    percent: percentComplete,
+                    current: e.loaded,
+                    total: e.total,
+                    message: `📤 正在上传文件... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`,
+                    status: 'uploading'
+                });
+            }
+        });
+        
+        // 上传完成
+        xhr.upload.addEventListener('load', () => {
+            updateProgress({
+                percent: 15,
+                current: 1,
+                total: 1,
+                message: '✅ 文件上传完成，开始处理...',
+                status: 'processing'
+            });
+        });
+        
+        // 创建Promise来处理XHR请求
+        const uploadPromise = new Promise((resolve, reject) => {
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    try {
+                        const result = JSON.parse(xhr.responseText);
+                        resolve(result);
+                    } catch (e) {
+                        reject(new Error('解析响应失败'));
+                    }
+                } else {
+                    try {
+                        const error = JSON.parse(xhr.responseText);
+                        reject(new Error(error.error || '转换失败'));
+                    } catch (e) {
+                        reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+                    }
+                }
+            };
+            
+            xhr.onerror = () => reject(new Error('网络请求失败'));
+            xhr.ontimeout = () => reject(new Error('请求超时'));
+            
+            xhr.open('POST', '/api/convert');
+            xhr.timeout = 300000; // 5分钟超时
+            xhr.send(formData);
         });
 
-        const response = await fetch('/api/convert', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || '转换失败');
-        }
-
-        const result = await response.json();
+        const result = await uploadPromise;
         
         if (result.task_id) {
             currentTaskId = result.task_id;
@@ -309,11 +442,21 @@ async function startSingleConversion() {
     }
 }
 
+// 格式化字节大小
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
+
 // 批量转换
 async function startBatchConversion() {
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
     const pages = document.getElementById('pagesInput').value.trim();
+    const model = document.getElementById('modelSelect').value;
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'block';
@@ -322,10 +465,10 @@ async function startBatchConversion() {
     tokenStats.style.display = 'none';
 
     updateProgress({
-        percent: 5,
+        percent: 0,
         current: 0,
         total: selectedFiles.length,
-        message: `准备批量处理 ${selectedFiles.length} 个文件...`,
+        message: `📦 准备批量处理 ${selectedFiles.length} 个文件...`,
         status: 'preparing'
     });
 
@@ -339,29 +482,71 @@ async function startBatchConversion() {
         
         formData.append('translate', translate);
         formData.append('add_wrapper', addWrapper);
+        formData.append('model', model);
         if (pages) {
             formData.append('pages', pages);
         }
 
-        updateProgress({
-            percent: 10,
-            current: 0,
-            total: selectedFiles.length,
-            message: '正在上传文件...',
-            status: 'uploading'
+        // 计算总文件大小
+        const totalSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+
+        // 使用 XMLHttpRequest 监控上传进度
+        const xhr = new XMLHttpRequest();
+        
+        // 上传进度监控
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const percentComplete = Math.round((e.loaded / e.total) * 10); // 上传占10%
+                updateProgress({
+                    percent: percentComplete,
+                    current: e.loaded,
+                    total: e.total,
+                    message: `📤 正在上传 ${selectedFiles.length} 个文件... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`,
+                    status: 'uploading'
+                });
+            }
+        });
+        
+        // 上传完成
+        xhr.upload.addEventListener('load', () => {
+            updateProgress({
+                percent: 10,
+                current: 0,
+                total: selectedFiles.length,
+                message: '✅ 文件上传完成，开始批量处理...',
+                status: 'processing'
+            });
+        });
+        
+        // 创建Promise来处理XHR请求
+        const uploadPromise = new Promise((resolve, reject) => {
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    try {
+                        const result = JSON.parse(xhr.responseText);
+                        resolve(result);
+                    } catch (e) {
+                        reject(new Error('解析响应失败'));
+                    }
+                } else {
+                    try {
+                        const error = JSON.parse(xhr.responseText);
+                        reject(new Error(error.error || '批量转换失败'));
+                    } catch (e) {
+                        reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+                    }
+                }
+            };
+            
+            xhr.onerror = () => reject(new Error('网络请求失败'));
+            xhr.ontimeout = () => reject(new Error('请求超时'));
+            
+            xhr.open('POST', '/api/batch-convert');
+            xhr.timeout = 600000; // 10分钟超时
+            xhr.send(formData);
         });
 
-        const response = await fetch('/api/batch-convert', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || '批量转换失败');
-        }
-
-        const result = await response.json();
+        const result = await uploadPromise;
         
         if (result.batch_id) {
             currentTaskId = result.batch_id;
@@ -422,6 +607,9 @@ function showResult(result) {
     downloadBtn.onclick = () => {
         window.location.href = downloadUrl;
     };
+
+    // 刷新历史记录
+    loadHistory();
 
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -668,6 +856,9 @@ function showBatchResult(result) {
         </div>
     `;
 
+    // 刷新历史记录
+    loadHistory();
+
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -716,7 +907,7 @@ function renderLatex(content = null) {
     }
 
     // 保存到localStorage供渲染页面使用
-    localStorage.setItem('latexContent', contentToRender);
+    safeStorage.setItem('latexContent', contentToRender);
     
     // 在新窗口打开渲染页面
     window.open('/render', '_blank', 'width=1400,height=900');
@@ -730,8 +921,8 @@ function renderBatchFile(fileContent, filename) {
     }
     
     // 保存到localStorage
-    localStorage.setItem('latexContent', fileContent);
-    localStorage.setItem('latexFilename', filename);
+    safeStorage.setItem('latexContent', fileContent);
+    safeStorage.setItem('latexFilename', filename);
     
     // 打开渲染页面
     window.open('/render', '_blank', 'width=1400,height=900');
@@ -786,3 +977,114 @@ async function checkApiStatus() {
 }
 
 checkApiStatus();
+
+// ==================== 历史记录功能 ====================
+
+// 加载历史记录
+async function loadHistory() {
+    const historyList = document.getElementById('historyList');
+    
+    try {
+        const response = await fetch('/api/history?limit=10');
+        const data = await response.json();
+        
+        if (data.success && data.history && data.history.length > 0) {
+            historyList.innerHTML = data.history.map((record, index) => {
+                const date = new Date(record.timestamp);
+                const dateStr = date.toLocaleString('zh-CN');
+                const model = record.model || 'unknown';
+                const translated = record.translated ? '是' : '否';
+                const pages = record.pages || 'all';
+                const cost = record.stats?.estimated_cost || 0;
+                const tokens = record.stats?.total_tokens || 0;
+                
+                return `
+                    <div class="history-item" onclick="viewHistory(${index})">
+                        <div class="history-icon">📄</div>
+                        <div class="history-info">
+                            <div class="history-filename">${record.filename}</div>
+                            <div class="history-meta">
+                                <span>🤖 ${model}</span>
+                                <span>🌏 翻译: ${translated}</span>
+                                <span>📄 页码: ${pages}</span>
+                                <span>💰 $${cost.toFixed(4)}</span>
+                                <span>🔢 ${tokens.toLocaleString()} tokens</span>
+                                <span>⏰ ${dateStr}</span>
+                            </div>
+                        </div>
+                        <div class="history-actions" onclick="event.stopPropagation()">
+                            <button class="history-action-btn primary" onclick="downloadHistory(${index})">
+                                📥 下载
+                            </button>
+                            <button class="history-action-btn secondary" onclick="viewHistory(${index})">
+                                👁️ 查看
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            historyList.innerHTML = `
+                <div class="history-empty">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <p>暂无历史记录</p>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('加载历史记录失败:', error);
+        historyList.innerHTML = `
+            <div class="history-empty">
+                <p>加载历史记录失败</p>
+            </div>
+        `;
+    }
+}
+
+// 刷新历史记录
+function refreshHistory() {
+    loadHistory();
+}
+
+// 查看历史记录
+async function viewHistory(index) {
+    try {
+        const response = await fetch(`/api/history/${index}`);
+        const data = await response.json();
+        
+        if (data.success && data.record) {
+            // 直接下载文件查看
+            if (data.record.output_file) {
+                const filename = data.record.output_file.split(/[\\/]/).pop();
+                window.location.href = `/api/download/${filename}`;
+            }
+        } else {
+            alert('记录不存在');
+        }
+    } catch (error) {
+        console.error('查看历史记录失败:', error);
+        alert('查看失败: ' + error.message);
+    }
+}
+
+// 下载历史记录
+async function downloadHistory(index) {
+    try {
+        const response = await fetch(`/api/history/${index}`);
+        const data = await response.json();
+        
+        if (data.success && data.record) {
+            if (data.record.output_file) {
+                const filename = data.record.output_file.split(/[\\/]/).pop();
+                window.location.href = `/api/download/${filename}`;
+            }
+        } else {
+            alert('记录不存在');
+        }
+    } catch (error) {
+        console.error('下载历史记录失败:', error);
+        alert('下载失败: ' + error.message);
+    }
+}

@@ -14,11 +14,18 @@ from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 from pdf2latex_enhanced import PDF2LaTeXEnhanced
 from config import settings
+from history_manager import history_manager
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pdf2latex-secret-key'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*",
+    ping_timeout=300,  # 5分钟ping超时
+    ping_interval=25,  # 25秒ping间隔
+    async_mode='threading'
+)
 
 # 配置
 UPLOAD_FOLDER = Path('uploads')
@@ -80,6 +87,13 @@ def handle_connect():
 def handle_disconnect():
     """WebSocket断开"""
     print('客户端已断开')
+
+
+@socketio.on('heartbeat')
+def handle_heartbeat(data):
+    """处理客户端心跳"""
+    # 返回心跳响应，保持连接活跃
+    emit('heartbeat_response', {'timestamp': data.get('timestamp')})
 
 
 @socketio.on('join_task')
@@ -170,6 +184,28 @@ def convert_pdf():
         # 读取生成的LaTeX内容
         with open(result['output_path'], 'r', encoding='utf-8') as f:
             latex_content = f.read()
+        
+        # 保存到历史记录
+        history_manager.add_record({
+            'filename': filename,
+            'model': model,
+            'translated': translate,
+            'pages': pages_str if pages_str else 'all',
+            'output_file': str(output_path),
+            'stats': {
+                'total_pages': result.get('total_pages', 0),
+                'processed_pages': result.get('processed_pages', 0),
+                'total_tokens': result.get('total_tokens', 0),
+                'estimated_cost': result.get('estimated_cost', 0),
+                'processing_time': result.get('processing_time', 0)
+            }
+        })
+        
+        # 清理孤立文件
+        history_manager.clean_orphan_files(
+            app.config['UPLOAD_FOLDER'],
+            app.config['OUTPUT_FOLDER']
+        )
         
         # 返回结果
         return jsonify({
@@ -345,6 +381,24 @@ def batch_convert_pdf():
                 
                 results.append(file_result)
                 
+                # 保存到历史记录
+                history_manager.add_record({
+                    'filename': filename,
+                    'model': model,
+                    'translated': translate,
+                    'pages': pages_str if pages_str else 'all',
+                    'output_file': str(output_path),
+                    'batch': True,
+                    'batch_id': batch_id,
+                    'stats': {
+                        'total_pages': result.get('total_pages', 0),
+                        'processed_pages': result.get('processed_pages', 0),
+                        'total_tokens': result.get('total_tokens', 0),
+                        'estimated_cost': result.get('estimated_cost', 0),
+                        'processing_time': result.get('processing_time', 0)
+                    }
+                })
+                
                 # 更新批量任务进度
                 conversion_tasks[batch_id]['completed_files'] = idx + 1
                 conversion_tasks[batch_id]['results'].append(file_result)
@@ -367,6 +421,12 @@ def batch_convert_pdf():
             'total_cost': sum(r.get('stats', {}).get('estimated_cost', 0) for r in results if r.get('success', False)),
             'total_time': sum(r.get('stats', {}).get('processing_time', 0) for r in results if r.get('success', False))
         }
+        
+        # 清理孤立文件
+        history_manager.clean_orphan_files(
+            app.config['UPLOAD_FOLDER'],
+            app.config['OUTPUT_FOLDER']
+        )
         
         # 发送完成进度
         progress_callback(batch_id, 'completed', len(files), len(files), 
@@ -451,6 +511,49 @@ def get_models():
         return jsonify({
             'success': True,
             'models': models
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    """获取历史记录"""
+    try:
+        limit = request.args.get('limit', 10, type=int)
+        history = history_manager.get_history(limit=limit)
+        return jsonify({
+            'success': True,
+            'history': history
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/<int:index>', methods=['GET'])
+def get_history_record(index):
+    """获取指定索引的历史记录"""
+    try:
+        record = history_manager.get_record(index)
+        if record:
+            return jsonify({
+                'success': True,
+                'record': record
+            })
+        else:
+            return jsonify({'error': '记录不存在'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/clear', methods=['POST'])
+def clear_history():
+    """清空历史记录"""
+    try:
+        history_manager.clear_history()
+        return jsonify({
+            'success': True,
+            'message': '历史记录已清空'
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

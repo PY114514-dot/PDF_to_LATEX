@@ -1,6 +1,6 @@
 """
 LLM大模型API统一调用管理
-包含Gemini, Canopy Wave, OpenAI, ChatGPT, 智谱GLM，豆包，DeepSeek
+包含Gemini, Canopy Wave, OpenAI, ChatGPT, 智谱GLM,豆包,DeepSeek
 支持同步和异步调用
 支持多种模型选择
 支持多种temperature设置

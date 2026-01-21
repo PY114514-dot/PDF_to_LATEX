@@ -457,42 +457,52 @@
         }
         
         function processLatexContent(content) {
+            // 先保护数学公式，避免被其他替换破坏
+            const mathBlocks = [];
+            let mathIndex = 0;
+            
+            // 保护display math $$...$$
+            content = content.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
+                mathBlocks[mathIndex] = match;
+                return `__MATH_${mathIndex++}__`;
+            });
+            
+            // 保护inline math $...$
+            content = content.replace(/\$([^\$\n]+?)\$/g, (match) => {
+                mathBlocks[mathIndex] = match;
+                return `__MATH_${mathIndex++}__`;
+            });
+            
             // 移除文档类和导言区
-            content = content.replace(/\\documentclass.*?\n/g, '');
-            content = content.replace(/\\usepackage.*?\n/g, '');
-            content = content.replace(/\\begin{document}/g, '');
-            content = content.replace(/\\end{document}/g, '');
-            content = content.replace(/\\title.*?\n/g, '');
-            content = content.replace(/\\author.*?\n/g, '');
-            content = content.replace(/\\date.*?\n/g, '');
+            content = content.replace(/\\documentclass(\[[^\]]*\])?\{[^}]+\}/g, '');
+            content = content.replace(/\\usepackage(\[[^\]]*\])?\{[^}]+\}/g, '');
+            content = content.replace(/\\begin\{document\}/g, '');
+            content = content.replace(/\\end\{document\}/g, '');
+            content = content.replace(/\\title\{[^}]+\}/g, '');
+            content = content.replace(/\\author\{[^}]+\}/g, '');
+            content = content.replace(/\\date\{[^}]+\}/g, '');
             content = content.replace(/\\maketitle/g, '');
             
-            // 转换center环境
-            content = content.replace(/\\begin\{center\}([\s\S]*?)\\end\{center\}/g, (match, p1) => {
-                return `<div style="text-align: center; margin: 1rem 0;">${p1.trim()}</div>`;
-            });
+            // 移除 LaTeX 命令（不影响显示）
+            content = content.replace(/\\noindent\s*/g, '');
+            content = content.replace(/\\label\{[^}]+\}/g, '');
+            content = content.replace(/\\ref\{([^}]+)\}/g, '$1');
+            content = content.replace(/\\cite\{([^}]+)\}/g, '[$1]');
+            content = content.replace(/\\hfill/g, ' ');
+            content = content.replace(/\\dotfill/g, '...');
+            content = content.replace(/\\vspace\*?\{[^}]+\}/g, '');
+            content = content.replace(/\\hspace\*?\{[^}]+\}/g, ' ');
             
-            // 转换其他对齐环境
-            content = content.replace(/\\begin\{flushleft\}([\s\S]*?)\\end\{flushleft\}/g, (match, p1) => {
-                return `<div style="text-align: left; margin: 1rem 0;">${p1.trim()}</div>`;
-            });
-            content = content.replace(/\\begin\{flushright\}([\s\S]*?)\\end\{flushright\}/g, (match, p1) => {
-                return `<div style="text-align: right; margin: 1rem 0;">${p1.trim()}</div>`;
-            });
+            // 转换环境
+            content = content.replace(/\\begin\{center\}([\s\S]*?)\\end\{center\}/g, '<div style="text-align: center; margin: 1.5rem 0;">$1</div>');
+            content = content.replace(/\\begin\{flushleft\}([\s\S]*?)\\end\{flushleft\}/g, '<div style="text-align: left; margin: 1rem 0;">$1</div>');
+            content = content.replace(/\\begin\{flushright\}([\s\S]*?)\\end\{flushright\}/g, '<div style="text-align: right; margin: 1rem 0;">$1</div>');
             
             // 转换定理环境
-            content = content.replace(/\\begin\{theorem\}([\s\S]*?)\\end\{theorem\}/g, (match, p1) => {
-                return `<div style="border-left: 4px solid #667eea; padding: 1rem; margin: 1rem 0; background: #f0f4ff;"><strong>定理:</strong> ${p1.trim()}</div>`;
-            });
-            content = content.replace(/\\begin\{definition\}([\s\S]*?)\\end\{definition\}/g, (match, p1) => {
-                return `<div style="border-left: 4px solid #10b981; padding: 1rem; margin: 1rem 0; background: #f0fdf4;"><strong>定义:</strong> ${p1.trim()}</div>`;
-            });
-            content = content.replace(/\\begin\{proof\}([\s\S]*?)\\end\{proof\}/g, (match, p1) => {
-                return `<div style="border-left: 4px solid #f59e0b; padding: 1rem; margin: 1rem 0; background: #fffbeb;"><strong>证明:</strong> ${p1.trim()}</div>`;
-            });
-            content = content.replace(/\\begin\{lemma\}([\s\S]*?)\\end\{lemma\}/g, (match, p1) => {
-                return `<div style="border-left: 4px solid #8b5cf6; padding: 1rem; margin: 1rem 0; background: #faf5ff;"><strong>引理:</strong> ${p1.trim()}</div>`;
-            });
+            content = content.replace(/\\begin\{theorem\}([\s\S]*?)\\end\{theorem\}/g, '<div style="border-left: 4px solid #667eea; padding: 1rem; margin: 1rem 0; background: #f0f4ff;"><strong>定理:</strong> $1</div>');
+            content = content.replace(/\\begin\{definition\}([\s\S]*?)\\end\{definition\}/g, '<div style="border-left: 4px solid #10b981; padding: 1rem; margin: 1rem 0; background: #f0fdf4;"><strong>定义:</strong> $1</div>');
+            content = content.replace(/\\begin\{proof\}([\s\S]*?)\\end\{proof\}/g, '<div style="border-left: 4px solid #f59e0b; padding: 1rem; margin: 1rem 0; background: #fffbeb;"><strong>证明:</strong> $1</div>');
+            content = content.replace(/\\begin\{lemma\}([\s\S]*?)\\end\{lemma\}/g, '<div style="border-left: 4px solid #8b5cf6; padding: 1rem; margin: 1rem 0; background: #faf5ff;"><strong>引理:</strong> $1</div>');
             
             // 转换章节标题
             content = content.replace(/\\section\*?\{([^}]+)\}/g, '<h2>$1</h2>');
@@ -513,30 +523,26 @@
             content = content.replace(/\\item\s+/g, '<li>');
             
             // 转换引用环境
-            content = content.replace(/\\begin\{quote\}([\s\S]*?)\\end\{quote\}/g, (match, p1) => {
-                return `<blockquote style="border-left: 4px solid #e5e7eb; padding: 1rem; margin: 1rem 0; color: #666; font-style: italic;">${p1.trim()}</blockquote>`;
-            });
-            
-            // 转换verbatim环境
-            content = content.replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g, (match, p1) => {
-                return `<pre style="background: #f5f5f5; padding: 1rem; border-radius: 0.375rem; overflow-x: auto;"><code>${p1.trim()}</code></pre>`;
-            });
-            
-            // 转换换行命令
-            content = content.replace(/\\\\/g, '<br>');
-            content = content.replace(/\\newline/g, '<br>');
-            
-            // 转换段落
-            content = content.split('\n\n').map(para => {
-                para = para.trim();
-                if (para && !para.startsWith('<') && !para.includes('\\[') && !para.includes('$$') && !para.includes('\\begin')) {
-                    return `<p>${para}</p>`;
-                }
-                return para;
-            }).join('\n');
+            content = content.replace(/\\begin\{quote\}([\s\S]*?)\\end\{quote\}/g, '<blockquote style="border-left: 4px solid #e5e7eb; padding: 1rem; margin: 1rem 0; color: #666; font-style: italic;">$1</blockquote>');
+            content = content.replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g, '<pre style="background: #f5f5f5; padding: 1rem; border-radius: 0.375rem; overflow-x: auto;"><code>$1</code></pre>');
             
             // 清理注释
-            content = content.replace(/^%.*$/gm, '');
+            content = content.replace(/(?:^|[^\\])%.*$/gm, '');
+            
+            // 恢复数学公式
+            for (let i = 0; i < mathBlocks.length; i++) {
+                content = content.replace(`__MATH_${i}__`, mathBlocks[i]);
+            }
+            
+            // 转换段落（数学公式已恢复）
+            const paragraphs = content.split(/\n\s*\n/);
+            content = paragraphs.map(para => {
+                para = para.trim();
+                if (!para || para.startsWith('<') || para.includes('$$') || para.includes('$') || para.match(/^\\begin|^\\end/)) {
+                    return para;
+                }
+                return `<p>${para}</p>`;
+            }).join('\n\n');
             
             return content;
         }

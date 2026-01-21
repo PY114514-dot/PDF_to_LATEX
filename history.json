@@ -1,0 +1,68 @@
+[
+  {
+    "filename": "08.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "1,2",
+    "output_file": "outputs\\1768993108_2_08.tex",
+    "batch": true,
+    "batch_id": "batch_1768993108",
+    "stats": {
+      "total_pages": 5,
+      "processed_pages": 2,
+      "total_tokens": 1833,
+      "estimated_cost": 0.00259,
+      "processing_time": 27.16
+    },
+    "timestamp": "2026-01-21T18:59:52.597364"
+  },
+  {
+    "filename": "07.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "1,2",
+    "output_file": "outputs\\1768993108_1_07.tex",
+    "batch": true,
+    "batch_id": "batch_1768993108",
+    "stats": {
+      "total_pages": 5,
+      "processed_pages": 2,
+      "total_tokens": 1831,
+      "estimated_cost": 0.0025859999999999998,
+      "processing_time": 28.35
+    },
+    "timestamp": "2026-01-21T18:59:25.423284"
+  },
+  {
+    "filename": "06.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "1,2",
+    "output_file": "outputs\\1768993108_0_06.tex",
+    "batch": true,
+    "batch_id": "batch_1768993108",
+    "stats": {
+      "total_pages": 5,
+      "processed_pages": 2,
+      "total_tokens": 1856,
+      "estimated_cost": 0.002636,
+      "processing_time": 28.22
+    },
+    "timestamp": "2026-01-21T18:58:57.056141"
+  },
+  {
+    "filename": "2025.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "1",
+    "output_file": "outputs\\1768993041_2025.tex",
+    "stats": {
+      "total_pages": 10,
+      "processed_pages": 1,
+      "total_tokens": 2283,
+      "estimated_cost": 0.003152,
+      "processing_time": 29.54
+    },
+    "timestamp": "2026-01-21T18:57:50.596324"
+  }
+]
