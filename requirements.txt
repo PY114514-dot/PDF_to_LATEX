@@ -1,8 +1,22 @@
-PyPDF2>=3.0.0
-openai>=1.0.0
-python-dotenv>=1.0.0
-tqdm>=4.65.0
-flask>=3.0.0
-flask-cors>=4.0.0
-flask-socketio>=5.3.0
-eventlet>=0.33.0
+# PDF2LaTeX 依赖包
+
+# Web框架
+flask==3.0.0
+flask-cors==4.0.0
+flask-socketio==5.3.5
+
+# WebSocket支持
+python-socketio==5.10.0
+eventlet==0.33.3
+
+# HTTP客户端
+httpx==0.25.2
+
+# PDF处理
+PyPDF2==3.0.1
+
+# 环境变量管理
+python-dotenv==1.0.0
+
+# 工具库
+werkzeug==3.0.1

@@ -1,275 +1,199 @@
-# PDF to LaTeX 转换工具
+# PDF2LaTeX - 智能PDF转LaTeX工具
 
-这是一个使用 DeepSeek API 将 PDF 文档转换为 LaTeX 格式的工具。该工具能够智能识别文档结构、数学公式、表格等内容，并生成规范的 LaTeX 代码。
+将PDF文档智能转换为LaTeX格式，支持多种AI模型、实时进度显示和在线预览。
 
-## 功能特点
+## ✨ 主要功能
 
-- ✅ 自动提取 PDF 文本内容
-- ✅ 智能识别数学公式和符号
-- ✅ 保持文档结构（标题、段落、列表等）
-- ✅ **🆕 支持中文翻译功能** - 先翻译成中文再转LaTeX
-- ✅ 支持批量转换或指定页面转换
-- ✅ 使用 DeepSeek API 进行高质量转换
-- ✅ 生成可编译的 LaTeX 文档
-- ✅ 带进度条显示转换进度
+- 🤖 **多模型支持** - DeepSeek、GPT-4o、GLM、Gemini等10+模型
+- 📊 **实时进度** - WebSocket实时推送转换进度和Token统计
+- 🌏 **中英翻译** - 支持将英文文档翻译成中文
+- 📦 **批量处理** - 一次上传多个PDF文件批量转换
+- 👁️ **在线预览** - 实时渲染LaTeX数学公式和文档结构
+- 💰 **成本统计** - 自动计算和显示API调用成本
 
-## 安装
+## 🚀 快速开始
 
-### 1. 克隆或下载项目
-
-```bash
-cd PDF2LATEX
-```
-
-### 2. 安装依赖
+### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. 配置 API 密钥
+### 2. 配置API密钥
 
-创建 `.env` 文件并添加你的 DeepSeek API 密钥：
-
-```bash
-cp .env.example .env
-```
-
-然后编辑 `.env` 文件，填入你的 API 密钥：
-
-```
-DEEPSEEK_API_KEY=your-actual-api-key
-```
-
-> 获取 API 密钥：访问 [DeepSeek 平台](https://platform.deepseek.com/) 注册并获取
-
-## 使用方法
-
-### 方式一：直接转换（不翻译）
-
-转换整个 PDF 文件：
+复制 `.env_example` 为 `.env` 并填入你的API密钥：
 
 ```bash
-python pdf2latex.py input.pdf
+cp .env_example .env
 ```
 
-### 方式二：翻译转换 🆕
+编辑 `.env` 文件：
 
-**先翻译成中文，再转换为LaTeX：**
+```env
+# 至少配置一个模型的API密钥
+DEEPSEEK_API_KEY=your_deepseek_key_here
+OPENAI_API_KEY=your_openai_key_here
+ZHIPU_API_KEY=your_zhipu_key_here
+GEMINI_API_KEY=your_gemini_key_here
+DOUBAO_API_KEY=your_doubao_key_here
+CANOPY_WAVE_API_KEY=your_canopy_wave_key_here
+```
+
+### 3. 启动服务
 
 ```bash
-# 翻译整个PDF
-python pdf2latex.py input.pdf --translate
-
-# 使用专用脚本（更简洁）
-python pdf2latex_translate.py input.pdf
-
-# 只翻译前3页
-python pdf2latex_translate.py input.pdf -p 1 2 3
-
-# 批量翻译当前目录所有PDF
-python pdf2latex_translate.py --batch
+python app_enhanced.py
 ```
 
-### 其他选项
+### 4. 访问Web界面
 
-**指定输出文件：**
+打开浏览器访问：http://localhost:5000
 
-```bash
-python pdf2latex.py input.pdf -o output.tex
-```
+## 📖 使用说明
 
-**只转换特定页面：**
+### 单文件转换
 
-转换第 1、2、3 页（页码从 1 开始）：
+1. 点击"浏览文件"或拖拽PDF文件到上传区域
+2. 选择AI模型（推荐：DeepSeek Chat性价比最高）
+3. 配置选项：
+   - ✅ 翻译成中文（英文PDF自动翻译）
+   - ✅ 添加文档结构（自动添加LaTeX文档头）
+   - 📄 指定页码（可选，如：1,2,3）
+4. 点击"开始转换"
+5. 等待转换完成，可实时查看进度和Token使用情况
+6. 下载.tex文件或在线预览
 
-```bash
-python pdf2latex.py input.pdf -p 1 2 3
-```
+### 批量转换
 
-**不添加文档结构：**
+1. 点击"批量选择"选择多个PDF文件（最多10个）
+2. 选择相同的配置选项
+3. 点击"开始转换"
+4. 查看每个文件的转换进度和结果
+5. 打包下载所有转换结果
 
-如果只需要内容部分，不需要完整的 LaTeX 文档结构：
+## 🤖 支持的AI模型
 
-```bash
-python pdf2latex.py input.pdf --no-wrapper
-```
+| 模型 | 描述 | 输入价格 | 输出价格 | 推荐场景 |
+|------|------|---------|---------|---------|
+| DeepSeek Chat | 通用对话模型 | $1/M | $2/M | 日常转换（性价比最高）|
+| DeepSeek Reasoner | 推理模型 | $1/M | $2/M | 复杂文档 |
+| GPT-4o | OpenAI高性能 | $2.5/M | $10/M | 高质量要求 |
+| GPT-4o Mini | OpenAI轻量级 | $0.15/M | $0.6/M | 快速处理 |
+| GPT-5.2 | OpenAI推理 | $5/M | $15/M | 最强推理能力 |
+| GLM-4.6 | 智谱AI | $1/M | $1/M | 中文文档优化 |
+| GLM-4.7 | 智谱Thinking | $1/M | $1/M | 思维链推理 |
+| Gemini 3 Pro | Google多模态 | $1.25/M | $5/M | 多模态理解 |
+| 豆包 | 字节跳动 | $0.8/M | $2/M | 最低成本 |
+| DeepSeek Math | 数学专用 | $1/M | $2/M | 数学论文 |
 
-**命令行指定 API 密钥：**
-
-```bash
-python pdf2latex.py input.pdf --api-key your-api-key
-```
-
-### 完整参数说明
-
-**pdf2latex.py 参数：**
-
-```
-positional arguments:
-  pdf_file              输入的PDF文件路径
-
-optional arguments:
-  -h, --help            显示帮助信息
-  -o, --output OUTPUT   输出的LaTeX文件路径（默认：与PDF同名的.tex文件）
-  -p, --pages PAGES     要转换的页码（从1开始，可指定多个）
-  --no-wrapper          不添加LaTeX文档结构（\documentclass, \begin{document}等）
-  --translate           先翻译成中文再转换为LaTeX 🆕
-  --api-key API_KEY     DeepSeek API密钥（也可通过DEEPSEEK_API_KEY环境变量设置）
-  --model MODEL         使用的模型（默认：deepseek-chat）
-```
-
-**pdf2latex_translate.py 参数：**
+## 📁 项目结构
 
 ```
-positional arguments:
-  pdf_file              输入的PDF文件路径
-
-optional arguments:
-  -h, --help            显示帮助信息
-  -o, --output OUTPUT   输出的LaTeX文件路径（默认：与PDF同名加_cn后缀）
-  -p, --pages PAGES     要翻译转换的页码（从1开始，可指定多个）
-  --no-wrapper          不添加LaTeX文档结构
-  --batch               批量翻译当前目录所有PDF文件
-  --api-key API_KEY     DeepSeek API密钥
-  --model MODEL         使用的模型（默认：deepseek-chat）
+PDF2LATEX/
+├── app_enhanced.py          # Flask Web服务器
+├── pdf2latex_enhanced.py    # PDF转LaTeX核心逻辑
+├── clients.py               # 统一的AI模型客户端
+├── config.py                # 配置管理
+├── requirements.txt         # Python依赖
+├── .env                     # API密钥配置（需自行创建）
+├── templates/               # HTML模板
+│   ├── index_enhanced.html  # 主页面
+│   └── latex_render.html    # LaTeX在线渲染页面
+├── static/                  # 静态资源
+│   ├── script_enhanced.js   # 前端JavaScript
+│   └── style_enhanced.css   # 样式表
+├── uploads/                 # 上传文件临时目录
+└── outputs/                 # 输出文件目录
 ```
 
-## 在代码中使用
+## ⚙️ 高级配置
 
-你也可以在 Python 代码中导入使用：
+### 自定义端口
+
+编辑 `app_enhanced.py` 最后一行：
 
 ```python
-from pdf2latex import PDF2LaTeX
+socketio.run(app, debug=True, host='0.0.0.0', port=5000)  # 修改port参数
+```
 
-# 创建转换器
-converter = PDF2LaTeX(api_key="your-api-key")
+### 调整超时时间
 
-# 转换整个PDF
-output_path = converter.convert_pdf("input.pdf")
+编辑 `clients.py` 中对应模型的 `timeout` 参数：
 
-# 翻译并转换 🆕
-output_path = converter.convert_pdf(
-    pdf_path="input.pdf",
-    translate=True  # 启用翻译
-)
-
-# 只转换特定页面（页码从0开始）
-output_path = converter.convert_pdf(
-    pdf_path="input.pdf",
-    output_path="output.tex",
-    pages=[0, 1, 2],  # 转换前3页
-    add_document_wrapper=True,
-    translate=False  # 不翻译
+```python
+deepseek_chat = LLMClient(
+    api_key=settings.DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com/v1/chat/completions",
+    model="deepseek-chat",
+    timeout=600.0  # 修改此值（秒）
 )
 ```
 
-## 示例
+### 修改文件大小限制
 
-### 示例 1: 转换数学论文（保持英文）
+编辑 `app_enhanced.py`：
 
-```bash
-python pdf2latex.py math_paper.pdf -o math_paper.tex
+```python
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB，可修改
 ```
 
-### 示例 2: 翻译数学论文成中文 🆕
+## 🔧 依赖说明
 
-```bash
-python pdf2latex_translate.py math_paper.pdf
-# 或
-python pdf2latex.py math_paper.pdf --translate
-```
+主要依赖：
 
-### 示例 3: 只转换前 5 页
+- `flask` - Web框架
+- `flask-socketio` - WebSocket实时通信
+- `flask-cors` - 跨域支持
+- `PyPDF2` - PDF文本提取
+- `httpx` - 异步HTTP客户端
+- `python-dotenv` - 环境变量管理
 
-```bash
-python pdf2latex.py large_document.pdf -p 1 2 3 4 5 -o preview.tex
-```
+## 🐛 常见问题
 
-### 示例 4: 批量转换（使用脚本）
+### Q1: 模型下拉框显示"加载中..."
+**A**: 确认至少配置了一个API密钥，并重启服务器。
 
-```bash
-# 批量转换（不翻译）
-python batch_convert.py
+### Q2: 转换失败提示"不支持的模型"
+**A**: 检查所选模型对应的API密钥是否已配置。
 
-# 批量翻译转换 🆕
-python pdf2latex_translate.py --batch
-```
+### Q3: WebSocket连接失败
+**A**: 检查浏览器是否支持WebSocket，尝试刷新页面。
 
-## 注意事项
+### Q4: 数学公式显示不正确
+**A**: 确保LaTeX语法正确，复杂公式使用`$$...$$`包裹。
 
-1. **API 费用**: DeepSeek API 按使用量收费，翻译功能会调用两次API（翻译+转换），请注意控制成本
-2. **PDF 质量**: PDF 的文本提取质量会影响转换效果，扫描版 PDF 效果较差
-3. **中文支持**: 使用翻译功能时，生成的LaTeX需要用XeLaTeX编译，并确保系统有中文字体
-4. **复杂格式**: 对于复杂的表格、图像等内容，可能需要手动调整
-5. **编译**: 生成的 LaTeX 文件可能需要安装相应的宏包才能编译
-6. **检查输出**: 建议转换后检查并适当调整生成的 LaTeX 代码
-7. **翻译质量**: 数学公式和专业术语的翻译质量取决于AI模型的理解能力
+### Q5: 中文显示乱码
+**A**: 确保PDF文件编码正确，选择"翻译成中文"选项。
 
-## 依赖项
+## 📊 性能优化
 
-- Python 3.7+
-- PyPDF2: PDF 文本提取
-- openai: DeepSeek API 客户端
-- python-dotenv: 环境变量管理
-- tqdm: 进度条显示
+- 使用 DeepSeek Chat 获得最佳性价比
+- 批量处理时建议每次不超过5个文件
+- 大文件（>10MB）建议指定页码范围
+- 使用GPT-4o Mini可获得更快速度
 
-## 常见问题
+## 🔐 安全说明
 
-### Q: 提示 "请设置 DEEPSEEK_API_KEY 环境变量"
+- API密钥存储在本地 `.env` 文件中，不会上传
+- 上传的PDF文件在处理后自动删除
+- 建议不要在公网环境直接运行
 
-**A**: 确保已创建 `.env` 文件并填入正确的 API 密钥，或使用 `--api-key` 参数。
-
-### Q: 转换的 LaTeX 代码无法编译
-
-**A**: 
-- 检查是否安装了必要的 LaTeX 宏包（amsmath, amssymb, amsthm 等）
-- **翻译版本需要用 XeLaTeX 编译**，不能用普通的 pdflatex
-- 手动检查并修正生成的代码
-- 可以尝试只转换部分页面进行测试
-
-### Q: 如何编译带中文的LaTeX文件 🆕
-
-**A**:
-```bash
-# 使用 XeLaTeX 编译（支持中文）
-xelatex output_cn.tex
-
-# 或使用提供的编译脚本
-compile_latex.bat output_cn.tex
-```
-
-### Q: 扫描版 PDF 无法转换
-
-**A**: 扫描版 PDF 需要先进行 OCR（光学字符识别），本工具暂不支持。建议使用 OCR 工具先转换为可搜索的 PDF。
-
-### Q: 转换速度慢
-
-**A**: 
-- API 调用需要网络请求，大文件转换需要较长时间
-- 可以先转换少量页面测试效果
-- 考虑分批转换大文档
-
-## 许可证
+## 📄 许可证
 
 MIT License
 
-## 贡献
+## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 更新日志
+## 📮 联系方式
 
-### v1.1.0 (2026-01-20) 🆕
-- ✨ 新增翻译功能：支持先翻译成中文再转LaTeX
-- ✨ 新增 `pdf2latex_translate.py` 专用翻译脚本
-- ✨ 新增批量翻译功能
-- 🔧 改进中文LaTeX支持（自动添加xeCJK宏包）
-- 📝 更新文档和示例
+如有问题或建议，请通过以下方式联系：
+- 提交 GitHub Issue
+- 发送邮件至项目维护者
 
-### v1.0.0 (2026-01-20)
-- 首次发布
-- 支持 PDF 文本提取
-- 支持使用 DeepSeek API 转换为 LaTeX
-- 支持命令行和代码调用
-- 支持指定页面转换
+---
+
+**注意**: 本项目需要有效的AI模型API密钥才能使用。请确保已配置至少一个模型的API密钥。
+
+**成本提示**: 使用AI模型转换会产生API调用费用，请根据实际需求选择合适的模型。

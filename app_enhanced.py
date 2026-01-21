@@ -13,6 +13,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 from pdf2latex_enhanced import PDF2LaTeXEnhanced
+from config import settings
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pdf2latex-secret-key'
@@ -113,6 +114,7 @@ def convert_pdf():
         translate = request.form.get('translate', 'false').lower() == 'true'
         pages_str = request.form.get('pages', '')
         add_wrapper = request.form.get('add_wrapper', 'true').lower() == 'true'
+        model = request.form.get('model', 'deepseek-chat')  # 获取模型参数
         
         # 解析页码
         pages = None
@@ -138,8 +140,11 @@ def convert_pdf():
             'percent': 0
         }
         
-        # 创建转换器
-        converter = PDF2LaTeXEnhanced()
+        # 创建转换器（支持模型选择）
+        try:
+            converter = PDF2LaTeXEnhanced(model=model)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
         
         # 设置进度回调
         def callback(status, current, total, message):
@@ -245,6 +250,7 @@ def batch_convert_pdf():
         translate = request.form.get('translate', 'false').lower() == 'true'
         pages_str = request.form.get('pages', '')
         add_wrapper = request.form.get('add_wrapper', 'true').lower() == 'true'
+        model = request.form.get('model', 'deepseek-chat')  # 获取模型参数
         
         # 解析页码
         pages = None
@@ -288,8 +294,16 @@ def batch_convert_pdf():
                     progress_callback(batch_id, status, idx + 1, len(files), 
                                     f'[{idx + 1}/{len(files)}] {filename}: {message}')
                 
-                # 创建转换器
-                converter = PDF2LaTeXEnhanced()
+                # 创建转换器（支持模型选择）
+                try:
+                    converter = PDF2LaTeXEnhanced(model=model)
+                except ValueError as e:
+                    results.append({
+                        'filename': file.filename,
+                        'success': False,
+                        'error': str(e)
+                    })
+                    continue
                 converter.set_progress_callback(callback)
                 
                 # 生成输出文件名
@@ -427,6 +441,19 @@ def status():
         'status': 'running',
         'message': 'PDF2LaTeX Enhanced API is running'
     })
+
+
+@app.route('/api/models', methods=['GET'])
+def get_models():
+    """获取可用的模型列表"""
+    try:
+        models = settings.get_available_models()
+        return jsonify({
+            'success': True,
+            'models': models
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

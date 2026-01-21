@@ -1,33 +1,79 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PDF2LaTeX 增强版 - 支持进度回调和Token统计
+PDF2LaTeX 增强版 - 支持进度回调、Token统计和多模型
 """
 
 import os
 import time
+import asyncio
 from pathlib import Path
 from typing import Optional, List, Callable
 import PyPDF2
-from openai import OpenAI
 from dotenv import load_dotenv
+from clients import (
+    deepseek_chat, deepseek_reasoner, gpt4o, gpt4o_mini, gpt52_with_reasoning,
+    glm46_thinking, glm47_thinking, gemini3_pro, doubao, deepseek_math,
+    LLMClient
+)
+from config import settings
 
 load_dotenv()
 
 
 class PDF2LaTeXEnhanced:
-    """PDF到LaTeX转换器 - 增强版"""
+    """PDF到LaTeX转换器 - 增强版，支持多种LLM模型"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "deepseek-chat"):
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
-        if not self.api_key:
-            raise ValueError("请设置 DEEPSEEK_API_KEY 环境变量")
+    # 模型映射表
+    MODEL_MAP = {
+        'deepseek-chat': deepseek_chat,
+        'deepseek-reasoner': deepseek_reasoner,
+        'gpt4o': gpt4o,
+        'gpt4o-mini': gpt4o_mini,
+        'gpt52': gpt52_with_reasoning,
+        'glm46': glm46_thinking,
+        'glm47': glm47_thinking,
+        'gemini3-pro': gemini3_pro,
+        'doubao': doubao,
+        'deepseek-math': deepseek_math
+    }
+    
+    # 模型价格配置 (per 1M tokens)
+    MODEL_PRICING = {
+        'deepseek-chat': {'input': 1.0, 'output': 2.0},
+        'deepseek-reasoner': {'input': 1.0, 'output': 2.0},
+        'gpt4o': {'input': 2.5, 'output': 10.0},
+        'gpt4o-mini': {'input': 0.15, 'output': 0.6},
+        'gpt52': {'input': 5.0, 'output': 15.0},
+        'glm46': {'input': 1.0, 'output': 1.0},
+        'glm47': {'input': 1.0, 'output': 1.0},
+        'gemini3-pro': {'input': 1.25, 'output': 5.0},
+        'doubao': {'input': 0.8, 'output': 2.0},
+        'deepseek-math': {'input': 1.0, 'output': 2.0}
+    }
+    
+    def __init__(self, model: str = "deepseek-chat"):
+        """
+        初始化PDF2LaTeX转换器
         
-        self.model = model
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url="https://api.deepseek.com"
-        )
+        Args:
+            model: 模型名称，可选值：
+                - deepseek-chat: DeepSeek通用对话模型
+                - deepseek-reasoner: DeepSeek推理模型
+                - gpt4o: GPT-4o
+                - gpt4o-mini: GPT-4o Mini
+                - gpt52: GPT-5.2推理模型
+                - glm46: 智谱GLM-4.6
+                - glm47: 智谱GLM-4.7
+                - gemini3-pro: Gemini 3 Pro
+                - doubao: 豆包
+                - deepseek-math: DeepSeek数学模型
+        """
+        if model not in self.MODEL_MAP:
+            raise ValueError(f"不支持的模型: {model}。支持的模型: {list(self.MODEL_MAP.keys())}")
+        
+        self.model_name = model
+        self.client = self.MODEL_MAP[model]
         
         # 进度回调
         self.progress_callback = None
@@ -37,9 +83,10 @@ class PDF2LaTeXEnhanced:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         
-        # DeepSeek 价格 (per 1M tokens)
-        self.price_per_million_input = 1.0  # $1 per 1M input tokens
-        self.price_per_million_output = 2.0  # $2 per 1M output tokens
+        # 获取价格配置
+        pricing = self.MODEL_PRICING.get(model, {'input': 1.0, 'output': 2.0})
+        self.price_per_million_input = pricing['input']
+        self.price_per_million_output = pricing['output']
     
     def set_progress_callback(self, callback: Callable):
         """设置进度回调函数"""
@@ -110,23 +157,26 @@ class PDF2LaTeXEnhanced:
                 f'正在翻译第 {page_num + 1}/{total_pages} 页...'
             )
             
-            response = self.client.chat.completions.create(
-                model=self.model,
+            # 使用异步客户端
+            response = asyncio.run(self.client.chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.3,
                 max_tokens=4000
-            )
+            ))
             
             # 统计Token
-            if hasattr(response, 'usage'):
-                self.prompt_tokens += response.usage.prompt_tokens
-                self.completion_tokens += response.usage.completion_tokens
-                self.total_tokens += response.usage.total_tokens
+            if 'usage' in response:
+                usage = response['usage']
+                self.prompt_tokens += usage.get('prompt_tokens', 0)
+                self.completion_tokens += usage.get('completion_tokens', 0)
+                self.total_tokens += usage.get('total_tokens', 0)
             
-            return response.choices[0].message.content.strip()
+            # 提取内容
+            content = LLMClient.extract_content(response)
+            return content.strip()
             
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
@@ -160,23 +210,26 @@ class PDF2LaTeXEnhanced:
                 f'正在转换第 {page_num + 1}/{total_pages} 页为LaTeX...'
             )
             
-            response = self.client.chat.completions.create(
-                model=self.model,
+            # 使用异步客户端
+            response = asyncio.run(self.client.chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.3,
                 max_tokens=4000
-            )
+            ))
             
             # 统计Token
-            if hasattr(response, 'usage'):
-                self.prompt_tokens += response.usage.prompt_tokens
-                self.completion_tokens += response.usage.completion_tokens
-                self.total_tokens += response.usage.total_tokens
+            if 'usage' in response:
+                usage = response['usage']
+                self.prompt_tokens += usage.get('prompt_tokens', 0)
+                self.completion_tokens += usage.get('completion_tokens', 0)
+                self.total_tokens += usage.get('total_tokens', 0)
             
-            latex_content = response.choices[0].message.content.strip()
+            # 提取内容
+            content = LLMClient.extract_content(response)
+            latex_content = content.strip()
             return self._clean_document_structure(latex_content)
             
         except Exception as e:

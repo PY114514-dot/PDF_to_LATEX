@@ -1,0 +1,32 @@
+PDF2LaTeX 快速开始指南
+======================
+
+1. 安装依赖
+   pip install -r requirements.txt
+
+2. 配置API密钥
+   - 复制 .env_example 为 .env
+   - 在 .env 中填入至少一个模型的API密钥
+
+3. 启动服务
+   python app_enhanced.py
+
+4. 访问网页
+   打开浏览器访问: http://localhost:5000
+
+5. 开始使用
+   - 上传PDF文件
+   - 选择AI模型
+   - 配置转换选项
+   - 点击"开始转换"
+
+推荐模型：
+- DeepSeek Chat (性价比最高，$1/M输入 + $2/M输出)
+- GPT-4o Mini (速度快，$0.15/M输入 + $0.6/M输出)
+
+常见问题：
+- 如果5000端口被占用，修改 app_enhanced.py 中的端口号
+- 如果模型下拉框为空，检查 .env 文件中的API密钥配置
+- 转换大文件时建议指定页码范围以节省成本
+
+详细文档请查看 README.md

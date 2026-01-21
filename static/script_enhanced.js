@@ -32,18 +32,44 @@ document.addEventListener('DOMContentLoaded', () => {
     setupBatchFileInput();
     setupConvertButton();
     initWebSocket();
+    loadAvailableModels();
 });
 
 // 初始化WebSocket
 function initWebSocket() {
-    socket = io();
+    socket = io({
+        transports: ['websocket', 'polling'],  // 支持多种传输方式
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        reconnectionAttempts: 5,
+        timeout: 120000,  // 120秒超时
+        pingTimeout: 120000,
+        pingInterval: 25000
+    });
     
     socket.on('connect', () => {
         console.log('WebSocket 已连接');
     });
     
-    socket.on('disconnect', () => {
-        console.log('WebSocket 已断开');
+    socket.on('disconnect', (reason) => {
+        console.log('WebSocket 已断开:', reason);
+        if (reason === 'io server disconnect') {
+            // 服务器主动断开，尝试重连
+            socket.connect();
+        }
+    });
+    
+    socket.on('connect_error', (error) => {
+        console.error('WebSocket 连接错误:', error);
+    });
+    
+    socket.on('reconnect', (attemptNumber) => {
+        console.log('WebSocket 重连成功，尝试次数:', attemptNumber);
+    });
+    
+    socket.on('reconnect_error', (error) => {
+        console.error('WebSocket 重连失败:', error);
     });
     
     socket.on('progress', (data) => {
@@ -709,6 +735,43 @@ function renderBatchFile(fileContent, filename) {
     
     // 打开渲染页面
     window.open('/render', '_blank', 'width=1400,height=900');
+}
+
+// 加载可用模型列表
+async function loadAvailableModels() {
+    const modelSelect = document.getElementById('modelSelect');
+    
+    try {
+        const response = await fetch('/api/models');
+        const data = await response.json();
+        
+        if (data.success && data.models && data.models.length > 0) {
+            // 清空加载中的选项
+            modelSelect.innerHTML = '';
+            
+            // 添加模型选项
+            data.models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.id;
+                option.textContent = `${model.name} - ${model.description}`;
+                
+                // 默认选中 deepseek-chat
+                if (model.id === 'deepseek-chat') {
+                    option.selected = true;
+                }
+                
+                modelSelect.appendChild(option);
+            });
+            
+            console.log(`已加载 ${data.models.length} 个可用模型`);
+        } else {
+            modelSelect.innerHTML = '<option value="deepseek-chat">DeepSeek Chat (默认)</option>';
+            console.warn('未找到可用模型，使用默认模型');
+        }
+    } catch (error) {
+        console.error('加载模型列表失败:', error);
+        modelSelect.innerHTML = '<option value="deepseek-chat">DeepSeek Chat (默认)</option>';
+    }
 }
 
 // 检查API状态
