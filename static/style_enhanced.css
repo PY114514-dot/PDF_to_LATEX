@@ -1289,3 +1289,134 @@ body {
     height: 20px;
     stroke-width: 2;
 }
+
+/* ================================
+   终端日志样式
+   ================================ */
+
+.terminal-log {
+    margin-top: 1.5rem;
+    background: #1e1e1e;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    animation: slideDown 0.3s ease;
+}
+
+.terminal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: #2d2d2d;
+    border-bottom: 1px solid #3d3d3d;
+    color: #d4d4d4;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.terminal-header span {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.terminal-clear-btn {
+    background: transparent;
+    border: none;
+    color: #858585;
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.terminal-clear-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #d4d4d4;
+}
+
+.terminal-clear-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.terminal-body {
+    padding: 1rem;
+    max-height: 400px;
+    overflow-y: auto;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
+.terminal-body::-webkit-scrollbar {
+    width: 8px;
+}
+
+.terminal-body::-webkit-scrollbar-track {
+    background: #2d2d2d;
+}
+
+.terminal-body::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+.terminal-body::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}
+
+.terminal-line {
+    display: flex;
+    margin-bottom: 0.25rem;
+    animation: fadeIn 0.2s ease;
+}
+
+.terminal-prompt {
+    color: #4ec9b0;
+    margin-right: 0.5rem;
+    font-weight: bold;
+    user-select: none;
+}
+
+.terminal-text {
+    color: #d4d4d4;
+    word-break: break-word;
+}
+
+.terminal-line.log-info .terminal-prompt { color: #4fc1ff; }
+.terminal-line.log-info .terminal-text { color: #9cdcfe; }
+.terminal-line.log-success .terminal-prompt { color: #4ec9b0; }
+.terminal-line.log-success .terminal-text { color: #4ec9b0; }
+.terminal-line.log-warning .terminal-prompt { color: #dcdcaa; }
+.terminal-line.log-warning .terminal-text { color: #dcdcaa; }
+.terminal-line.log-error .terminal-prompt { color: #f48771; }
+.terminal-line.log-error .terminal-text { color: #f48771; }
+.terminal-line.log-quality .terminal-prompt { color: #c586c0; }
+.terminal-line.log-quality .terminal-text { color: #c586c0; }
+.terminal-line.log-progress .terminal-prompt { color: #569cd6; }
+.terminal-line.log-progress .terminal-text { color: #ce9178; font-weight: 500; }
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.terminal-line.latest {
+    animation: pulse 1s ease;
+}
+
+@keyframes pulse {
+    0%, 100% { background: transparent; }
+    50% { background: rgba(255, 255, 255, 0.05); }
+}

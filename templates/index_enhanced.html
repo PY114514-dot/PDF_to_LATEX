@@ -133,6 +133,24 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <!-- 终端日志显示 -->
+                    <div class="terminal-log" id="terminalLog" style="display: none;">
+                        <div class="terminal-header">
+                            <span>🖥️ 处理日志</span>
+                            <button class="terminal-clear-btn" onclick="clearTerminalLog()" title="清空日志">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="terminal-body" id="terminalBody">
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">$</span>
+                                <span class="terminal-text">等待开始...</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

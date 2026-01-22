@@ -8,6 +8,15 @@ let socket = null;
 let currentTaskId = null;
 let isBatchMode = false;  // 是否批量模式
 
+// 货币设置
+const USD_TO_CNY_RATE = 7.2;  // 美元到人民币汇率
+
+// 货币转换函数
+function formatCurrency(usdAmount) {
+    const cnyAmount = usdAmount * USD_TO_CNY_RATE;
+    return `¥${cnyAmount.toFixed(2)}`;
+}
+
 // 安全的localStorage访问（避免跟踪保护阻止）
 const safeStorage = {
     setItem: (key, value) => {
@@ -133,9 +142,92 @@ function initWebSocket() {
     });
 }
 
+// 终端日志管理
+function addTerminalLog(type, message) {
+    const terminalLog = document.getElementById('terminalLog');
+    const terminalBody = document.getElementById('terminalBody');
+    
+    if (!terminalLog || !terminalBody) {
+        console.error('[终端] 元素未找到！');
+        return;
+    }
+    
+    // 首次显示终端
+    if (terminalLog.style.display === 'none') {
+        terminalLog.style.display = 'block';
+        // 清空初始内容
+        terminalBody.innerHTML = '';
+    }
+    
+    // 创建日志行
+    const logLine = document.createElement('div');
+    logLine.className = `terminal-line log-${type} latest`;
+    
+    const prompt = document.createElement('span');
+    prompt.className = 'terminal-prompt';
+    prompt.textContent = getLogPrompt(type);
+    
+    const text = document.createElement('span');
+    text.className = 'terminal-text';
+    text.textContent = message;
+    
+    logLine.appendChild(prompt);
+    logLine.appendChild(text);
+    terminalBody.appendChild(logLine);
+    
+    // 移除旧的 latest 类
+    setTimeout(() => {
+        logLine.classList.remove('latest');
+    }, 1000);
+    
+    // 自动滚动到底部
+    terminalBody.scrollTop = terminalBody.scrollHeight;
+}
+
+function getLogPrompt(type) {
+    const prompts = {
+        'info': '→',
+        'success': '✓',
+        'warning': '⚠',
+        'error': '✗',
+        'quality': '📊',
+        'progress': '⚙'
+    };
+    return prompts[type] || '→';
+}
+
+function getDefaultLogType(status) {
+    const typeMap = {
+        'preparing': 'info',
+        'uploading': 'info',
+        'extracting': 'progress',
+        'converting': 'progress',
+        'translating': 'progress',
+        'processing': 'progress',
+        'completed': 'success',
+        'error': 'error'
+    };
+    return typeMap[status] || 'info';
+}
+
+function clearTerminalLog() {
+    const terminalBody = document.getElementById('terminalBody');
+    terminalBody.innerHTML = '<div class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-text">日志已清空</span></div>';
+}
+
 // 更新进度
 function updateProgress(data) {
     console.log('进度更新:', data);
+    
+    // 显示终端日志
+    // 如果有log_message就用log_message，否则对于某些状态使用message
+    const shouldShowLog = data.log_message || ['preparing', 'uploading', 'extracting', 'converting', 'translating', 'processing', 'completed'].includes(data.status);
+    
+    if (shouldShowLog) {
+        const logMessage = data.log_message || data.message;
+        const logType = data.log_type || getDefaultLogType(data.status);
+        addTerminalLog(logType, logMessage);
+    }
     
     // 平滑动画更新进度条
     progressBarFill.style.transition = 'width 0.3s ease';
@@ -182,12 +274,25 @@ function updateProgress(data) {
         progressText.textContent = message;
     }
     
-    // 更新详细信息
+    // 更新详细信息 - 显示页码进度
     if (data.status === 'uploading') {
-        // 上传时显示字节数
+        // 上传时显示百分比
         progressDetail.textContent = `${data.percent}%`;
+    } else if (data.status === 'converting' || data.status === 'translating') {
+        // 转换/翻译时显示页码进度（如 1/8, 2/8...）
+        progressDetail.textContent = `第 ${data.current}/${data.total} 页`;
+        progressDetail.style.fontSize = '1.1rem';
+        progressDetail.style.fontWeight = '600';
+        progressDetail.style.color = 'var(--primary-color)';
+    } else if (data.status === 'extracting') {
+        // 提取时显示页码
+        progressDetail.textContent = `${data.current} / ${data.total} 页`;
+    } else if (data.status === 'completed') {
+        // 完成时显示完成标记
+        progressDetail.textContent = `✓ 已完成 ${data.total} 页`;
+        progressDetail.style.color = 'var(--success-color)';
     } else {
-        // 其他时候显示当前/总数
+        // 其他情况显示当前/总数
         progressDetail.textContent = `${data.current} / ${data.total}`;
     }
 }
@@ -388,6 +493,19 @@ async function startSingleConversion() {
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
     tokenStats.style.display = 'none';
+    
+    // 生成task_id并提前加入room
+    const timestamp = Date.now();
+    const taskId = `task_${timestamp}`;
+    currentTaskId = taskId;
+    socket.emit('join_task', { task_id: taskId });
+    
+    // 重置并显示终端日志
+    const terminalLog = document.getElementById('terminalLog');
+    const terminalBody = document.getElementById('terminalBody');
+    terminalLog.style.display = 'block';
+    terminalBody.innerHTML = '';
+    addTerminalLog('info', '开始单文件转换任务...');
 
     updateProgress({
         percent: 0,
@@ -414,6 +532,7 @@ async function startSingleConversion() {
         formData.append('translate', translate);
         formData.append('add_wrapper', addWrapper);
         formData.append('model', model);
+        formData.append('task_id', taskId);  // 传递task_id
         if (pages) {
             formData.append('pages', pages);
         }
@@ -475,11 +594,6 @@ async function startSingleConversion() {
         });
 
         const result = await uploadPromise;
-        
-        if (result.task_id) {
-            currentTaskId = result.task_id;
-            socket.emit('join_task', { task_id: result.task_id });
-        }
 
         setTimeout(() => {
             showResult(result);
@@ -512,6 +626,13 @@ async function startBatchConversion() {
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
     tokenStats.style.display = 'none';
+    
+    // 重置并显示终端日志
+    const terminalLog = document.getElementById('terminalLog');
+    const terminalBody = document.getElementById('terminalBody');
+    terminalLog.style.display = 'block';
+    terminalBody.innerHTML = '';
+    addTerminalLog('info', `开始批量转换 ${selectedFiles.length} 个文件...`);
 
     updateProgress({
         percent: 0,
@@ -641,14 +762,14 @@ function showResult(result) {
     const lines = result.content.split('\n').length;
     codeLines.textContent = `${lines} 行`;
 
-    // 显示统计信息
+    // 显示统计信息（使用人民币）
     if (result.stats) {
         document.getElementById('resultPages').textContent = 
             `${result.stats.processed_pages} / ${result.stats.total_pages}`;
         document.getElementById('resultTokens').textContent = 
             result.stats.total_tokens.toLocaleString();
         document.getElementById('resultCost').textContent = 
-            `$${result.stats.estimated_cost.toFixed(4)}`;
+            formatCurrency(result.stats.estimated_cost);
         document.getElementById('resultTime').textContent = 
             `${result.stats.processing_time}s`;
         
@@ -660,7 +781,7 @@ function showResult(result) {
         document.getElementById('totalTokens').textContent = 
             result.stats.total_tokens.toLocaleString();
         document.getElementById('estimatedCost').textContent = 
-            `$${result.stats.estimated_cost.toFixed(4)}`;
+            formatCurrency(result.stats.estimated_cost);
     }
 
     // 设置下载按钮
@@ -854,10 +975,10 @@ function showBatchResult(result) {
     // 保存结果到全局变量
     window.batchResults = results;
 
-    // 更新统计信息
+    // 更新统计信息（使用人民币）
     document.getElementById('resultPages').textContent = stats.total_pages;
     document.getElementById('resultTokens').textContent = stats.total_tokens.toLocaleString();
-    document.getElementById('resultCost').textContent = `$${stats.total_cost.toFixed(4)}`;
+    document.getElementById('resultCost').textContent = formatCurrency(stats.total_cost);
     document.getElementById('resultTime').textContent = `${stats.total_time.toFixed(1)}s`;
 
     // 显示批量结果列表
@@ -905,7 +1026,7 @@ function showBatchResult(result) {
                         <div class="batch-result-stats">
                             <span>📄 ${r.stats.processed_pages} 页</span>
                             <span>🔤 ${r.stats.total_tokens.toLocaleString()} tokens</span>
-                            <span>💰 $${r.stats.estimated_cost.toFixed(4)}</span>
+                            <span>💰 ${formatCurrency(r.stats.estimated_cost)}</span>
                             <span>⏱️ ${r.stats.processing_time}s</span>
                         </div>
                     ` : `
@@ -1161,7 +1282,7 @@ async function loadHistory() {
                                 <span>🤖 ${model}</span>
                                 <span>🌏 翻译: ${translated}</span>
                                 <span>📄 页码: ${pages}</span>
-                                <span>💰 $${cost.toFixed(4)}</span>
+                                <span>💰 ${formatCurrency(cost)}</span>
                                 <span>🔢 ${tokens.toLocaleString()} tokens</span>
                                 <span>⏰ ${dateStr}</span>
                             </div>

@@ -48,7 +48,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def progress_callback(task_id, status, current, total, message):
+def progress_callback(task_id, status, current, total, message, log_type='info', log_message=None):
     """进度回调函数"""
     progress_data = {
         'task_id': task_id,
@@ -56,8 +56,11 @@ def progress_callback(task_id, status, current, total, message):
         'current': current,
         'total': total,
         'percent': int((current / total * 100)) if total > 0 else 0,
-        'message': message
+        'message': message,
+        'log_type': log_type,
+        'log_message': log_message or message
     }
+    print(f"[进度回调] task_id={task_id}, status={status}, {current}/{total}, log_msg={log_message}")
     socketio.emit('progress', progress_data, room=task_id)
     
     # 更新任务状态
@@ -129,6 +132,7 @@ def convert_pdf():
         pages_str = request.form.get('pages', '')
         add_wrapper = request.form.get('add_wrapper', 'true').lower() == 'true'
         model = request.form.get('model', 'deepseek-chat')  # 获取模型参数
+        task_id = request.form.get('task_id', '')  # 获取前端传来的task_id
         
         # 解析页码
         pages = None
@@ -141,7 +145,8 @@ def convert_pdf():
         # 保存文件
         filename = secure_filename(file.filename)
         timestamp = int(time.time())
-        task_id = f"task_{timestamp}"
+        if not task_id:  # 如果前端没有传task_id，则生成一个
+            task_id = f"task_{timestamp}"
         unique_filename = f"{timestamp}_{filename}"
         filepath = app.config['UPLOAD_FOLDER'] / unique_filename
         file.save(filepath)
@@ -161,8 +166,8 @@ def convert_pdf():
             return jsonify({'error': str(e)}), 400
         
         # 设置进度回调
-        def callback(status, current, total, message):
-            progress_callback(task_id, status, current, total, message)
+        def callback(status, current, total, message, log_type='info', log_message=None):
+            progress_callback(task_id, status, current, total, message, log_type, log_message)
         
         converter.set_progress_callback(callback)
         
@@ -326,9 +331,10 @@ def batch_convert_pdf():
                 # 发送进度：正在处理第几个文件
                 task_id = f"{batch_id}_file_{idx}"
                 
-                def callback(status, current, total, message):
+                def callback(status, current, total, message, log_type='info', log_message=None):
                     progress_callback(batch_id, status, idx + 1, len(files), 
-                                    f'[{idx + 1}/{len(files)}] {filename}: {message}')
+                                    f'[{idx + 1}/{len(files)}] {filename}: {message}',
+                                    log_type, log_message)
                 
                 # 创建转换器（支持模型选择）
                 try:

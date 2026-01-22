@@ -1,36 +1,28 @@
-# 环境变量
-.env
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-PYTHON
-
-# 虚拟环境
+env/
 venv/
 ENV/
-env/
-.venv
+*.egg-info/
+dist/
+build/
+
+# 环境变量
+.env
+.env.local
+
+# 上传和输出文件
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# 历史记录
+history.json
 
 # IDE
 .vscode/
@@ -39,13 +31,15 @@ env/
 *.swo
 *~
 
-# 输出文件
-*.tex
-latex_output/
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # 日志
 *.log
 
-# 操作系统
-.DS_Store
-Thumbs.db
+# 临时文件
+*.tmp
+*.temp
+*.bak

@@ -93,10 +93,10 @@ class PDF2LaTeXEnhanced:
         """设置进度回调函数"""
         self.progress_callback = callback
     
-    def _emit_progress(self, status: str, current: int, total: int, message: str):
+    def _emit_progress(self, status: str, current: int, total: int, message: str, log_type: str = 'info', log_message: str = None):
         """发送进度更新"""
         if self.progress_callback:
-            self.progress_callback(status, current, total, message)
+            self.progress_callback(status, current, total, message, log_type, log_message)
     
     def _calculate_cost(self):
         """计算估算成本（美元）"""
@@ -130,10 +130,17 @@ class PDF2LaTeXEnhanced:
         
         return max(0.0, min(1.0, quality_score))
     
-    def extract_text_from_pdf(self, pdf_path: str) -> List[str]:
+    def extract_text_from_pdf(self, pdf_path: str, pages: Optional[List[int]] = None) -> List[str]:
         """
         从PDF提取文本，使用多种方法以获得最佳效果
         优先级：pdfplumber > PyPDF2
+        
+        Args:
+            pdf_path: PDF文件路径
+            pages: 要提取的页码列表（0-based），None表示提取所有页
+        
+        Returns:
+            提取的文本列表，索引对应页码
         """
         pages_text = []
         
@@ -145,9 +152,18 @@ class PDF2LaTeXEnhanced:
             with pdfplumber.open(pdf_path) as pdf:
                 total_pages = len(pdf.pages)
                 
-                self._emit_progress('extracting', 0, total_pages, '正在使用增强方法提取PDF文本...')
+                # 确定要提取的页码
+                if pages is None:
+                    pages_to_extract = list(range(total_pages))
+                else:
+                    pages_to_extract = [p for p in pages if 0 <= p < total_pages]
                 
-                for page_num in range(total_pages):
+                # 初始化所有页面为空字符串
+                pages_text = [''] * total_pages
+                
+                self._emit_progress('extracting', 0, len(pages_to_extract), '正在使用增强方法提取PDF文本...', 'info', '📄 开始提取PDF文本 (需要提取 {}/{} 页)'.format(len(pages_to_extract), total_pages))
+                
+                for idx, page_num in enumerate(pages_to_extract):
                     page = pdf.pages[page_num]
                     text = page.extract_text()
                     
@@ -159,6 +175,16 @@ class PDF2LaTeXEnhanced:
                     # 检查文本质量
                     quality = self._check_text_quality(text)
                     print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 长度: {len(text)}, 质量: {quality:.2f}")
+                    
+                    # 发送质量日志
+                    self._emit_progress(
+                        'extracting',
+                        idx,
+                        len(pages_to_extract),
+                        f'提取第 {idx + 1}/{len(pages_to_extract)} 页',
+                        'quality',
+                        f'第 {page_num + 1} 页: 文本长度 {len(text)}, 质量 {quality:.0%}'
+                    )
                     
                     # 如果质量太低，尝试使用 PyPDF2 备用方法
                     if quality < 0.5 and len(text) < 50:
@@ -176,16 +202,18 @@ class PDF2LaTeXEnhanced:
                         except Exception as e:
                             print(f"[PDF提取] 备用方法失败: {str(e)}")
                     
-                    pages_text.append(text)
+                    pages_text[page_num] = text
                     
                     self._emit_progress(
                         'extracting',
-                        page_num + 1,
-                        total_pages,
-                        f'已提取 {page_num + 1}/{total_pages} 页 (质量: {quality:.0%})'
+                        idx + 1,
+                        len(pages_to_extract),
+                        f'已提取 {idx + 1}/{len(pages_to_extract)} 页 (质量: {quality:.0%})',
+                        'success',
+                        f'✓ 第 {page_num + 1} 页提取完成 (质量: {quality:.0%})'
                     )
                 
-                print(f"[PDF提取] 完成！共提取 {total_pages} 页")
+                print(f"[PDF提取] 完成！共提取 {len(pages_to_extract)}/{total_pages} 页")
                     
         except Exception as e:
             # 如果 pdfplumber 失败，降级到 PyPDF2
@@ -197,21 +225,32 @@ class PDF2LaTeXEnhanced:
                     pdf_reader = PyPDF2.PdfReader(file)
                     total_pages = len(pdf_reader.pages)
                     
-                    self._emit_progress('extracting', 0, total_pages, '正在使用基础方法提取PDF文本...')
+                    # 确定要提取的页码
+                    if pages is None:
+                        pages_to_extract = list(range(total_pages))
+                    else:
+                        pages_to_extract = [p for p in pages if 0 <= p < total_pages]
                     
-                    for page_num in range(total_pages):
+                    # 初始化所有页面为空字符串
+                    pages_text = [''] * total_pages
+                    
+                    self._emit_progress('extracting', 0, len(pages_to_extract), '正在使用基础方法提取PDF文本...', 'info', '📄 使用基础方法提取PDF文本 (需要提取 {}/{} 页)'.format(len(pages_to_extract), total_pages))
+                    
+                    for idx, page_num in enumerate(pages_to_extract):
                         page = pdf_reader.pages[page_num]
                         text = page.extract_text()
-                        pages_text.append(text)
+                        pages_text[page_num] = text
                         
                         quality = self._check_text_quality(text)
                         print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 长度: {len(text)}, 质量: {quality:.2f}")
                         
                         self._emit_progress(
                             'extracting',
-                            page_num + 1,
-                            total_pages,
-                            f'已提取 {page_num + 1}/{total_pages} 页'
+                            idx + 1,
+                            len(pages_to_extract),
+                            f'已提取 {idx + 1}/{len(pages_to_extract)} 页',
+                            'success',
+                            f'✓ 第 {page_num + 1} 页提取完成 (质量: {quality:.0%})'
                         )
                         
             except Exception as e2:
@@ -361,6 +400,7 @@ class PDF2LaTeXEnhanced:
         task_id: Optional[str] = None
     ) -> dict:
         """转换PDF到LaTeX"""
+        print(f"\n[转换开始] PDF路径={pdf_path}, 页码={pages}, 翻译={translate}")
         start_time = time.time()
         
         # 重置统计
@@ -376,13 +416,28 @@ class PDF2LaTeXEnhanced:
             suffix = "_cn" if translate else ""
             output_path = pdf_file.parent / f"{pdf_file.stem}{suffix}.tex"
         
-        # 提取PDF文本
-        pages_text = self.extract_text_from_pdf(pdf_path)
+        # 先获取PDF总页数
+        try:
+            import PyPDF2
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                total_pages = len(pdf_reader.pages)
+        except:
+            # 如果PyPDF2失败，用pdfplumber
+            import pdfplumber
+            with pdfplumber.open(pdf_path) as pdf:
+                total_pages = len(pdf.pages)
         
+        # 确定要提取的页码
         if pages is None:
-            pages = list(range(len(pages_text)))
+            pages = list(range(total_pages))
         else:
-            pages = [p for p in pages if 0 <= p < len(pages_text)]
+            pages = [p for p in pages if 0 <= p < total_pages]
+        
+        print(f"[转换] 准备提取 {len(pages)}/{total_pages} 页: {pages}")
+        
+        # 只提取需要的页面
+        pages_text = self.extract_text_from_pdf(pdf_path, pages)
         
         # 构建LaTeX文档
         latex_content = []
@@ -403,6 +458,7 @@ class PDF2LaTeXEnhanced:
         
         mode_desc = "翻译并转换" if translate else "转换"
         processed_pages = 0
+        total_to_process = len(pages)
         
         for idx, page_num in enumerate(pages):
             text = pages_text[page_num]
@@ -410,12 +466,33 @@ class PDF2LaTeXEnhanced:
             if not text.strip():
                 continue
             
+            # 发送开始处理当前页的进度
+            status = 'translating' if translate else 'converting'
+            self._emit_progress(
+                status,
+                idx,
+                total_to_process,
+                f'正在{mode_desc}第 {idx + 1}/{total_to_process} 页...',
+                'progress',
+                f'⚙️ 开始{mode_desc}第 {idx + 1}/{total_to_process} 页 (原始页码: {page_num + 1})'
+            )
+            
             try:
                 latex_page = self.convert_text_to_latex(text, page_num, len(pages_text), translate=translate)
                 latex_content.append(f"% ===== 第 {page_num + 1} 页 =====")
                 latex_content.append(latex_page)
                 latex_content.append("")
                 processed_pages += 1
+                
+                # 发送完成当前页的进度
+                self._emit_progress(
+                    status,
+                    idx + 1,
+                    total_to_process,
+                    f'已完成 {idx + 1}/{total_to_process} 页',
+                    'success',
+                    f'✓ 第 {idx + 1}/{total_to_process} 页{mode_desc}完成'
+                )
                 
             except Exception as e:
                 print(f"警告: 第 {page_num + 1} 页{mode_desc}失败: {str(e)}")
@@ -436,7 +513,9 @@ class PDF2LaTeXEnhanced:
             'completed',
             len(pages),
             len(pages),
-            f'转换完成！处理了 {processed_pages} 页'
+            f'转换完成！处理了 {processed_pages} 页',
+            'success',
+            f'✅ 转换完成！成功处理 {processed_pages} 页'
         )
         
         # 返回详细结果
