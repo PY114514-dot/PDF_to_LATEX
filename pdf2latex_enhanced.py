@@ -10,6 +10,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional, List, Callable
 import PyPDF2
+import pdfplumber
 from dotenv import load_dotenv
 from clients import (
     deepseek_chat, deepseek_reasoner, gpt4o, gpt4o_mini, gpt52_with_reasoning,
@@ -103,31 +104,118 @@ class PDF2LaTeXEnhanced:
         output_cost = (self.completion_tokens / 1_000_000) * self.price_per_million_output
         return input_cost + output_cost
     
+    def _check_text_quality(self, text: str) -> float:
+        """
+        检查提取文本的质量
+        返回质量分数 0-1，分数越高质量越好
+        """
+        if not text or len(text.strip()) < 10:
+            return 0.0
+        
+        # 计算可读字符比例
+        readable_chars = sum(1 for c in text if c.isalnum() or c.isspace() or c in '.,;:!?-()[]{}')
+        total_chars = len(text)
+        
+        if total_chars == 0:
+            return 0.0
+        
+        readable_ratio = readable_chars / total_chars
+        
+        # 检查是否有大量乱码字符
+        weird_chars = sum(1 for c in text if ord(c) > 1000 and not ('\u4e00' <= c <= '\u9fff'))
+        weird_ratio = weird_chars / total_chars
+        
+        # 质量分数：可读字符多、乱码字符少
+        quality_score = readable_ratio - (weird_ratio * 2)
+        
+        return max(0.0, min(1.0, quality_score))
+    
     def extract_text_from_pdf(self, pdf_path: str) -> List[str]:
-        """从PDF提取文本"""
+        """
+        从PDF提取文本，使用多种方法以获得最佳效果
+        优先级：pdfplumber > PyPDF2
+        """
         pages_text = []
         
         try:
-            with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                total_pages = len(pdf_reader.pages)
+            # 首先尝试使用 pdfplumber（效果更好）
+            print(f"\n[PDF提取] 开始提取文件: {pdf_path}")
+            print("[PDF提取] 方法: pdfplumber (优先)")
+            
+            with pdfplumber.open(pdf_path) as pdf:
+                total_pages = len(pdf.pages)
                 
-                self._emit_progress('extracting', 0, total_pages, '正在提取PDF文本...')
+                self._emit_progress('extracting', 0, total_pages, '正在使用增强方法提取PDF文本...')
                 
                 for page_num in range(total_pages):
-                    page = pdf_reader.pages[page_num]
+                    page = pdf.pages[page_num]
                     text = page.extract_text()
+                    
+                    if text:
+                        text = text.strip()
+                    else:
+                        text = ""
+                    
+                    # 检查文本质量
+                    quality = self._check_text_quality(text)
+                    print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 长度: {len(text)}, 质量: {quality:.2f}")
+                    
+                    # 如果质量太低，尝试使用 PyPDF2 备用方法
+                    if quality < 0.5 and len(text) < 50:
+                        print(f"[PDF提取] 第 {page_num + 1} 页质量低，尝试备用方法...")
+                        try:
+                            with open(pdf_path, 'rb') as file:
+                                pdf_reader = PyPDF2.PdfReader(file)
+                                if page_num < len(pdf_reader.pages):
+                                    backup_text = pdf_reader.pages[page_num].extract_text()
+                                    backup_quality = self._check_text_quality(backup_text)
+                                    
+                                    if backup_quality > quality:
+                                        text = backup_text
+                                        print(f"[PDF提取] 备用方法更好，质量: {backup_quality:.2f}")
+                        except Exception as e:
+                            print(f"[PDF提取] 备用方法失败: {str(e)}")
+                    
                     pages_text.append(text)
                     
                     self._emit_progress(
                         'extracting',
                         page_num + 1,
                         total_pages,
-                        f'已提取 {page_num + 1}/{total_pages} 页'
+                        f'已提取 {page_num + 1}/{total_pages} 页 (质量: {quality:.0%})'
                     )
+                
+                print(f"[PDF提取] 完成！共提取 {total_pages} 页")
                     
         except Exception as e:
-            raise Exception(f"提取PDF文本失败: {str(e)}")
+            # 如果 pdfplumber 失败，降级到 PyPDF2
+            print(f"[PDF提取] pdfplumber 失败: {str(e)}")
+            print("[PDF提取] 降级到 PyPDF2...")
+            
+            try:
+                with open(pdf_path, 'rb') as file:
+                    pdf_reader = PyPDF2.PdfReader(file)
+                    total_pages = len(pdf_reader.pages)
+                    
+                    self._emit_progress('extracting', 0, total_pages, '正在使用基础方法提取PDF文本...')
+                    
+                    for page_num in range(total_pages):
+                        page = pdf_reader.pages[page_num]
+                        text = page.extract_text()
+                        pages_text.append(text)
+                        
+                        quality = self._check_text_quality(text)
+                        print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 长度: {len(text)}, 质量: {quality:.2f}")
+                        
+                        self._emit_progress(
+                            'extracting',
+                            page_num + 1,
+                            total_pages,
+                            f'已提取 {page_num + 1}/{total_pages} 页'
+                        )
+                        
+            except Exception as e2:
+                raise Exception(f"所有PDF提取方法均失败: PyPDF2={str(e2)}, pdfplumber={str(e)}")
         
         return pages_text
     
@@ -183,6 +271,18 @@ class PDF2LaTeXEnhanced:
     
     def convert_text_to_latex(self, text: str, page_num: int, total_pages: int, translate: bool = False) -> str:
         """转换文本为LaTeX"""
+        # 检查文本质量
+        quality = self._check_text_quality(text)
+        print(f"[转换] 第 {page_num + 1} 页文本质量: {quality:.2f}, 长度: {len(text)}")
+        
+        # 如果文本为空或质量太低，提示用户
+        if not text.strip():
+            print(f"[转换] 警告: 第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
+            return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
+        
+        if quality < 0.3:
+            print(f"[转换] 警告: 第 {page_num + 1} 页文本质量较低 ({quality:.2f})，可能包含乱码")
+        
         if translate:
             text = self.translate_text(text, page_num, total_pages)
         

@@ -254,7 +254,7 @@ function setupBatchFileInput() {
 }
 
 // 处理文件选择
-function handleFileSelect(file) {
+async function handleFileSelect(file) {
     if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
         showError('请选择PDF文件');
         return;
@@ -271,15 +271,29 @@ function handleFileSelect(file) {
     isBatchMode = false;
     
     const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong>`;
+    dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong> <span style="color: #888;">(正在检测页数...)</span>`;
     dropText.style.color = 'var(--success-color)';
     
     optionsSection.style.display = 'block';
+    
+    // 获取PDF页数
+    try {
+        const pageCount = await getPdfPageCount(file);
+        dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong> <span style="color: #888;">(共 ${pageCount} 页)</span>`;
+        
+        // 更新页码输入提示
+        const pagesInput = document.getElementById('pagesInput');
+        pagesInput.placeholder = `例如: 1-3,5,7-9 (共${pageCount}页)`;
+    } catch (error) {
+        console.error('获取页数失败:', error);
+        dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong>`;
+    }
+    
     optionsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // 处理批量文件选择
-function handleBatchFileSelect(files) {
+async function handleBatchFileSelect(files) {
     // 验证文件
     const maxFiles = 10;
     if (files.length > maxFiles) {
@@ -311,11 +325,35 @@ function handleBatchFileSelect(files) {
     isBatchMode = true;
 
     const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件:<br>` +
-        validFiles.map(f => `<small>• ${f.name}</small>`).join('<br>');
+    dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件 <span style="color: #888;">(正在检测页数...)</span>`;
     dropText.style.color = 'var(--success-color)';
-
+    
     optionsSection.style.display = 'block';
+    
+    // 异步获取所有文件的页数
+    try {
+        const fileInfos = await Promise.all(
+            validFiles.map(async (file) => {
+                try {
+                    const pageCount = await getPdfPageCount(file);
+                    return { name: file.name, pages: pageCount };
+                } catch (error) {
+                    console.error(`获取${file.name}页数失败:`, error);
+                    return { name: file.name, pages: '?' };
+                }
+            })
+        );
+        
+        const totalPages = fileInfos.reduce((sum, info) => sum + (typeof info.pages === 'number' ? info.pages : 0), 0);
+        
+        dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件 <span style="color: #888;">(共 ${totalPages} 页)</span>:<br>` +
+            fileInfos.map(info => `<small>• ${info.name} (${info.pages}页)</small>`).join('<br>');
+    } catch (error) {
+        console.error('批量获取页数失败:', error);
+        dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件:<br>` +
+            validFiles.map(f => `<small>• ${f.name}</small>`).join('<br>');
+    }
+
     optionsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -342,7 +380,7 @@ async function startConversion() {
 async function startSingleConversion() {
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
-    const pages = document.getElementById('pagesInput').value.trim();
+    const pagesInput = document.getElementById('pagesInput').value.trim();
     const model = document.getElementById('modelSelect').value;
 
     optionsSection.style.display = 'none';
@@ -360,6 +398,17 @@ async function startSingleConversion() {
     });
 
     try {
+        // 解析页码输入
+        let pages = '';
+        if (pagesInput) {
+            try {
+                pages = parsePageInput(pagesInput);
+            } catch (error) {
+                showError(error.message);
+                return;
+            }
+        }
+        
         const formData = new FormData();
         formData.append('file', selectedFile);
         formData.append('translate', translate);
@@ -455,7 +504,7 @@ function formatBytes(bytes) {
 async function startBatchConversion() {
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
-    const pages = document.getElementById('pagesInput').value.trim();
+    const pagesInput = document.getElementById('pagesInput').value.trim();
     const model = document.getElementById('modelSelect').value;
 
     optionsSection.style.display = 'none';
@@ -473,6 +522,17 @@ async function startBatchConversion() {
     });
 
     try {
+        // 解析页码输入
+        let pages = '';
+        if (pagesInput) {
+            try {
+                pages = parsePageInput(pagesInput);
+            } catch (error) {
+                showError(error.message);
+                return;
+            }
+        }
+        
         const formData = new FormData();
         
         // 添加所有文件
@@ -865,6 +925,100 @@ function showBatchResult(result) {
 // 下载批量结果
 function downloadBatchResults(batchId) {
     window.location.href = `/api/download-batch/${batchId}`;
+}
+
+// 解析页码输入（支持范围和逗号分隔）
+function parsePageInput(input) {
+    /**
+     * 解析页码输入，支持以下格式：
+     * - 单页: "1" -> "1"
+     * - 逗号分隔: "1,2,3" -> "1,2,3"
+     * - 范围: "1-3" -> "1,2,3"
+     * - 混合: "1-3,5,7-9" -> "1,2,3,5,7,8,9"
+     */
+    if (!input || !input.trim()) {
+        return '';
+    }
+    
+    try {
+        const parts = input.split(',').map(p => p.trim()).filter(p => p);
+        const pages = new Set(); // 使用Set自动去重
+        
+        for (const part of parts) {
+            if (part.includes('-')) {
+                // 处理范围格式 "1-3"
+                const range = part.split('-').map(n => n.trim());
+                if (range.length !== 2) {
+                    throw new Error(`无效的范围格式: ${part}`);
+                }
+                
+                const start = parseInt(range[0]);
+                const end = parseInt(range[1]);
+                
+                if (isNaN(start) || isNaN(end)) {
+                    throw new Error(`无效的页码: ${part}`);
+                }
+                
+                if (start > end) {
+                    throw new Error(`起始页不能大于结束页: ${part}`);
+                }
+                
+                if (start < 1 || end < 1) {
+                    throw new Error(`页码必须大于0: ${part}`);
+                }
+                
+                // 添加范围内的所有页码
+                for (let i = start; i <= end; i++) {
+                    pages.add(i);
+                }
+            } else {
+                // 处理单个页码
+                const page = parseInt(part);
+                if (isNaN(page)) {
+                    throw new Error(`无效的页码: ${part}`);
+                }
+                
+                if (page < 1) {
+                    throw new Error(`页码必须大于0: ${part}`);
+                }
+                
+                pages.add(page);
+            }
+        }
+        
+        // 转换为排序后的逗号分隔字符串
+        return Array.from(pages).sort((a, b) => a - b).join(',');
+    } catch (error) {
+        throw new Error(`页码格式错误: ${error.message}`);
+    }
+}
+
+// 获取PDF页数
+async function getPdfPageCount(file) {
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch('/api/get-pdf-pages', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error('获取页数失败');
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            return data.total_pages;
+        } else {
+            throw new Error(data.error || '获取页数失败');
+        }
+    } catch (error) {
+        console.error('获取PDF页数错误:', error);
+        throw error;
+    }
 }
 
 // 重置应用

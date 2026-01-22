@@ -559,6 +559,55 @@ def clear_history():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/get-pdf-pages', methods=['POST'])
+def get_pdf_pages():
+    """获取PDF文件的页数"""
+    filepath = None
+    
+    try:
+        # 检查文件
+        if 'file' not in request.files:
+            return jsonify({'error': '没有上传文件'}), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({'error': '文件名为空'}), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({'error': '只支持PDF文件'}), 400
+        
+        # 保存临时文件
+        filename = secure_filename(file.filename)
+        timestamp = int(time.time())
+        unique_filename = f"temp_{timestamp}_{filename}"
+        filepath = app.config['UPLOAD_FOLDER'] / unique_filename
+        file.save(filepath)
+        
+        # 读取PDF页数
+        import PyPDF2
+        with open(filepath, 'rb') as pdf_file:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            total_pages = len(pdf_reader.pages)
+        
+        return jsonify({
+            'success': True,
+            'total_pages': total_pages,
+            'filename': file.filename
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        # 清理临时文件
+        try:
+            if filepath and filepath.exists():
+                os.remove(filepath)
+        except:
+            pass
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("PDF2LaTeX 增强版启动中...")

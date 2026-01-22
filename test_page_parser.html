@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>页码解析器测试</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+        
+        .result.success {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            display: block;
+        }
+        
+        .result.error {
+            background: #f8d7da;
+            border: 2px solid #dc3545;
+            display: block;
+        }
+        
+        .result-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .result.success .result-title {
+            color: #155724;
+        }
+        
+        .result.error .result-title {
+            color: #721c24;
+        }
+        
+        .result-content {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+        
+        .result.success .result-content {
+            color: #155724;
+        }
+        
+        .result.error .result-content {
+            color: #721c24;
+        }
+        
+        .examples {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .examples h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .example-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .example-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        
+        .example-input {
+            font-family: 'Courier New', monospace;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .example-arrow {
+            color: #999;
+            margin: 0 10px;
+        }
+        
+        .example-output {
+            font-family: 'Courier New', monospace;
+            color: #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 页码解析器测试</h1>
+        <p class="subtitle">测试支持范围和逗号分隔的页码输入</p>
+        
+        <div class="input-group">
+            <label for="pageInput">输入页码：</label>
+            <input 
+                type="text" 
+                id="pageInput" 
+                placeholder="例如: 1-3,5,7-9"
+                autocomplete="off"
+            >
+        </div>
+        
+        <button onclick="testParse()">🔍 解析页码</button>
+        
+        <div id="result" class="result">
+            <div class="result-title" id="resultTitle"></div>
+            <div class="result-content" id="resultContent"></div>
+        </div>
+        
+        <div class="examples">
+            <h3>📝 示例（点击快速测试）</h3>
+            <div class="example-item" onclick="quickTest('1-3')">
+                <span class="example-input">1-3</span>
+                <span class="example-arrow">→</span>
+                <span class="example-output">1,2,3</span>
+            </div>
+            <div class="example-item" onclick="quickTest('1,3,5')">
+                <span class="example-input">1,3,5</span>
+                <span class="example-arrow">→</span>
+                <span class="example-output">1,3,5</span>
+            </div>
+            <div class="example-item" onclick="quickTest('1-3,5,7-9')">
+                <span class="example-input">1-3,5,7-9</span>
+                <span class="example-arrow">→</span>
+                <span class="example-output">1,2,3,5,7,8,9</span>
+            </div>
+            <div class="example-item" onclick="quickTest('5,1-3,9,7')">
+                <span class="example-input">5,1-3,9,7</span>
+                <span class="example-arrow">→</span>
+                <span class="example-output">1,2,3,5,7,9 (自动排序)</span>
+            </div>
+            <div class="example-item" onclick="quickTest('1-3,2,3-5')">
+                <span class="example-input">1-3,2,3-5</span>
+                <span class="example-arrow">→</span>
+                <span class="example-output">1,2,3,4,5 (自动去重)</span>
+            </div>
+            <div class="example-item" onclick="quickTest('5-3')">
+                <span class="example-input">5-3</span>
+                <span class="example-arrow">→</span>
+                <span class="example-output" style="color: #dc3545;">❌ 错误示例</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 解析页码输入（支持范围和逗号分隔）
+        function parsePageInput(input) {
+            if (!input || !input.trim()) {
+                return '';
+            }
+            
+            try {
+                const parts = input.split(',').map(p => p.trim()).filter(p => p);
+                const pages = new Set();
+                
+                for (const part of parts) {
+                    if (part.includes('-')) {
+                        const range = part.split('-').map(n => n.trim());
+                        if (range.length !== 2) {
+                            throw new Error(`无效的范围格式: ${part}`);
+                        }
+                        
+                        const start = parseInt(range[0]);
+                        const end = parseInt(range[1]);
+                        
+                        if (isNaN(start) || isNaN(end)) {
+                            throw new Error(`无效的页码: ${part}`);
+                        }
+                        
+                        if (start > end) {
+                            throw new Error(`起始页不能大于结束页: ${part}`);
+                        }
+                        
+                        if (start < 1 || end < 1) {
+                            throw new Error(`页码必须大于0: ${part}`);
+                        }
+                        
+                        for (let i = start; i <= end; i++) {
+                            pages.add(i);
+                        }
+                    } else {
+                        const page = parseInt(part);
+                        if (isNaN(page)) {
+                            throw new Error(`无效的页码: ${part}`);
+                        }
+                        
+                        if (page < 1) {
+                            throw new Error(`页码必须大于0: ${part}`);
+                        }
+                        
+                        pages.add(page);
+                    }
+                }
+                
+                return Array.from(pages).sort((a, b) => a - b).join(',');
+            } catch (error) {
+                throw new Error(`页码格式错误: ${error.message}`);
+            }
+        }
+        
+        function testParse() {
+            const input = document.getElementById('pageInput').value;
+            const resultDiv = document.getElementById('result');
+            const resultTitle = document.getElementById('resultTitle');
+            const resultContent = document.getElementById('resultContent');
+            
+            if (!input.trim()) {
+                resultDiv.className = 'result error';
+                resultTitle.textContent = '❌ 错误';
+                resultContent.textContent = '请输入页码';
+                return;
+            }
+            
+            try {
+                const parsed = parsePageInput(input);
+                resultDiv.className = 'result success';
+                resultTitle.textContent = '✅ 解析成功';
+                
+                const inputPages = input.split(',').map(p => p.trim()).filter(p => p);
+                const outputPages = parsed.split(',');
+                
+                resultContent.innerHTML = `
+                    <strong>输入:</strong> ${input}<br>
+                    <strong>解析后:</strong> ${parsed}<br>
+                    <strong>页数统计:</strong> ${outputPages.length} 页
+                `;
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultTitle.textContent = '❌ 解析失败';
+                resultContent.textContent = error.message;
+            }
+        }
+        
+        function quickTest(value) {
+            document.getElementById('pageInput').value = value;
+            testParse();
+        }
+        
+        // 支持回车键
+        document.getElementById('pageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                testParse();
+            }
+        });
+    </script>
+</body>
+</html>
