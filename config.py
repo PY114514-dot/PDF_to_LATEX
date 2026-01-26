@@ -44,6 +44,25 @@ class Settings:
     # 批量处理文件数量限制
     MAX_BATCH_FILES: int = int(os.getenv("MAX_BATCH_FILES", "10"))
     
+    # ==================== OCR 和图片识别设置 ====================
+    
+    # OCR 引擎选择: 'mixed' | 'deepseek' | 'tesseract'
+    OCR_PROVIDER: str = os.getenv("OCR_PROVIDER", "mixed")
+    
+    # Tesseract 可执行文件路径（Windows需要配置）
+    TESSERACT_CMD: str = os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    
+    # 允许的图片格式
+    ALLOWED_IMAGE_EXTENSIONS: set = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.gif'}
+    
+    # 图片预处理设置
+    IMAGE_MAX_SIZE: int = int(os.getenv("IMAGE_MAX_SIZE", "4096"))  # 最大边长
+    IMAGE_QUALITY_THRESHOLD: float = float(os.getenv("IMAGE_QUALITY_THRESHOLD", "0.6"))  # OCR质量阈值（Tesseract低于此值会切换到Vision API）
+    
+    # DeepSeek Vision 模型配置
+    DEEPSEEK_VISION_MODEL: str = "deepseek-chat"  # DeepSeek 支持视觉的模型
+    DEEPSEEK_VISION_DETAIL: str = "high"  # 图片分析详细度: 'low' | 'high' | 'auto'
+    
     @classmethod
     def validate(cls) -> bool:
         """验证至少有一个API密钥被配置"""

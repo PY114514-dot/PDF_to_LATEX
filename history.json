@@ -1,152 +1,116 @@
 [
   {
-    "filename": "No.1-No.24_Math_Sample_Training_Level.pdf",
-    "model": "doubao",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\1769069452_No.1-No.24_Math_Sample_Training_Level.tex",
-    "stats": {
-      "total_pages": 55,
-      "processed_pages": 2,
-      "total_tokens": 6687,
-      "estimated_cost": 0.0120336,
-      "processing_time": 117.56
-    },
-    "timestamp": "2026-01-22T16:12:50.034495"
+    "timestamp": 1769397241,
+    "filename": "screenshot_1769397231051.png",
+    "model": "deepseek-chat",
+    "ocr_provider": "vision",
+    "ocr_quality": 1.0,
+    "content_type": "text",
+    "translate": true,
+    "output_file": "1769397241_screenshot_1769397231051.tex",
+    "tokens": 668,
+    "elapsed_time": 23.931161403656006
   },
   {
-    "filename": "No.1-No.24_Math_Sample_Training_Level.pdf",
+    "timestamp": 1769396614,
+    "filename": "screenshot_1769396608563.png",
     "model": "doubao",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\1769069052_No.1-No.24_Math_Sample_Training_Level.tex",
-    "stats": {
-      "total_pages": 55,
-      "processed_pages": 2,
-      "total_tokens": 5520,
-      "estimated_cost": 0.0096996,
-      "processing_time": 94.03
-    },
-    "timestamp": "2026-01-22T16:05:46.543667"
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.6875555555555556,
+    "content_type": "text",
+    "translate": true,
+    "output_file": "1769396614_screenshot_1769396608563.tex",
+    "tokens": 3374,
+    "elapsed_time": 69.74155497550964
   },
   {
-    "filename": "lean.pdf",
+    "filename": "1108.0065v4.pdf",
     "model": "doubao",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\1769068679_lean.tex",
-    "stats": {
-      "total_pages": 22,
-      "processed_pages": 2,
-      "total_tokens": 8865,
-      "estimated_cost": 0.016405199999999998,
-      "processing_time": 157.54
-    },
-    "timestamp": "2026-01-22T16:00:36.575396"
-  },
-  {
-    "filename": "lean.pdf",
-    "model": "doubao",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\1769068254_lean.tex",
-    "stats": {
-      "total_pages": 22,
-      "processed_pages": 2,
-      "total_tokens": 8208,
-      "estimated_cost": 0.0150912,
-      "processing_time": 147.28
-    },
-    "timestamp": "2026-01-22T15:53:21.567573"
-  },
-  {
-    "filename": "2025.pdf",
-    "model": "doubao",
-    "translated": false,
+    "translated": true,
     "pages": "1,2,3",
-    "output_file": "outputs\\1769067916_2025.tex",
+    "output_file": "outputs\\1769395851_1108.0065v4_cn.tex",
     "stats": {
-      "total_pages": 10,
+      "total_pages": 42,
       "processed_pages": 3,
-      "total_tokens": 15281,
-      "estimated_cost": 0.0276712,
-      "processing_time": 237.02
+      "total_tokens": 27864,
+      "estimated_cost": 0.048753599999999994,
+      "processing_time": 505.19
     },
-    "timestamp": "2026-01-22T15:49:14.011814"
+    "timestamp": "2026-01-26T10:59:16.494343"
   },
   {
-    "filename": "2025.pdf",
-    "model": "doubao",
-    "translated": false,
-    "pages": "1,2,3",
-    "output_file": "outputs\\1769066676_2025.tex",
-    "stats": {
-      "total_pages": 10,
-      "processed_pages": 3,
-      "total_tokens": 12070,
-      "estimated_cost": 0.0212492,
-      "processing_time": 183.55
-    },
-    "timestamp": "2026-01-22T15:27:40.088650"
-  },
-  {
-    "filename": "lean_2.pdf",
+    "filename": "1908.03252v1.pdf",
     "model": "doubao",
     "translated": false,
     "pages": "1,2",
-    "output_file": "outputs\\1769065811_lean_2.tex",
+    "output_file": "outputs\\1769395480_1908.03252v1.tex",
     "stats": {
-      "total_pages": 6,
+      "total_pages": 18,
       "processed_pages": 2,
-      "total_tokens": 9844,
-      "estimated_cost": 0.0179336,
-      "processing_time": 175.28
+      "total_tokens": 13564,
+      "estimated_cost": 0.024604400000000002,
+      "processing_time": 256.21
     },
-    "timestamp": "2026-01-22T15:13:06.496316"
+    "timestamp": "2026-01-26T10:48:56.303911"
   },
   {
-    "filename": "lean_3.pdf",
+    "timestamp": 1769394609,
+    "filename": "screenshot_1769394604732.png",
     "model": "doubao",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\1769064435_lean_3.tex",
-    "stats": {
-      "total_pages": 6,
-      "processed_pages": 2,
-      "total_tokens": 10114,
-      "estimated_cost": 0.0183404,
-      "processing_time": 175.22
-    },
-    "timestamp": "2026-01-22T14:50:10.996937"
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.6767647058823529,
+    "content_type": "text",
+    "translate": false,
+    "output_file": "1769394609_screenshot_1769394604732.tex",
+    "tokens": 2471,
+    "elapsed_time": 52.068729400634766
   },
   {
-    "filename": "2025.pdf",
+    "timestamp": 1769394319,
+    "filename": "screenshot_1769394313200.png",
     "model": "doubao",
-    "translated": false,
-    "pages": "1",
-    "output_file": "outputs\\1769052445_2025.tex",
-    "stats": {
-      "total_pages": 10,
-      "processed_pages": 1,
-      "total_tokens": 5159,
-      "estimated_cost": 0.0090592,
-      "processing_time": 83.46
-    },
-    "timestamp": "2026-01-22T11:28:49.158893"
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.5375373134328358,
+    "content_type": "text",
+    "translate": true,
+    "output_file": "1769394319_screenshot_1769394313200.tex",
+    "tokens": 2790,
+    "elapsed_time": 56.23611235618591
   },
   {
-    "filename": "No.1-No.24_Math_Sample_Training_Level.pdf",
-    "model": "deepseek-reasoner",
-    "translated": false,
-    "pages": "1",
-    "output_file": "outputs\\1769049478_No.1-No.24_Math_Sample_Training_Level.tex",
-    "stats": {
-      "total_pages": 55,
-      "processed_pages": 1,
-      "total_tokens": 4323,
-      "estimated_cost": 0.007956,
-      "processing_time": 127.3
-    },
-    "timestamp": "2026-01-22T10:40:06.102915"
+    "timestamp": 1769393937,
+    "filename": "screenshot_1769393930434.png",
+    "model": "doubao",
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.5628799999999999,
+    "content_type": "text",
+    "translate": true,
+    "output_file": "1769393937_screenshot_1769393930434.tex",
+    "tokens": 2255,
+    "elapsed_time": 56.554139852523804
+  },
+  {
+    "timestamp": 1769393753,
+    "filename": "screenshot_1769393746673.png",
+    "model": "doubao",
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.55109375,
+    "content_type": "text",
+    "translate": false,
+    "output_file": "1769393753_screenshot_1769393746673.tex",
+    "tokens": 1178,
+    "elapsed_time": 29.527148723602295
+  },
+  {
+    "timestamp": 1769393392,
+    "filename": "screenshot_1769393378227.png",
+    "model": "doubao",
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.7519291338582677,
+    "content_type": "text",
+    "translate": true,
+    "output_file": "1769393392_screenshot_1769393378227.tex",
+    "tokens": 3367,
+    "elapsed_time": 73.99282431602478
   }
 ]

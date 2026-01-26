@@ -1420,3 +1420,140 @@ body {
     0%, 100% { background: transparent; }
     50% { background: rgba(255, 255, 255, 0.05); }
 }
+
+/* ================================
+   图片预览和上传样式
+   ================================ */
+
+.image-preview-section {
+    margin: 1.5rem 0;
+    padding: 1.5rem;
+    background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+}
+
+.image-preview-section h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: var(--text-color);
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.image-thumbnails {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 1rem;
+}
+
+.image-thumbnail {
+    position: relative;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+}
+
+.image-thumbnail:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.image-thumbnail img {
+    width: 100%;
+    height: 150px;
+    object-fit: cover;
+    display: block;
+}
+
+.image-name {
+    padding: 0.5rem;
+    font-size: 0.75rem;
+    color: #666;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: #f9f9f9;
+}
+
+.image-remove-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(255, 59, 48, 0.9);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.image-thumbnail:hover .image-remove-btn {
+    opacity: 1;
+}
+
+.image-remove-btn svg {
+    width: 16px;
+    height: 16px;
+    stroke: white;
+    stroke-width: 3;
+}
+
+.image-remove-btn:hover {
+    background: rgba(255, 59, 48, 1);
+}
+
+.browse-btn-image {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.browse-btn-image:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.browse-btn-image svg {
+    width: 20px;
+    height: 20px;
+}
+
+.drop-text-subtitle {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+    margin-bottom: 0;
+}
+
+.paste-hint {
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    background: linear-gradient(135deg, #667eea15, #764ba215);
+    border-radius: 8px;
+    border: 1px dashed var(--primary-color);
+    color: var(--primary-color);
+    font-size: 0.9rem;
+    font-weight: 500;
+    animation: fadeIn 0.5s ease;
+}

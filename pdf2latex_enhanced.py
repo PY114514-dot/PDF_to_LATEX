@@ -96,7 +96,14 @@ class PDF2LaTeXEnhanced:
     def _emit_progress(self, status: str, current: int, total: int, message: str, log_type: str = 'info', log_message: str = None):
         """发送进度更新"""
         if self.progress_callback:
-            self.progress_callback(status, current, total, message, log_type, log_message)
+            # 传递当前的 token 统计信息
+            tokens = {
+                'prompt_tokens': self.prompt_tokens,
+                'completion_tokens': self.completion_tokens,
+                'total_tokens': self.total_tokens,
+                'estimated_cost': self._calculate_cost()
+            }
+            self.progress_callback(status, current, total, message, log_type, log_message, tokens)
     
     def _calculate_cost(self):
         """计算估算成本（美元）"""

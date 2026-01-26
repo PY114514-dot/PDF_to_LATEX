@@ -17,6 +17,18 @@ PyPDF2==3.0.1
 pdfplumber==0.11.0  # 更强大的PDF文本提取
 pdfminer.six==20221105  # 备用PDF提取库
 
+# 图片处理和OCR
+Pillow==10.1.0  # 图片读取、格式转换
+pytesseract==0.3.10  # 本地OCR识别（Python封装）
+# opencv-python==4.8.1.78  # 图像预处理（可选，与NumPy 2.x不兼容，已改用Pillow）
+
+# 注意：Tesseract OCR 引擎需要单独安装
+# Windows: 下载安装 https://github.com/UB-Mannheim/tesseract/wiki
+# 或使用 Chocolatey: choco install tesseract
+# 或使用 Scoop: scoop install tesseract
+# Linux: sudo apt-get install tesseract-ocr tesseract-ocr-chi-sim
+# macOS: brew install tesseract tesseract-lang
+
 # 环境变量管理
 python-dotenv==1.0.0
 

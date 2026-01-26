@@ -71,6 +71,10 @@ class HistoryManager:
         
         self._save_history()
     
+    def add_entry(self, entry: Dict[str, Any]):
+        """添加记录的别名方法（兼容性）"""
+        return self.add_record(entry)
+    
     def _delete_record_files(self, record: Dict[str, Any]):
         """删除记录关联的文件"""
         try:

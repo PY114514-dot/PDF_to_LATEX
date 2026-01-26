@@ -2,11 +2,13 @@
 
 let selectedFile = null;
 let selectedFiles = [];  // 批量文件
+let selectedImages = [];  // 图片文件
 let downloadUrl = null;
 let latexContent = null;
 let socket = null;
 let currentTaskId = null;
 let isBatchMode = false;  // 是否批量模式
+let isImageMode = false;  // 是否图片模式
 
 // 货币设置
 const USD_TO_CNY_RATE = 7.2;  // 美元到人民币汇率
@@ -68,7 +70,9 @@ const errorMessage = document.getElementById('errorMessage');
 document.addEventListener('DOMContentLoaded', () => {
     setupDragAndDrop();
     setupFileInput();
+    setupImageInput();
     setupBatchFileInput();
+    setupPasteImage();
     setupConvertButton();
     initWebSocket();
     loadAvailableModels();
@@ -121,6 +125,28 @@ function initWebSocket() {
     
     socket.on('progress', (data) => {
         updateProgress(data);
+        
+        // 如果转换完成，停止进度条并显示结果
+        if (data.status === 'completed' && data.result) {
+            // 延迟一下让用户看到100%进度
+            setTimeout(() => {
+                // 判断是批量转换还是单个转换
+                if (data.result.results && Array.isArray(data.result.results)) {
+                    // 批量转换
+                    showBatchResult(data.result);
+                } else {
+                    // 单个转换
+                    showResult(data.result);
+                }
+            }, 800);
+        }
+        
+        // 如果转换失败，显示错误
+        if (data.status === 'error') {
+            setTimeout(() => {
+                showError(data.message || '转换失败');
+            }, 500);
+        }
     });
     
     // 添加心跳保活机制
@@ -219,6 +245,14 @@ function clearTerminalLog() {
 function updateProgress(data) {
     console.log('进度更新:', data);
     
+    // 如果有token信息，更新token统计显示
+    if (data.tokens) {
+        document.getElementById('promptTokens').textContent = (data.tokens.prompt_tokens || 0).toLocaleString();
+        document.getElementById('completionTokens').textContent = (data.tokens.completion_tokens || 0).toLocaleString();
+        document.getElementById('totalTokens').textContent = (data.tokens.total_tokens || 0).toLocaleString();
+        document.getElementById('estimatedCost').textContent = formatCurrency(data.tokens.estimated_cost || 0);
+    }
+    
     // 显示终端日志
     // 如果有log_message就用log_message，否则对于某些状态使用message
     const shouldShowLog = data.log_message || ['preparing', 'uploading', 'extracting', 'converting', 'translating', 'processing', 'completed'].includes(data.status);
@@ -231,10 +265,10 @@ function updateProgress(data) {
     
     // 平滑动画更新进度条
     progressBarFill.style.transition = 'width 0.3s ease';
-    progressBarFill.style.width = `${Math.min(data.percent, 100)}%`;
+    progressBarFill.style.width = `${Math.min(data.percent || 0, 100)}%`;
     
     // 根据状态显示不同的消息和图标
-    let message = data.message;
+    let message = data.message || '';
     let icon = '';
     
     switch (data.status) {
@@ -268,32 +302,51 @@ function updateProgress(data) {
     }
     
     // 更新文本（如果消息中没有图标，则添加）
-    if (!message.match(/^[📄📤⏳🌏⚙️✅🔄📊📦]/)) {
+    if (!message.match(/^[📄📤⏳🌏⚙️✅🔄📊📦📸]/)) {
         progressText.textContent = `${icon} ${message}`;
     } else {
         progressText.textContent = message;
     }
     
-    // 更新详细信息 - 显示页码进度
+    // 更新详细信息 - 显示页码/图片进度
     if (data.status === 'uploading') {
         // 上传时显示百分比
-        progressDetail.textContent = `${data.percent}%`;
+        progressDetail.textContent = `${data.percent || 0}%`;
     } else if (data.status === 'converting' || data.status === 'translating') {
-        // 转换/翻译时显示页码进度（如 1/8, 2/8...）
-        progressDetail.textContent = `第 ${data.current}/${data.total} 页`;
-        progressDetail.style.fontSize = '1.1rem';
-        progressDetail.style.fontWeight = '600';
-        progressDetail.style.color = 'var(--primary-color)';
+        // 转换/翻译时显示页码/图片进度
+        if (data.current !== undefined && data.total !== undefined) {
+            // 如果是图片模式，显示"第 x/y 张"，否则显示"第 x/y 页"
+            const unit = isImageMode ? '张' : '页';
+            progressDetail.textContent = `第 ${data.current}/${data.total} ${unit}`;
+            progressDetail.style.fontSize = '1.1rem';
+            progressDetail.style.fontWeight = '600';
+            progressDetail.style.color = 'var(--primary-color)';
+        } else {
+            progressDetail.textContent = '处理中...';
+        }
     } else if (data.status === 'extracting') {
         // 提取时显示页码
-        progressDetail.textContent = `${data.current} / ${data.total} 页`;
+        if (data.current !== undefined && data.total !== undefined) {
+            progressDetail.textContent = `${data.current} / ${data.total} 页`;
+        } else {
+            progressDetail.textContent = '提取中...';
+        }
     } else if (data.status === 'completed') {
         // 完成时显示完成标记
-        progressDetail.textContent = `✓ 已完成 ${data.total} 页`;
+        if (data.total !== undefined) {
+            const unit = isImageMode ? '张图片' : '页';
+            progressDetail.textContent = `✓ 已完成 ${data.total} ${unit}`;
+        } else {
+            progressDetail.textContent = '✓ 已完成';
+        }
         progressDetail.style.color = 'var(--success-color)';
     } else {
         // 其他情况显示当前/总数
-        progressDetail.textContent = `${data.current} / ${data.total}`;
+        if (data.current !== undefined && data.total !== undefined) {
+            progressDetail.textContent = `${data.current} / ${data.total}`;
+        } else {
+            progressDetail.textContent = '处理中...';
+        }
     }
 }
 
@@ -326,14 +379,30 @@ function setupDragAndDrop() {
 // 处理文件拖拽
 function handleDrop(e) {
     const dt = e.dataTransfer;
-    const files = dt.files;
+    const files = Array.from(dt.files);
+    
+    if (files.length === 0) return;
+    
+    // 检查文件类型
+    const hasImages = files.some(f => isImageFile(f));
+    const hasPDFs = files.some(f => f.name.toLowerCase().endsWith('.pdf'));
     
     if (files.length > 1) {
         // 多个文件 - 批量模式
-        handleBatchFileSelect(Array.from(files));
+        if (hasImages && hasPDFs) {
+            alert('不支持混合PDF和图片，请分别上传');
+            return;
+        }
+        const fakeEvent = { target: { files: files } };
+        handleBatchFileSelect(fakeEvent);
     } else if (files.length === 1) {
         // 单个文件
-        handleFileSelect(files[0]);
+        if (isImageFile(files[0])) {
+            const fakeEvent = { target: { files: [files[0]] } };
+            handleImageFileSelect(fakeEvent);
+        } else {
+            handleFileSelect(files[0]);
+        }
     }
 }
 
@@ -470,14 +539,25 @@ function setupConvertButton() {
 // 开始转换
 async function startConversion() {
     if (!selectedFile && selectedFiles.length === 0) {
-        showError('请先选择PDF文件');
+        showError('请先选择文件');
         return;
     }
 
-    if (isBatchMode && selectedFiles.length > 0) {
-        startBatchConversion();
-    } else {
-        startSingleConversion();
+    // 图片模式
+    if (isImageMode) {
+        if (isBatchMode && selectedImages.length > 0) {
+            startBatchImageConversion();
+        } else {
+            startImageConversion();
+        }
+    }
+    // PDF模式
+    else {
+        if (isBatchMode && selectedFiles.length > 0) {
+            startBatchConversion();
+        } else {
+            startSingleConversion();
+        }
     }
 }
 
@@ -589,15 +669,15 @@ async function startSingleConversion() {
             xhr.ontimeout = () => reject(new Error('请求超时'));
             
             xhr.open('POST', '/api/convert');
-            xhr.timeout = 300000; // 5分钟超时
+            xhr.timeout = 1800000; // 30分钟超时（翻译需要更长时间）
             xhr.send(formData);
         });
 
         const result = await uploadPromise;
 
-        setTimeout(() => {
-            showResult(result);
-        }, 500);
+        // 不再直接调用 showResult，等待 WebSocket 的 'completed' 事件
+        // WebSocket 会在转换完成时自动调用 showResult
+        console.log('转换请求已发送，等待 WebSocket 完成通知...');
 
     } catch (error) {
         console.error('转换错误:', error);
@@ -729,14 +809,9 @@ async function startBatchConversion() {
 
         const result = await uploadPromise;
         
-        if (result.batch_id) {
-            currentTaskId = result.batch_id;
-            socket.emit('join_task', { task_id: result.batch_id });
-        }
-
-        setTimeout(() => {
-            showBatchResult(result);
-        }, 500);
+        // 不再直接调用 showBatchResult，等待 WebSocket 的 'completed' 事件
+        // WebSocket 会在转换完成时自动调用 showBatchResult
+        console.log('批量转换请求已发送，等待 WebSocket 完成通知...');
 
     } catch (error) {
         console.error('批量转换错误:', error);
@@ -764,24 +839,40 @@ function showResult(result) {
 
     // 显示统计信息（使用人民币）
     if (result.stats) {
-        document.getElementById('resultPages').textContent = 
-            `${result.stats.processed_pages} / ${result.stats.total_pages}`;
+        // 处理页数显示 - 如果是图片则显示"1 张"，否则显示"x / y"
+        const pagesText = isImageMode 
+            ? `${result.stats.processed_pages || 1} 张`
+            : `${result.stats.processed_pages || 0} / ${result.stats.total_pages || 0}`;
+        document.getElementById('resultPages').textContent = pagesText;
+        
         document.getElementById('resultTokens').textContent = 
-            result.stats.total_tokens.toLocaleString();
+            (result.stats.total_tokens || 0).toLocaleString();
         document.getElementById('resultCost').textContent = 
-            formatCurrency(result.stats.estimated_cost);
+            formatCurrency(result.stats.estimated_cost || 0);
         document.getElementById('resultTime').textContent = 
-            `${result.stats.processing_time}s`;
+            `${result.stats.processing_time || 0}s`;
         
         // 更新Token统计（如果在进度中显示）
         document.getElementById('promptTokens').textContent = 
-            result.stats.prompt_tokens.toLocaleString();
+            (result.stats.prompt_tokens || 0).toLocaleString();
         document.getElementById('completionTokens').textContent = 
-            result.stats.completion_tokens.toLocaleString();
+            (result.stats.completion_tokens || 0).toLocaleString();
         document.getElementById('totalTokens').textContent = 
-            result.stats.total_tokens.toLocaleString();
+            (result.stats.total_tokens || 0).toLocaleString();
         document.getElementById('estimatedCost').textContent = 
-            formatCurrency(result.stats.estimated_cost);
+            formatCurrency(result.stats.estimated_cost || 0);
+    } else {
+        // 如果没有stats，显示默认值
+        const pagesText = isImageMode ? '1 张' : '0 / 0';
+        document.getElementById('resultPages').textContent = pagesText;
+        document.getElementById('resultTokens').textContent = '0';
+        document.getElementById('resultCost').textContent = '¥0.00';
+        document.getElementById('resultTime').textContent = '0s';
+        
+        document.getElementById('promptTokens').textContent = '0';
+        document.getElementById('completionTokens').textContent = '0';
+        document.getElementById('totalTokens').textContent = '0';
+        document.getElementById('estimatedCost').textContent = '¥0.00';
     }
 
     // 设置下载按钮
@@ -976,10 +1067,13 @@ function showBatchResult(result) {
     window.batchResults = results;
 
     // 更新统计信息（使用人民币）
-    document.getElementById('resultPages').textContent = stats.total_pages;
-    document.getElementById('resultTokens').textContent = stats.total_tokens.toLocaleString();
-    document.getElementById('resultCost').textContent = formatCurrency(stats.total_cost);
-    document.getElementById('resultTime').textContent = `${stats.total_time.toFixed(1)}s`;
+    const pagesText = isImageMode 
+        ? `${stats.total_pages || stats.successful_files || 0} 张`
+        : `${stats.total_pages || 0}`;
+    document.getElementById('resultPages').textContent = pagesText;
+    document.getElementById('resultTokens').textContent = (stats.total_tokens || 0).toLocaleString();
+    document.getElementById('resultCost').textContent = formatCurrency(stats.total_cost || 0);
+    document.getElementById('resultTime').textContent = `${(stats.total_time || 0).toFixed(1)}s`;
 
     // 显示批量结果列表
     const codePreview = document.querySelector('.code-preview');
@@ -1330,10 +1424,20 @@ async function viewHistory(index) {
         const data = await response.json();
         
         if (data.success && data.record) {
-            // 直接下载文件查看
+            // 获取文件内容并渲染
             if (data.record.output_file) {
                 const filename = data.record.output_file.split(/[\\/]/).pop();
-                window.location.href = `/api/download/${filename}`;
+                
+                // 读取文件内容
+                const fileResponse = await fetch(`/api/download/${filename}`);
+                const latexContent = await fileResponse.text();
+                
+                // 保存到localStorage并打开渲染页面
+                safeStorage.setItem('latexContent', latexContent);
+                safeStorage.setItem('latexFilename', filename);
+                
+                // 在新窗口打开渲染页面
+                window.open('/render', '_blank', 'width=1400,height=900');
             }
         } else {
             alert('记录不存在');
@@ -1361,5 +1465,366 @@ async function downloadHistory(index) {
     } catch (error) {
         console.error('下载历史记录失败:', error);
         alert('下载失败: ' + error.message);
+    }
+}
+
+// ================================
+// 图片处理功能
+// ================================
+
+// 检查是否为图片文件
+function isImageFile(file) {
+    const imageExtensions = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif'];
+    const ext = file.name.split('.').pop().toLowerCase();
+    return imageExtensions.includes(ext);
+}
+
+// 设置图片输入
+function setupImageInput() {
+    const imageInput = document.getElementById('imageInput');
+    if (imageInput) {
+        imageInput.addEventListener('change', handleImageFileSelect);
+    }
+}
+
+// 处理图片文件选择
+function handleImageFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (!isImageFile(file)) {
+        alert('请选择有效的图片文件');
+        return;
+    }
+    
+    selectedFile = file;
+    selectedFiles = [];
+    selectedImages = [file];
+    isImageMode = true;
+    isBatchMode = false;
+    
+    // 更新拖放区域提示
+    const dropText = dropZone.querySelector('.drop-text');
+    dropText.innerHTML = `✓ 已选择图片: <strong>${file.name}</strong>`;
+    dropText.style.color = 'var(--success-color)';
+    
+    // 显示图片预览
+    displayImagePreview([file]);
+    
+    // 显示转换选项
+    optionsSection.style.display = 'block';
+    
+    // 显示OCR引擎选择
+    const ocrGroup = document.getElementById('ocrProviderGroup');
+    if (ocrGroup) {
+        ocrGroup.style.display = 'block';
+    }
+    
+    // 隐藏页码选项（图片不需要页码）
+    const pagesGroup = document.querySelector('#pagesInput').closest('.option-group');
+    if (pagesGroup) {
+        pagesGroup.style.display = 'none';
+    }
+}
+
+// 处理批量文件选择（支持图片和PDF混合）
+function handleBatchFileSelect(event) {
+    const files = Array.from(event.target.files);
+    if (files.length === 0) return;
+    
+    // 检查文件类型
+    const hasImages = files.some(f => isImageFile(f));
+    const hasPDFs = files.some(f => f.name.toLowerCase().endsWith('.pdf'));
+    
+    if (hasImages && hasPDFs) {
+        alert('批量转换不支持混合PDF和图片，请分别上传');
+        return;
+    }
+    
+    selectedFile = null;
+    selectedFiles = files;
+    isImageMode = hasImages;
+    isBatchMode = true;
+    
+    // 更新拖放区域提示
+    const dropText = dropZone.querySelector('.drop-text');
+    dropText.innerHTML = `✓ 已选择 <strong>${files.length}</strong> 个${hasImages ? '图片' : 'PDF'}文件`;
+    dropText.style.color = 'var(--success-color)';
+    
+    if (hasImages) {
+        selectedImages = files;
+        displayImagePreview(files);
+        // 显示OCR引擎选择
+        const ocrGroup = document.getElementById('ocrProviderGroup');
+        if (ocrGroup) {
+            ocrGroup.style.display = 'block';
+        }
+        // 隐藏页码选项
+        const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
+        if (pagesGroup) {
+            pagesGroup.style.display = 'none';
+        }
+    }
+    
+    // 显示转换选项
+    optionsSection.style.display = 'block';
+    
+    const batchInfo = document.getElementById('batchInfo');
+    if (batchInfo) {
+        batchInfo.textContent = `已选择 ${files.length} 个${isImageMode ? '图片' : 'PDF'}文件`;
+        batchInfo.style.display = 'block';
+    }
+}
+
+// 显示图片预览
+function displayImagePreview(files) {
+    const previewSection = document.getElementById('imagePreviewSection');
+    const thumbnails = document.getElementById('imageThumbnails');
+    
+    if (!previewSection || !thumbnails) return;
+    
+    thumbnails.innerHTML = '';
+    
+    files.forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const thumbnail = document.createElement('div');
+            thumbnail.className = 'image-thumbnail';
+            thumbnail.innerHTML = `
+                <img src="${e.target.result}" alt="${file.name}">
+                <div class="image-name">${file.name}</div>
+                <button class="image-remove-btn" onclick="removeImage(${index})" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            `;
+            thumbnails.appendChild(thumbnail);
+        };
+        reader.readAsDataURL(file);
+    });
+    
+    previewSection.style.display = 'block';
+}
+
+// 删除图片
+function removeImage(index) {
+    selectedImages.splice(index, 1);
+    
+    if (selectedImages.length === 0) {
+        selectedFile = null;
+        selectedFiles = [];
+        isImageMode = false;
+        const previewSection = document.getElementById('imagePreviewSection');
+        if (previewSection) {
+            previewSection.style.display = 'none';
+        }
+        // 隐藏选项区域
+        optionsSection.style.display = 'none';
+        // 重置拖放区域提示
+        const dropText = dropZone.querySelector('.drop-text');
+        dropText.innerHTML = '拖拽文件到这里';
+        dropText.style.color = '';
+    } else {
+        if (!isBatchMode) {
+            selectedFile = selectedImages[0];
+        } else {
+            selectedFiles = selectedImages;
+        }
+        displayImagePreview(selectedImages);
+        // 更新提示文本
+        const dropText = dropZone.querySelector('.drop-text');
+        dropText.innerHTML = `✓ 已选择 <strong>${selectedImages.length}</strong> 个图片`;
+    }
+}
+
+// 设置粘贴图片功能
+function setupPasteImage() {
+    document.addEventListener('paste', handlePaste);
+}
+
+// 处理粘贴事件
+function handlePaste(event) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    
+    for (let item of items) {
+        if (item.type.indexOf('image') !== -1) {
+            event.preventDefault();
+            const blob = item.getAsFile();
+            
+            // 创建File对象
+            const timestamp = new Date().getTime();
+            const file = new File([blob], `screenshot_${timestamp}.png`, { type: 'image/png' });
+            
+            selectedFile = file;
+            selectedFiles = [];
+            selectedImages = [file];
+            isImageMode = true;
+            isBatchMode = false;
+            
+            // 更新拖放区域提示
+            const dropText = dropZone.querySelector('.drop-text');
+            dropText.innerHTML = `✓ 已粘贴截图: <strong>${file.name}</strong>`;
+            dropText.style.color = 'var(--success-color)';
+            
+            displayImagePreview([file]);
+            
+            // 显示转换选项
+            optionsSection.style.display = 'block';
+            
+            // 显示OCR引擎选择
+            const ocrGroup = document.getElementById('ocrProviderGroup');
+            if (ocrGroup) {
+                ocrGroup.style.display = 'block';
+            }
+            
+            // 隐藏页码选项
+            const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
+            if (pagesGroup) {
+                pagesGroup.style.display = 'none';
+            }
+            
+            // 提示用户
+            const pasteHint = document.getElementById('pasteHint');
+            if (pasteHint) {
+                pasteHint.style.display = 'block';
+                pasteHint.textContent = '✅ 截图已粘贴！';
+                setTimeout(() => {
+                    pasteHint.style.display = 'none';
+                }, 3000);
+            }
+            
+            break;
+        }
+    }
+}
+
+// 开始图片转换
+async function startImageConversion() {
+    if (!selectedFile) {
+        alert('请先选择图片');
+        return;
+    }
+    
+    // 隐藏结果和错误，显示进度
+    optionsSection.style.display = 'none';
+    progressSection.style.display = 'block';
+    resultSection.style.display = 'none';
+    errorSection.style.display = 'none';
+    tokenStats.style.display = 'none';
+    
+    // 重置并显示终端日志
+    const terminalLog = document.getElementById('terminalLog');
+    const terminalBody = document.getElementById('terminalBody');
+    if (terminalLog) terminalLog.style.display = 'block';
+    if (terminalBody) terminalBody.innerHTML = '';
+    
+    const timestamp = Date.now();
+    currentTaskId = `task_${timestamp}`;
+    socket.emit('join_task', { task_id: currentTaskId });
+    addTerminalLog('info', `开始图片转换任务: ${currentTaskId}`);
+    
+    // 初始化进度
+    updateProgress({
+        percent: 0,
+        current: 0,
+        total: 100,
+        message: '📸 准备识别图片...',
+        status: 'preparing'
+    });
+    
+    const formData = new FormData();
+    formData.append('task_id', currentTaskId);
+    formData.append('file', selectedFile);
+    formData.append('model', document.getElementById('modelSelect').value);
+    formData.append('translate', document.getElementById('translateOption').checked);
+    formData.append('ocr_provider', document.getElementById('ocrProviderSelect')?.value || 'mixed');
+    formData.append('add_document_wrapper', document.getElementById('wrapperOption').checked);
+    
+    try {
+        const response = await fetch('/api/convert-image', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(result.error || '转换失败');
+        }
+        
+        // 转换成功，等待WebSocket进度完成后再显示结果
+        // showResult 会在 WebSocket 'completed' 状态时调用
+        
+    } catch (error) {
+        console.error('转换失败:', error);
+        showError(error.message);
+    }
+}
+
+// 开始批量图片转换
+async function startBatchImageConversion() {
+    if (!selectedImages || selectedImages.length === 0) {
+        alert('请先选择图片');
+        return;
+    }
+    
+    // 隐藏结果和错误，显示进度
+    optionsSection.style.display = 'none';
+    progressSection.style.display = 'block';
+    resultSection.style.display = 'none';
+    errorSection.style.display = 'none';
+    tokenStats.style.display = 'none';
+    
+    // 重置并显示终端日志
+    const terminalLog = document.getElementById('terminalLog');
+    const terminalBody = document.getElementById('terminalBody');
+    if (terminalLog) terminalLog.style.display = 'block';
+    if (terminalBody) terminalBody.innerHTML = '';
+    
+    const timestamp = Date.now();
+    currentTaskId = `task_${timestamp}`;
+    socket.emit('join_task', { task_id: currentTaskId });
+    addTerminalLog('info', `开始批量图片转换任务: ${currentTaskId} (共 ${selectedImages.length} 张)`);
+    
+    // 初始化进度
+    updateProgress({
+        percent: 0,
+        current: 0,
+        total: selectedImages.length,
+        message: `📸 准备识别 ${selectedImages.length} 张图片...`,
+        status: 'preparing'
+    });
+    
+    const formData = new FormData();
+    formData.append('task_id', currentTaskId);
+    selectedImages.forEach(file => {
+        formData.append('files', file);
+    });
+    formData.append('model', document.getElementById('modelSelect').value);
+    formData.append('translate', document.getElementById('translateOption').checked);
+    formData.append('ocr_provider', document.getElementById('ocrProviderSelect')?.value || 'mixed');
+    formData.append('add_document_wrapper', document.getElementById('wrapperOption').checked);
+    
+    try {
+        const response = await fetch('/api/convert-images', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(result.error || '批量转换失败');
+        }
+        
+        // 批量转换成功
+        addTerminalLog('success', `✅ 批量转换完成！共处理 ${result.successful_images} 张图片`);
+        
+    } catch (error) {
+        console.error('批量转换失败:', error);
+        showError(error.message);
     }
 }

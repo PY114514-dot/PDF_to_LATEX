@@ -7,6 +7,8 @@
     
     <!-- KaTeX CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <!-- 备用 CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" media="none" onload="if(media!='all')media='all'">
     
     <style>
         * {
@@ -362,8 +364,29 @@
     </div>
 
     <!-- KaTeX JS -->
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+    
+    <!-- 备用 CDN -->
+    <script>
+        // 检查 KaTeX 是否加载成功，失败则使用备用 CDN
+        setTimeout(() => {
+            if (typeof katex === 'undefined') {
+                console.log('主 CDN 失败，加载备用 CDN...');
+                const script1 = document.createElement('script');
+                script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js';
+                script1.crossOrigin = 'anonymous';
+                document.head.appendChild(script1);
+                
+                script1.onload = () => {
+                    const script2 = document.createElement('script');
+                    script2.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js';
+                    script2.crossOrigin = 'anonymous';
+                    document.head.appendChild(script2);
+                };
+            }
+        }, 2000);
+    </script>
 
     <script>
         // 从URL参数或localStorage获取LaTeX内容
@@ -398,10 +421,18 @@
         // 更新统计
         updateStats();
         
+        // 等待 KaTeX 加载后自动渲染
+        function waitForKaTeX() {
+            if (typeof renderMathInElement !== 'undefined' && typeof katex !== 'undefined') {
+                renderLatex();
+            } else {
+                console.log('等待 KaTeX 加载...');
+                setTimeout(waitForKaTeX, 500);
+            }
+        }
+        
         // 自动渲染
-        setTimeout(() => {
-            renderLatex();
-        }, 500);
+        setTimeout(waitForKaTeX, 300);
         
         // 源代码改变时更新统计
         sourceEditor.addEventListener('input', updateStats);
@@ -434,6 +465,18 @@
                     
                     previewArea.innerHTML = `<div class="rendered-content">${html}</div>`;
                     
+                    // 检查 KaTeX 是否加载
+                    if (typeof renderMathInElement === 'undefined') {
+                        previewArea.innerHTML += `
+                            <div class="error-message">
+                                <strong>提示:</strong> KaTeX 库加载中，请稍候...
+                            </div>
+                        `;
+                        // 等待 KaTeX 加载后重试
+                        setTimeout(renderLatex, 1000);
+                        return;
+                    }
+                    
                     // 使用KaTeX渲染数学公式
                     renderMathInElement(previewArea, {
                         delimiters: [
@@ -442,14 +485,20 @@
                             {left: '\\[', right: '\\]', display: true},
                             {left: '\\(', right: '\\)', display: false}
                         ],
-                        throwOnError: false
+                        throwOnError: false,
+                        errorColor: '#cc0000',
+                        strict: false,
+                        trust: false
                     });
                     
                 } catch (error) {
+                    console.error('渲染错误:', error);
                     previewArea.innerHTML = `
                         <div class="error-message">
                             <strong>渲染错误:</strong><br>
-                            ${error.message}
+                            ${error.message || '未知错误'}
+                            <br><br>
+                            <small>请检查 LaTeX 语法是否正确</small>
                         </div>
                     `;
                 }
@@ -476,6 +525,7 @@
             // 移除文档类和导言区
             content = content.replace(/\\documentclass(\[[^\]]*\])?\{[^}]+\}/g, '');
             content = content.replace(/\\usepackage(\[[^\]]*\])?\{[^}]+\}/g, '');
+            content = content.replace(/\\geometry\{[^}]+\}/g, ''); // 移除geometry设置
             content = content.replace(/\\begin\{document\}/g, '');
             content = content.replace(/\\end\{document\}/g, '');
             content = content.replace(/\\title\{[^}]+\}/g, '');
