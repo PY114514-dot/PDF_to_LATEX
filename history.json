@@ -1,5 +1,35 @@
 [
   {
+    "filename": "Integral_Cramer.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "1,2,3",
+    "output_file": "outputs\\1770367727_Integral_Cramer.tex",
+    "stats": {
+      "total_pages": 14,
+      "processed_pages": 3,
+      "total_tokens": 4266,
+      "estimated_cost": 0.0063,
+      "processing_time": 29.71
+    },
+    "timestamp": "2026-02-06T16:49:17.265139"
+  },
+  {
+    "filename": "Integral_Cramer.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "1,2,3,4,5,6,7,8,9,10,11,12,13,14",
+    "output_file": "outputs\\1770365987_Integral_Cramer_cn.tex",
+    "stats": {
+      "total_pages": 14,
+      "processed_pages": 14,
+      "total_tokens": 51521,
+      "estimated_cost": 0.077181,
+      "processing_time": 775.2
+    },
+    "timestamp": "2026-02-06T16:32:42.910862"
+  },
+  {
     "timestamp": 1769397241,
     "filename": "screenshot_1769397231051.png",
     "model": "deepseek-chat",
@@ -100,17 +130,5 @@
     "output_file": "1769393753_screenshot_1769393746673.tex",
     "tokens": 1178,
     "elapsed_time": 29.527148723602295
-  },
-  {
-    "timestamp": 1769393392,
-    "filename": "screenshot_1769393378227.png",
-    "model": "doubao",
-    "ocr_provider": "tesseract",
-    "ocr_quality": 0.7519291338582677,
-    "content_type": "text",
-    "translate": true,
-    "output_file": "1769393392_screenshot_1769393378227.tex",
-    "tokens": 3367,
-    "elapsed_time": 73.99282431602478
   }
 ]

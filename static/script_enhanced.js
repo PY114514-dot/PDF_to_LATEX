@@ -9,6 +9,18 @@ let socket = null;
 let currentTaskId = null;
 let isBatchMode = false;  // 是否批量模式
 let isImageMode = false;  // 是否图片模式
+let currentPhaseRank = 0;
+
+const STATUS_RANK = {
+    preparing: 0,
+    uploading: 1,
+    processing: 2,
+    extracting: 3,
+    translating: 4,
+    converting: 4,
+    completed: 5,
+    error: 5
+};
 
 // 货币设置
 const USD_TO_CNY_RATE = 7.2;  // 美元到人民币汇率
@@ -96,6 +108,9 @@ function initWebSocket() {
     
     socket.on('connect', () => {
         console.log('✅ WebSocket 已连接');
+        if (currentTaskId) {
+            socket.emit('join_task', { task_id: currentTaskId });
+        }
     });
     
     socket.on('disconnect', (reason) => {
@@ -244,6 +259,18 @@ function clearTerminalLog() {
 // 更新进度
 function updateProgress(data) {
     console.log('进度更新:', data);
+
+    if (data.task_id && currentTaskId && data.task_id !== currentTaskId) {
+        return;
+    }
+
+    const incomingRank = STATUS_RANK[data.status] ?? 0;
+    if (incomingRank < currentPhaseRank && data.status !== 'error') {
+        return;
+    }
+    if (incomingRank > currentPhaseRank) {
+        currentPhaseRank = incomingRank;
+    }
     
     // 如果有token信息，更新token统计显示
     if (data.tokens) {
@@ -578,6 +605,7 @@ async function startSingleConversion() {
     const timestamp = Date.now();
     const taskId = `task_${timestamp}`;
     currentTaskId = taskId;
+    currentPhaseRank = 0;
     socket.emit('join_task', { task_id: taskId });
     
     // 重置并显示终端日志
@@ -713,6 +741,7 @@ async function startBatchConversion() {
     terminalLog.style.display = 'block';
     terminalBody.innerHTML = '';
     addTerminalLog('info', `开始批量转换 ${selectedFiles.length} 个文件...`);
+    currentPhaseRank = 0;
 
     updateProgress({
         percent: 0,
@@ -1723,6 +1752,7 @@ async function startImageConversion() {
     
     const timestamp = Date.now();
     currentTaskId = `task_${timestamp}`;
+    currentPhaseRank = 0;
     socket.emit('join_task', { task_id: currentTaskId });
     addTerminalLog('info', `开始图片转换任务: ${currentTaskId}`);
     
@@ -1786,6 +1816,7 @@ async function startBatchImageConversion() {
     
     const timestamp = Date.now();
     currentTaskId = `task_${timestamp}`;
+    currentPhaseRank = 0;
     socket.emit('join_task', { task_id: currentTaskId });
     addTerminalLog('info', `开始批量图片转换任务: ${currentTaskId} (共 ${selectedImages.length} 张)`);
     

@@ -314,6 +314,53 @@ class PDF2LaTeXEnhanced:
             
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
+
+    async def translate_text_async(self, text: str, page_num: int, total_pages: int) -> str:
+        """异步翻译文本"""
+        system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
+
+要求：
+1. 保持学术性和专业性
+2. 数学公式、符号、变量名保持原样
+3. 专业术语使用准确的中文翻译
+4. 保持原文段落结构
+5. 翻译流畅自然
+6. 只输出翻译后的文本"""
+
+        user_prompt = f"""请将以下英文学术文本翻译成中文（第 {page_num + 1}/{total_pages} 页）：
+
+{text}
+
+请直接输出翻译后的中文文本。"""
+
+        try:
+            self._emit_progress(
+                'translating',
+                page_num,
+                total_pages,
+                f'正在翻译第 {page_num + 1}/{total_pages} 页...'
+            )
+
+            response = await self.client.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=4000
+            )
+
+            if 'usage' in response:
+                usage = response['usage']
+                self.prompt_tokens += usage.get('prompt_tokens', 0)
+                self.completion_tokens += usage.get('completion_tokens', 0)
+                self.total_tokens += usage.get('total_tokens', 0)
+
+            content = LLMClient.extract_content(response)
+            return content.strip()
+
+        except Exception as e:
+            raise Exception(f"翻译失败: {str(e)}")
     
     def convert_text_to_latex(self, text: str, page_num: int, total_pages: int, translate: bool = False) -> str:
         """转换文本为LaTeX"""
@@ -340,13 +387,14 @@ class PDF2LaTeXEnhanced:
 3. 对于中文内容，直接使用中文字符
 4. **不要输出\\documentclass, \\begin{document}, \\end{document}等文档结构**
 5. **不要输出\\usepackage等导言区命令**
-6. 只输出正文内容的LaTeX代码"""
+    6. **不要输出\\begin{theorem}/\\begin{lemma}/\\begin{proof}等需额外宏包或定理环境的结构，改为普通段落或使用\\textbf{}做标题**
+    7. 只输出正文内容的LaTeX代码"""
 
         user_prompt = f"""请将以下文本转换为LaTeX格式（第 {page_num + 1}/{total_pages} 页）：
 
 {text}
 
-只输出LaTeX内容代码，不要包含文档结构。"""
+    只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。"""
 
         try:
             self._emit_progress(
@@ -378,6 +426,68 @@ class PDF2LaTeXEnhanced:
             latex_content = content.strip()
             return self._clean_document_structure(latex_content)
             
+        except Exception as e:
+            raise Exception(f"转换失败: {str(e)}")
+
+    async def convert_text_to_latex_async(self, text: str, page_num: int, total_pages: int, translate: bool = False) -> str:
+        """异步转换文本为LaTeX"""
+        quality = self._check_text_quality(text)
+        print(f"[转换] 第 {page_num + 1} 页文本质量: {quality:.2f}, 长度: {len(text)}")
+
+        if not text.strip():
+            print(f"[转换] 警告: 第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
+            return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
+
+        if quality < 0.3:
+            print(f"[转换] 警告: 第 {page_num + 1} 页文本质量较低 ({quality:.2f})，可能包含乱码")
+
+        if translate:
+            text = await self.translate_text_async(text, page_num, total_pages)
+
+        system_prompt = """你是一个专业的LaTeX转换助手。将文本转换为规范的LaTeX格式。
+
+要求：
+1. 识别数学公式，使用LaTeX数学环境
+2. 识别文本结构，使用对应的LaTeX命令
+3. 对于中文内容，直接使用中文字符
+4. **不要输出\\documentclass, \\begin{document}, \\end{document}等文档结构**
+5. **不要输出\\usepackage等导言区命令**
+6. **不要输出\\begin{theorem}/\\begin{lemma}/\\begin{proof}等需额外宏包或定理环境的结构，改为普通段落或使用\\textbf{}做标题**
+7. 只输出正文内容的LaTeX代码"""
+
+        user_prompt = f"""请将以下文本转换为LaTeX格式（第 {page_num + 1}/{total_pages} 页）：
+
+{text}
+
+只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。"""
+
+        try:
+            self._emit_progress(
+                'converting',
+                page_num,
+                total_pages,
+                f'正在转换第 {page_num + 1}/{total_pages} 页为LaTeX...'
+            )
+
+            response = await self.client.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=4000
+            )
+
+            if 'usage' in response:
+                usage = response['usage']
+                self.prompt_tokens += usage.get('prompt_tokens', 0)
+                self.completion_tokens += usage.get('completion_tokens', 0)
+                self.total_tokens += usage.get('total_tokens', 0)
+
+            content = LLMClient.extract_content(response)
+            latex_content = content.strip()
+            return self._clean_document_structure(latex_content)
+
         except Exception as e:
             raise Exception(f"转换失败: {str(e)}")
     
@@ -467,13 +577,11 @@ class PDF2LaTeXEnhanced:
         processed_pages = 0
         total_to_process = len(pages)
         
-        for idx, page_num in enumerate(pages):
+        async def process_page(idx: int, page_num: int):
             text = pages_text[page_num]
-            
             if not text.strip():
-                continue
-            
-            # 发送开始处理当前页的进度
+                return page_num, None, False
+
             status = 'translating' if translate else 'converting'
             self._emit_progress(
                 status,
@@ -483,15 +591,15 @@ class PDF2LaTeXEnhanced:
                 'progress',
                 f'⚙️ 开始{mode_desc}第 {idx + 1}/{total_to_process} 页 (原始页码: {page_num + 1})'
             )
-            
+
             try:
-                latex_page = self.convert_text_to_latex(text, page_num, len(pages_text), translate=translate)
-                latex_content.append(f"% ===== 第 {page_num + 1} 页 =====")
-                latex_content.append(latex_page)
-                latex_content.append("")
-                processed_pages += 1
-                
-                # 发送完成当前页的进度
+                latex_page = await self.convert_text_to_latex_async(
+                    text,
+                    page_num,
+                    len(pages_text),
+                    translate=translate
+                )
+
                 self._emit_progress(
                     status,
                     idx + 1,
@@ -500,11 +608,28 @@ class PDF2LaTeXEnhanced:
                     'success',
                     f'✓ 第 {idx + 1}/{total_to_process} 页{mode_desc}完成'
                 )
-                
+                return page_num, latex_page, True
             except Exception as e:
                 print(f"警告: 第 {page_num + 1} 页{mode_desc}失败: {str(e)}")
+                return page_num, None, False
+
+        async def process_all_pages():
+            tasks = [process_page(idx, page_num) for idx, page_num in enumerate(pages)]
+            return await asyncio.gather(*tasks)
+
+        results = asyncio.run(process_all_pages())
+
+        for page_num, latex_page, ok in results:
+            if not ok:
                 latex_content.append(f"% 第 {page_num + 1} 页{mode_desc}失败")
                 latex_content.append("")
+                continue
+            if latex_page is None:
+                continue
+            latex_content.append(f"% ===== 第 {page_num + 1} 页 =====")
+            latex_content.append(latex_page)
+            latex_content.append("")
+            processed_pages += 1
         
         if add_document_wrapper:
             latex_content.append(r"\end{document}")
