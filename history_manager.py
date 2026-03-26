@@ -4,7 +4,7 @@
 历史记录管理模块
 - 保存转换历史
 - 清理旧文件
-- 只保留最近10条记录
+- 只保留最近20条记录
 """
 
 import json
@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 class HistoryManager:
-    def __init__(self, history_file: str = "history.json", max_records: int = 10):
+    def __init__(self, history_file: str = "history.json", max_records: int = 20):
         self.history_file = Path(history_file)
         self.max_records = max_records
         self.history = self._load_history()
@@ -94,25 +94,36 @@ class HistoryManager:
         except Exception as e:
             print(f"删除文件失败: {e}")
     
-    def get_history(self, limit: int = None) -> List[Dict[str, Any]]:
+    def get_history(self, limit: int = None, offset: int = 0) -> List[Dict[str, Any]]:
         """
         获取历史记录
         
         Args:
             limit: 返回的记录数量限制
+            offset: 起始偏移
         
         Returns:
             历史记录列表
         """
-        if limit:
-            return self.history[:limit]
-        return self.history
+        start = max(0, offset)
+        if limit is None:
+            return self.history[start:]
+        return self.history[start:start + limit]
     
     def get_record(self, index: int) -> Dict[str, Any]:
         """获取指定索引的记录"""
         if 0 <= index < len(self.history):
             return self.history[index]
         return None
+
+    def delete_record(self, index: int) -> bool:
+        """删除指定索引的记录并清理文件"""
+        if 0 <= index < len(self.history):
+            record = self.history.pop(index)
+            self._delete_record_files(record)
+            self._save_history()
+            return True
+        return False
     
     def clear_history(self):
         """清空所有历史记录"""
@@ -158,4 +169,4 @@ class HistoryManager:
                         print(f"清理文件失败 {file}: {e}")
 
 # 全局历史管理器实例
-history_manager = HistoryManager(max_records=10)
+history_manager = HistoryManager(max_records=20)

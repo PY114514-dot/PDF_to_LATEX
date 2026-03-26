@@ -64,13 +64,16 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 OPENAI_API_KEY=your_openai_api_key
 
 # GLM (智谱清言)
-GLM_API_KEY=your_glm_api_key
+ZHIPU_API_KEY=your_zhipu_api_key
 
 # Gemini
 GEMINI_API_KEY=your_gemini_api_key
 
 # Doubao (豆包)
 DOUBAO_API_KEY=your_doubao_api_key
+
+# 默认模型（可选，默认 deepseek-chat）
+DEFAULT_MODEL=deepseek-chat
 
 # 汇率设置（可选，默认7.2）
 USD_TO_CNY_RATE=7.2
@@ -219,26 +222,31 @@ PDF2LATEX/
 |--------|------|--------|------|
 | `DEEPSEEK_API_KEY` | DeepSeek API密钥 | - | 否* |
 | `OPENAI_API_KEY` | OpenAI API密钥 | - | 否* |
-| `GLM_API_KEY` | GLM API密钥 | - | 否* |
+| `ZHIPU_API_KEY` | GLM API密钥 | - | 否* |
 | `GEMINI_API_KEY` | Gemini API密钥 | - | 否* |
 | `DOUBAO_API_KEY` | Doubao API密钥 | - | 否* |
+| `DEFAULT_MODEL` | 默认模型ID | `deepseek-chat` | 否 |
 | `USD_TO_CNY_RATE` | 美元兑人民币汇率 | 7.2 | 否 |
+
+> 兼容说明：若你已在旧版本中使用 `GLM_API_KEY`，当前版本仍可兼容读取。
 
 > *注：至少需要配置一个模型的API密钥
 
 ### 修改汇率
 
-在 `config.py` 中修改：
+在 `.env` 中修改（推荐）：
+
+```bash
+USD_TO_CNY_RATE=7.3
+```
+
+或在 `config.py` 中修改：
 
 ```python
 USD_TO_CNY_RATE: float = 7.3  # 修改为当前汇率
 ```
 
-或在前端 `script_enhanced.js` 中修改：
-
-```javascript
-const USD_TO_CNY_RATE = 7.3;  // 修改为当前汇率
-```
+前端会自动读取后端 `/api/public-config` 配置，无需再手改 `script_enhanced.js`。
 
 ---
 

@@ -18,6 +18,7 @@ from clients import (
     LLMClient
 )
 from config import settings
+from latex_utils import sanitize_latex_body, wrap_with_template
 
 load_dotenv()
 
@@ -136,8 +137,52 @@ class PDF2LaTeXEnhanced:
         quality_score = readable_ratio - (weird_ratio * 2)
         
         return max(0.0, min(1.0, quality_score))
+
+    def _extract_images_from_page(self, page, page_num: int, image_output_dir: Optional[str]) -> List[str]:
+        """从页面中裁剪图片并保存到输出目录。"""
+        if not image_output_dir:
+            return []
+
+        page_images = getattr(page, 'images', []) or []
+        if not page_images:
+            return []
+
+        output_dir = Path(image_output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        saved_paths = []
+
+        for idx, img in enumerate(page_images, start=1):
+            try:
+                x0 = img.get('x0')
+                x1 = img.get('x1')
+                top = img.get('top')
+                bottom = img.get('bottom')
+                if None in (x0, x1, top, bottom):
+                    continue
+
+                # bbox 顺序: (x0, top, x1, bottom)
+                cropped = page.crop((x0, top, x1, bottom))
+                image_obj = cropped.to_image(resolution=180)
+                pil_image = getattr(image_obj, 'original', None)
+                if pil_image is None:
+                    continue
+
+                image_name = f"page_{page_num + 1}_img_{idx}.png"
+                image_path = output_dir / image_name
+                pil_image.save(image_path, format='PNG')
+                saved_paths.append(str(image_path).replace('\\', '/'))
+            except Exception as e:
+                print(f"[PDF提取] 提取第 {page_num + 1} 页图片 {idx} 失败: {e}")
+
+        return saved_paths
     
-    def extract_text_from_pdf(self, pdf_path: str, pages: Optional[List[int]] = None) -> List[str]:
+    def extract_text_from_pdf(
+        self,
+        pdf_path: str,
+        pages: Optional[List[int]] = None,
+        preserve_layout_images: bool = False,
+        image_output_dir: Optional[str] = None
+    ) -> tuple:
         """
         从PDF提取文本，使用多种方法以获得最佳效果
         优先级：pdfplumber > PyPDF2
@@ -150,6 +195,7 @@ class PDF2LaTeXEnhanced:
             提取的文本列表，索引对应页码
         """
         pages_text = []
+        page_images = {}
         
         try:
             # 首先尝试使用 pdfplumber（效果更好）
@@ -172,7 +218,10 @@ class PDF2LaTeXEnhanced:
                 
                 for idx, page_num in enumerate(pages_to_extract):
                     page = pdf.pages[page_num]
-                    text = page.extract_text()
+                    if preserve_layout_images:
+                        text = page.extract_text(layout=True, x_tolerance=2, y_tolerance=2)
+                    else:
+                        text = page.extract_text()
                     
                     if text:
                         text = text.strip()
@@ -210,6 +259,10 @@ class PDF2LaTeXEnhanced:
                             print(f"[PDF提取] 备用方法失败: {str(e)}")
                     
                     pages_text[page_num] = text
+
+                    if preserve_layout_images:
+                        images = self._extract_images_from_page(page, page_num, image_output_dir)
+                        page_images[page_num] = images
                     
                     self._emit_progress(
                         'extracting',
@@ -263,7 +316,7 @@ class PDF2LaTeXEnhanced:
             except Exception as e2:
                 raise Exception(f"所有PDF提取方法均失败: PyPDF2={str(e2)}, pdfplumber={str(e)}")
         
-        return pages_text
+        return pages_text, page_images
     
     def translate_text(self, text: str, page_num: int, total_pages: int) -> str:
         """翻译文本"""
@@ -362,7 +415,39 @@ class PDF2LaTeXEnhanced:
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
     
-    def convert_text_to_latex(self, text: str, page_num: int, total_pages: int, translate: bool = False) -> str:
+    async def _refine_latex_quality_async(self, latex_content: str, page_num: int, total_pages: int) -> str:
+        """高质量模式：对 LaTeX 做一次低温语法润色。"""
+        system_prompt = """你是LaTeX质量修复助手。只做最小必要修复，不改变原文语义。
+
+要求：
+1. 修复明显的 LaTeX 语法问题（环境不匹配、命令拼写、无效转义）
+2. 保持数学表达不变
+3. 不新增解释文字
+4. 仅输出修复后的 LaTeX 正文"""
+
+        user_prompt = f"""请修复以下 LaTeX 正文（第 {page_num + 1}/{total_pages} 页）：
+
+{latex_content}
+"""
+
+        response = await self.client.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=4000
+        )
+
+        if 'usage' in response:
+            usage = response['usage']
+            self.prompt_tokens += usage.get('prompt_tokens', 0)
+            self.completion_tokens += usage.get('completion_tokens', 0)
+            self.total_tokens += usage.get('total_tokens', 0)
+
+        return LLMClient.extract_content(response).strip()
+
+    def convert_text_to_latex(self, text: str, page_num: int, total_pages: int, translate: bool = False, quality_mode: str = 'standard') -> str:
         """转换文本为LaTeX"""
         # 检查文本质量
         quality = self._check_text_quality(text)
@@ -424,12 +509,20 @@ class PDF2LaTeXEnhanced:
             # 提取内容
             content = LLMClient.extract_content(response)
             latex_content = content.strip()
-            return self._clean_document_structure(latex_content)
+            latex_content = self._clean_document_structure(latex_content)
+            latex_content = sanitize_latex_body(latex_content)
+
+            if quality_mode == 'high':
+                latex_content = asyncio.run(self._refine_latex_quality_async(latex_content, page_num, total_pages))
+                latex_content = self._clean_document_structure(latex_content)
+                latex_content = sanitize_latex_body(latex_content)
+
+            return latex_content
             
         except Exception as e:
             raise Exception(f"转换失败: {str(e)}")
 
-    async def convert_text_to_latex_async(self, text: str, page_num: int, total_pages: int, translate: bool = False) -> str:
+    async def convert_text_to_latex_async(self, text: str, page_num: int, total_pages: int, translate: bool = False, quality_mode: str = 'standard') -> str:
         """异步转换文本为LaTeX"""
         quality = self._check_text_quality(text)
         print(f"[转换] 第 {page_num + 1} 页文本质量: {quality:.2f}, 长度: {len(text)}")
@@ -486,7 +579,15 @@ class PDF2LaTeXEnhanced:
 
             content = LLMClient.extract_content(response)
             latex_content = content.strip()
-            return self._clean_document_structure(latex_content)
+            latex_content = self._clean_document_structure(latex_content)
+            latex_content = sanitize_latex_body(latex_content)
+
+            if quality_mode == 'high':
+                latex_content = await self._refine_latex_quality_async(latex_content, page_num, total_pages)
+                latex_content = self._clean_document_structure(latex_content)
+                latex_content = sanitize_latex_body(latex_content)
+
+            return latex_content
 
         except Exception as e:
             raise Exception(f"转换失败: {str(e)}")
@@ -514,7 +615,10 @@ class PDF2LaTeXEnhanced:
         pages: Optional[List[int]] = None,
         add_document_wrapper: bool = True,
         translate: bool = False,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        template_name: str = 'article',
+        quality_mode: str = 'standard',
+        preserve_layout_images: bool = False
     ) -> dict:
         """转换PDF到LaTeX"""
         print(f"\n[转换开始] PDF路径={pdf_path}, 页码={pages}, 翻译={translate}")
@@ -553,25 +657,22 @@ class PDF2LaTeXEnhanced:
         
         print(f"[转换] 准备提取 {len(pages)}/{total_pages} 页: {pages}")
         
+        image_output_dir = None
+        if preserve_layout_images:
+            out_base = Path(output_path).parent
+            image_output_dir = out_base / f"{Path(output_path).stem}_assets"
+            image_output_dir.mkdir(parents=True, exist_ok=True)
+
         # 只提取需要的页面
-        pages_text = self.extract_text_from_pdf(pdf_path, pages)
+        pages_text, page_images = self.extract_text_from_pdf(
+            pdf_path,
+            pages,
+            preserve_layout_images=preserve_layout_images,
+            image_output_dir=str(image_output_dir) if image_output_dir else None
+        )
         
-        # 构建LaTeX文档
+        # 构建LaTeX正文
         latex_content = []
-        
-        if add_document_wrapper:
-            latex_content.append(r"\documentclass{article}")
-            latex_content.append(r"\usepackage{amsmath,amssymb,amsthm}")
-            latex_content.append(r"\usepackage{graphicx}")
-            latex_content.append(r"\usepackage[utf8]{inputenc}")
-            latex_content.append(r"\usepackage{hyperref}")
-            
-            if translate:
-                latex_content.append(r"\usepackage{xeCJK}")
-            
-            latex_content.append(r"")
-            latex_content.append(r"\begin{document}")
-            latex_content.append(r"")
         
         mode_desc = "翻译并转换" if translate else "转换"
         processed_pages = 0
@@ -597,7 +698,8 @@ class PDF2LaTeXEnhanced:
                     text,
                     page_num,
                     len(pages_text),
-                    translate=translate
+                    translate=translate,
+                    quality_mode=quality_mode
                 )
 
                 self._emit_progress(
@@ -628,15 +730,36 @@ class PDF2LaTeXEnhanced:
                 continue
             latex_content.append(f"% ===== 第 {page_num + 1} 页 =====")
             latex_content.append(latex_page)
+
+            # 可选：保留页面中的原始图片
+            if preserve_layout_images and page_images.get(page_num):
+                for img_path in page_images.get(page_num, []):
+                    try:
+                        rel_path = Path(img_path).relative_to(Path(output_path).parent)
+                    except Exception:
+                        rel_path = Path(img_path).name
+                    rel_path = str(rel_path).replace('\\', '/')
+                    latex_content.append(r"\begin{figure}[h]")
+                    latex_content.append(r"\centering")
+                    latex_content.append(fr"\includegraphics[width=0.95\linewidth]{{{rel_path}}}")
+                    latex_content.append(r"\end{figure}")
+
             latex_content.append("")
             processed_pages += 1
         
+        source_text = "\n\n".join([pages_text[p] for p in pages if pages_text[p].strip()]).strip()
+        final_content = "\n".join(latex_content)
+
         if add_document_wrapper:
-            latex_content.append(r"\end{document}")
+            final_content = wrap_with_template(
+                final_content,
+                template_name=template_name,
+                use_chinese=translate
+            )
         
         # 写入文件
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(latex_content))
+            f.write(final_content)
         
         processing_time = time.time() - start_time
         
@@ -659,5 +782,7 @@ class PDF2LaTeXEnhanced:
             'prompt_tokens': self.prompt_tokens,
             'completion_tokens': self.completion_tokens,
             'estimated_cost': self._calculate_cost(),
-            'processing_time': round(processing_time, 2)
+            'processing_time': round(processing_time, 2),
+            'source_text': source_text,
+            'preserved_images': sum(len(v) for v in page_images.values())
         }

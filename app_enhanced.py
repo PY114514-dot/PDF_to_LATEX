@@ -7,6 +7,7 @@ PDF2LaTeX Web应用 - 增强版
 
 import os
 import time
+import threading
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
@@ -16,6 +17,8 @@ from pdf2latex_enhanced import PDF2LaTeXEnhanced
 from image2latex_enhanced import Image2LaTeXEnhanced
 from config import settings
 from history_manager import history_manager
+from task_manager import async_task_manager
+from latex_utils import merge_tex_contents
 import re
 import unicodedata
 
@@ -96,6 +99,45 @@ def secure_filename(filename):
     return name
 
 
+def parse_pages_input(pages_str):
+    """
+    解析页码输入，支持格式: 1,3,5 或 1-3,5,7-9。
+    返回 0-based 且去重排序后的页码列表。
+    """
+    if not pages_str or not pages_str.strip():
+        return None
+
+    pages = set()
+    parts = [part.strip() for part in pages_str.split(',') if part.strip()]
+    if not parts:
+        return None
+
+    for part in parts:
+        if '-' in part:
+            chunks = [chunk.strip() for chunk in part.split('-')]
+            if len(chunks) != 2 or not all(chunk.isdigit() for chunk in chunks):
+                raise ValueError(f"无效的页码范围: {part}")
+
+            start, end = int(chunks[0]), int(chunks[1])
+            if start <= 0 or end <= 0:
+                raise ValueError(f"页码必须大于0: {part}")
+            if start > end:
+                raise ValueError(f"页码范围起始不能大于结束: {part}")
+
+            for page in range(start, end + 1):
+                pages.add(page - 1)
+        else:
+            if not part.isdigit():
+                raise ValueError(f"无效的页码: {part}")
+
+            page = int(part)
+            if page <= 0:
+                raise ValueError(f"页码必须大于0: {part}")
+            pages.add(page - 1)
+
+    return sorted(pages)
+
+
 def progress_callback(task_id, status, current, total, message, log_type='info', log_message=None, tokens=None):
     """进度回调函数"""
     progress_data = {
@@ -119,6 +161,122 @@ def progress_callback(task_id, status, current, total, message, log_type='info',
     # 更新任务状态
     if task_id in conversion_tasks:
         conversion_tasks[task_id].update(progress_data)
+
+    # 更新可恢复任务状态
+    async_task_manager.update_progress(task_id, status, current, total, message, tokens=tokens)
+
+
+def _save_async_pdf_history(filename, model, translate, pages_str, output_path, result):
+    """保存异步 PDF 任务的历史记录。"""
+    history_manager.add_record({
+        'filename': filename,
+        'model': model,
+        'translated': translate,
+        'pages': pages_str if pages_str else 'all',
+        'output_file': str(output_path),
+        'stats': {
+            'total_pages': result.get('total_pages', 0),
+            'processed_pages': result.get('processed_pages', 0),
+            'total_tokens': result.get('total_tokens', 0),
+            'estimated_cost': result.get('estimated_cost', 0),
+            'processing_time': result.get('processing_time', 0)
+        }
+    })
+
+
+def _run_async_pdf_task(task_id: str):
+    """后台执行 PDF 异步任务。"""
+    task = async_task_manager.get_task(task_id)
+    if not task:
+        return
+
+    payload = task.get('payload', {})
+    pdf_path = payload.get('pdf_path')
+    output_path = payload.get('output_path')
+    filename = payload.get('filename')
+    model = payload.get('model', settings.DEFAULT_MODEL)
+    translate = payload.get('translate', False)
+    pages_str = payload.get('pages_str', '')
+    pages = payload.get('pages')
+    add_wrapper = payload.get('add_wrapper', True)
+    template_name = payload.get('template_name', 'article')
+    quality_mode = payload.get('quality_mode', 'standard')
+    preserve_layout_images = payload.get('preserve_layout_images', False)
+
+    try:
+        if not pdf_path or not Path(pdf_path).exists():
+            raise FileNotFoundError('源文件不存在，无法恢复任务')
+
+        async_task_manager.update_task(task_id, status='processing', error=None)
+
+        converter = PDF2LaTeXEnhanced(model=model)
+
+        def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
+            progress_callback(task_id, status, current, total, message, log_type, log_message, tokens)
+
+        converter.set_progress_callback(callback)
+        result = converter.convert_pdf(
+            pdf_path=str(pdf_path),
+            output_path=str(output_path),
+            pages=pages,
+            add_document_wrapper=add_wrapper,
+            translate=translate,
+            task_id=task_id,
+            template_name=template_name,
+            quality_mode=quality_mode,
+            preserve_layout_images=preserve_layout_images
+        )
+
+        latex_content = Path(result['output_path']).read_text(encoding='utf-8')
+        result_data = {
+            'success': True,
+            'task_id': task_id,
+            'filename': Path(output_path).name,
+            'content': latex_content,
+            'source_text': result.get('source_text', ''),
+            'download_url': f"/api/download/{Path(output_path).name}",
+            'stats': {
+                'total_pages': result.get('total_pages', 0),
+                'processed_pages': result.get('processed_pages', 0),
+                'total_tokens': result.get('total_tokens', 0),
+                'prompt_tokens': result.get('prompt_tokens', 0),
+                'completion_tokens': result.get('completion_tokens', 0),
+                'estimated_cost': result.get('estimated_cost', 0),
+                'processing_time': result.get('processing_time', 0)
+            }
+        }
+
+        _save_async_pdf_history(filename, model, translate, pages_str, output_path, result)
+        async_task_manager.set_completed(task_id, result_data)
+
+        total_pages = result.get('total_pages', 0)
+        socketio.emit('progress', {
+            'task_id': task_id,
+            'status': 'completed',
+            'current': total_pages,
+            'total': total_pages,
+            'percent': 100,
+            'message': f'✅ 异步任务完成！共处理 {total_pages} 页',
+            'log_type': 'success',
+            'log_message': f'✅ 异步任务完成！共处理 {total_pages} 页',
+            'result': result_data
+        }, room=task_id)
+    except Exception as e:
+        async_task_manager.set_failed(task_id, str(e))
+        socketio.emit('progress', {
+            'task_id': task_id,
+            'status': 'error',
+            'current': 0,
+            'total': 1,
+            'percent': 0,
+            'message': f'❌ 异步任务失败: {str(e)}',
+            'log_type': 'error',
+            'log_message': f'❌ 异步任务失败: {str(e)}'
+        }, room=task_id)
+
+
+def _start_async_pdf_task(task_id: str):
+    threading.Thread(target=_run_async_pdf_task, args=(task_id,), daemon=True).start()
 
 
 @app.route('/')
@@ -184,16 +342,19 @@ def convert_pdf():
         translate = request.form.get('translate', 'false').lower() == 'true'
         pages_str = request.form.get('pages', '')
         add_wrapper = request.form.get('add_wrapper', 'true').lower() == 'true'
-        model = request.form.get('model', 'deepseek-chat')  # 获取模型参数
+        model = request.form.get('model', settings.DEFAULT_MODEL)  # 获取模型参数
         task_id = request.form.get('task_id', '')  # 获取前端传来的task_id
+        template_name = request.form.get('template', 'article')
+        quality_mode = request.form.get('quality_mode', 'standard')
+        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
         
         # 解析页码
         pages = None
         if pages_str:
             try:
-                pages = [int(p.strip()) - 1 for p in pages_str.split(',') if p.strip()]
-            except ValueError:
-                return jsonify({'error': '页码格式错误'}), 400
+                pages = parse_pages_input(pages_str)
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
         
         # 保存文件
         filename = secure_filename(file.filename)
@@ -236,7 +397,10 @@ def convert_pdf():
             pages=pages,
             add_document_wrapper=add_wrapper,
             translate=translate,
-            task_id=task_id
+            task_id=task_id,
+            template_name=template_name,
+            quality_mode=quality_mode,
+            preserve_layout_images=preserve_layout_images
         )
         
         # 读取生成的LaTeX内容
@@ -271,6 +435,7 @@ def convert_pdf():
             'task_id': task_id,
             'filename': output_filename,
             'content': latex_content,
+            'source_text': result.get('source_text', ''),
             'download_url': f'/api/download/{output_filename}',
             'stats': {
                 'total_pages': result.get('total_pages', 0),
@@ -370,15 +535,18 @@ def batch_convert_pdf():
         translate = request.form.get('translate', 'false').lower() == 'true'
         pages_str = request.form.get('pages', '')
         add_wrapper = request.form.get('add_wrapper', 'true').lower() == 'true'
-        model = request.form.get('model', 'deepseek-chat')  # 获取模型参数
+        model = request.form.get('model', settings.DEFAULT_MODEL)  # 获取模型参数
+        template_name = request.form.get('template', 'article')
+        quality_mode = request.form.get('quality_mode', 'standard')
+        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
         
         # 解析页码
         pages = None
         if pages_str:
             try:
-                pages = [int(p.strip()) - 1 for p in pages_str.split(',') if p.strip()]
-            except ValueError:
-                return jsonify({'error': '页码格式错误'}), 400
+                pages = parse_pages_input(pages_str)
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
         
         # 创建批量任务ID
         timestamp = int(time.time())
@@ -439,7 +607,10 @@ def batch_convert_pdf():
                     pages=pages,
                     add_document_wrapper=add_wrapper,
                     translate=translate,
-                    task_id=task_id
+                    task_id=task_id,
+                    template_name=template_name,
+                    quality_mode=quality_mode,
+                    preserve_layout_images=preserve_layout_images
                 )
                 
                 # 读取内容
@@ -452,6 +623,7 @@ def batch_convert_pdf():
                     'output_filename': output_filename,
                     'download_url': f'/api/download/{output_filename}',
                     'content': latex_content,
+                    'source_text': result.get('source_text', ''),
                     'stats': {
                         'total_pages': result.get('total_pages', 0),
                         'processed_pages': result.get('processed_pages', 0),
@@ -610,6 +782,18 @@ def status():
     })
 
 
+@app.route('/api/public-config', methods=['GET'])
+def get_public_config():
+    """返回前端可安全读取的公开配置。"""
+    return jsonify({
+        'success': True,
+        'config': {
+            'usd_to_cny_rate': settings.USD_TO_CNY_RATE,
+            'default_model': settings.DEFAULT_MODEL
+        }
+    })
+
+
 @app.route('/api/models', methods=['GET'])
 def get_models():
     """获取可用的模型列表"""
@@ -628,10 +812,14 @@ def get_history():
     """获取历史记录"""
     try:
         limit = request.args.get('limit', 10, type=int)
-        history = history_manager.get_history(limit=limit)
+        offset = request.args.get('offset', 0, type=int)
+        history = history_manager.get_history(limit=limit, offset=offset)
         return jsonify({
             'success': True,
-            'history': history
+            'history': history,
+            'total': len(history_manager.history),
+            'limit': limit,
+            'offset': offset
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -649,6 +837,18 @@ def get_history_record(index):
             })
         else:
             return jsonify({'error': '记录不存在'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/<int:index>', methods=['DELETE'])
+def delete_history_record(index):
+    """删除指定索引的历史记录"""
+    try:
+        deleted = history_manager.delete_record(index)
+        if deleted:
+            return jsonify({'success': True})
+        return jsonify({'error': '记录不存在'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -747,11 +947,14 @@ def convert_image():
         file.save(filepath)
         
         # 获取其他参数
-        model = request.form.get('model', 'deepseek-chat')
+        model = request.form.get('model', settings.DEFAULT_MODEL)
         translate_raw = request.form.get('translate', 'false')
         translate = translate_raw.lower() == 'true'
         ocr_provider = request.form.get('ocr_provider', 'mixed')  # 'mixed' | 'tesseract' | 'vision'
         add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
+        template_name = request.form.get('template', 'article')
+        quality_mode = request.form.get('quality_mode', 'standard')
+        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
         
         # 调试日志
         print(f"[图片转换] 原始参数: translate_raw='{translate_raw}' (type={type(translate_raw)})")
@@ -781,7 +984,9 @@ def convert_image():
                 str(filepath),
                 output_path=str(output_path),
                 ocr_provider=ocr_provider if ocr_provider != 'mixed' else None,
-                add_document_wrapper=add_wrapper
+                add_document_wrapper=add_wrapper,
+                template_name=template_name,
+                quality_mode=quality_mode
             )
         )
         
@@ -851,6 +1056,7 @@ def convert_image():
             'latex_content': latex_content,
             'output_file': output_filename,
             'ocr_result': result['ocr_result'],
+            'source_text': result.get('source_text', ''),
             'stats': stats,  # 使用统一的stats结构
             'usage_stats': usage,  # 保留原始usage_stats
             'elapsed_time': result['elapsed_time']
@@ -914,10 +1120,12 @@ def convert_images():
             return jsonify({'error': '没有有效的图片文件'}), 400
         
         # 获取其他参数
-        model = request.form.get('model', 'deepseek-chat')
+        model = request.form.get('model', settings.DEFAULT_MODEL)
         translate = request.form.get('translate', 'false').lower() == 'true'
         ocr_provider = request.form.get('ocr_provider', 'mixed')
         add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
+        template_name = request.form.get('template', 'article')
+        quality_mode = request.form.get('quality_mode', 'standard')
         
         # 创建进度回调
         def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
@@ -940,7 +1148,9 @@ def convert_images():
                 uploaded_paths,
                 output_dir=str(OUTPUT_FOLDER),
                 ocr_provider=ocr_provider if ocr_provider != 'mixed' else None,
-                add_document_wrapper=add_wrapper
+                add_document_wrapper=add_wrapper,
+                template_name=template_name,
+                quality_mode=quality_mode
             )
         )
         
@@ -1029,6 +1239,159 @@ def convert_images():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/convert-async', methods=['POST'])
+def convert_pdf_async():
+    """异步转换 PDF，可恢复任务。"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': '没有上传文件'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': '文件名为空'}), 400
+        if not allowed_file(file.filename):
+            return jsonify({'error': '只支持PDF文件'}), 400
+
+        translate = request.form.get('translate', 'false').lower() == 'true'
+        pages_str = request.form.get('pages', '')
+        add_wrapper = request.form.get('add_wrapper', 'true').lower() == 'true'
+        model = request.form.get('model', settings.DEFAULT_MODEL)
+        template_name = request.form.get('template', 'article')
+        quality_mode = request.form.get('quality_mode', 'standard')
+        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
+
+        pages = None
+        if pages_str:
+            try:
+                pages = parse_pages_input(pages_str)
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
+
+        filename = secure_filename(file.filename)
+        timestamp = int(time.time())
+        task_id = request.form.get('task_id', f'async_{timestamp}')
+
+        upload_name = f"async_{timestamp}_{filename}"
+        filepath = app.config['UPLOAD_FOLDER'] / upload_name
+        file.save(filepath)
+
+        suffix = '_cn' if translate else ''
+        output_filename = f"{timestamp}_{Path(filename).stem}{suffix}.tex"
+        output_path = app.config['OUTPUT_FOLDER'] / output_filename
+
+        payload = {
+            'filename': filename,
+            'pdf_path': str(filepath),
+            'output_path': str(output_path),
+            'model': model,
+            'translate': translate,
+            'pages_str': pages_str,
+            'pages': pages,
+            'add_wrapper': add_wrapper,
+            'template_name': template_name,
+            'quality_mode': quality_mode,
+            'preserve_layout_images': preserve_layout_images
+        }
+        async_task_manager.create_task(task_id, payload)
+        _start_async_pdf_task(task_id)
+
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'status': 'queued',
+            'message': '异步任务已创建，可通过 /api/task/<task_id> 查询进度'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/task/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    """查询异步任务状态。"""
+    task = async_task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    return jsonify({'success': True, 'task': task})
+
+
+@app.route('/api/tasks', methods=['GET'])
+def list_tasks():
+    """任务中心：查询异步任务列表。"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        tasks = async_task_manager.list_tasks(limit=limit)
+        return jsonify({'success': True, 'tasks': tasks, 'count': len(tasks)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/task/<task_id>/resume', methods=['POST'])
+def resume_task(task_id):
+    """恢复失败或中断的任务。"""
+    task = async_task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+
+    status = task.get('status')
+    if status in ('processing', 'extracting', 'converting', 'translating'):
+        return jsonify({'error': '任务正在执行中'}), 400
+    if status == 'completed':
+        return jsonify({'error': '任务已完成，无需恢复'}), 400
+
+    payload = task.get('payload', {})
+    pdf_path = payload.get('pdf_path')
+    if not pdf_path or not Path(pdf_path).exists():
+        return jsonify({'error': '源文件不存在，无法恢复任务'}), 400
+
+    async_task_manager.update_task(task_id, status='queued', error=None, result=None)
+    _start_async_pdf_task(task_id)
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'queued'})
+
+
+@app.route('/api/merge-outputs', methods=['POST'])
+def merge_outputs():
+    """多文件合并为单个 LaTeX 文件。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        filenames = data.get('filenames', [])
+        if not filenames or not isinstance(filenames, list):
+            return jsonify({'error': '请提供要合并的文件名列表'}), 400
+
+        template_name = data.get('template', 'article')
+        use_chinese = bool(data.get('use_chinese', True))
+        merged_name = data.get('merged_name', '')
+
+        contents = []
+        for name in filenames:
+            path = app.config['OUTPUT_FOLDER'] / Path(name).name
+            if not path.exists():
+                continue
+            contents.append(path.read_text(encoding='utf-8'))
+
+        if not contents:
+            return jsonify({'error': '未找到可合并的有效文件'}), 404
+
+        merged_content = merge_tex_contents(contents, template_name=template_name, use_chinese=use_chinese)
+        timestamp = int(time.time())
+        safe_name = secure_filename(merged_name).strip() if merged_name else ''
+        if not safe_name:
+            safe_name = f'merged_{timestamp}.tex'
+        if not safe_name.endswith('.tex'):
+            safe_name = f'{safe_name}.tex'
+
+        output_path = app.config['OUTPUT_FOLDER'] / safe_name
+        output_path.write_text(merged_content, encoding='utf-8')
+
+        return jsonify({
+            'success': True,
+            'filename': safe_name,
+            'download_url': f'/api/download/{safe_name}',
+            'content': merged_content
+        })
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 

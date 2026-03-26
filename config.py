@@ -21,8 +21,8 @@ class Settings:
     # OpenAI (GPT-4, GPT-5.2)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     
-    # 智谱 GLM
-    ZHIPU_API_KEY: str = os.getenv("ZHIPU_API_KEY", "")
+    # 智谱 GLM（兼容旧变量名 GLM_API_KEY）
+    ZHIPU_API_KEY: str = os.getenv("ZHIPU_API_KEY", os.getenv("GLM_API_KEY", ""))
     
     # Google Gemini
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -32,8 +32,11 @@ class Settings:
     
     # ==================== 应用设置 ====================
     
-    # 默认模型
-    DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek")
+    # 默认模型（应为前后端统一的模型ID）
+    DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek-chat")
+
+    # 美元兑人民币汇率（用于成本展示）
+    USD_TO_CNY_RATE: float = float(os.getenv("USD_TO_CNY_RATE", "7.2"))
     
     # 超时设置
     DEFAULT_TIMEOUT: float = float(os.getenv("DEFAULT_TIMEOUT", "600.0"))

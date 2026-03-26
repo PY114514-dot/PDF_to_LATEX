@@ -36,6 +36,206 @@ body {
     padding: 2rem;
 }
 
+.render-sidebar-btn {
+    margin-top: 1.25rem;
+    padding: 0.65rem 1.25rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.15);
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.render-sidebar-btn:hover {
+    background: rgba(255, 255, 255, 0.28);
+    transform: translateY(-1px);
+}
+
+.latex-modal {
+    position: fixed;
+    top: 10vh;
+    left: 50%;
+    width: min(560px, 92vw);
+    height: min(70vh, 720px);
+    max-width: 96vw;
+    max-height: 88vh;
+    background: white;
+    box-shadow: 0 30px 80px rgba(15, 23, 42, 0.25);
+    border-radius: 1rem;
+    transform: translate(-50%, -6%) scale(0.98);
+    transition: transform 0.25s ease, opacity 0.25s ease;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    resize: both;
+    overflow: hidden;
+    min-width: 320px;
+    min-height: 360px;
+}
+
+.latex-modal.open {
+    transform: translate(-50%, 0) scale(1);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.latex-sidebar-header {
+    padding: 1.5rem;
+    background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border-top-left-radius: 1rem;
+    border-top-right-radius: 1rem;
+}
+
+.latex-sidebar-title {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-weight: 700;
+}
+
+.latex-sidebar-subtitle {
+    font-size: 0.85rem;
+    opacity: 0.75;
+    font-weight: 500;
+}
+
+.latex-sidebar-close {
+    border: none;
+    background: rgba(255, 255, 255, 0.12);
+    color: white;
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+}
+
+.latex-sidebar-close:hover {
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.latex-sidebar-body {
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    height: 100%;
+}
+
+.latex-sidebar-hint {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.latex-sidebar-label {
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.latex-sidebar-input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 2px solid var(--border-color);
+    border-radius: 0.75rem;
+    resize: vertical;
+    font-size: 0.95rem;
+    min-height: 120px;
+    font-family: 'Courier New', monospace;
+}
+
+.latex-sidebar-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+.latex-sidebar-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.latex-sidebar-render,
+.latex-sidebar-clear {
+    flex: 1;
+    padding: 0.65rem 0.75rem;
+    border-radius: 0.6rem;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.latex-sidebar-render {
+    background: var(--primary-color);
+    color: white;
+}
+
+.latex-sidebar-render:hover {
+    background: var(--primary-hover);
+}
+
+.latex-sidebar-clear {
+    background: #f3f4f6;
+    color: #374151;
+}
+
+.latex-sidebar-clear:hover {
+    background: #e5e7eb;
+}
+
+.latex-sidebar-preview {
+    flex: 1;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-color);
+    padding: 1rem;
+    background: #fafafa;
+    overflow: auto;
+    color: #111827;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* KaTeX默认倾向不换行，这里在侧栏预览中强制允许断行。 */
+.latex-sidebar-preview .katex-display {
+    margin: 0.5rem 0;
+    white-space: normal;
+    max-width: 100%;
+}
+
+.latex-sidebar-preview .katex-display > .katex {
+    white-space: normal;
+    max-width: 100%;
+}
+
+.latex-sidebar-preview .katex-display > .katex > .katex-html {
+    white-space: normal;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.latex-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 1900;
+}
+
+.latex-sidebar-backdrop.show {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 /* 头部 */
 .header {
     text-align: center;
@@ -354,6 +554,61 @@ body {
     border-color: var(--primary-color);
 }
 
+.compare-editor {
+    margin-bottom: 2rem;
+    border: 2px solid var(--border-color);
+    border-radius: 0.9rem;
+    padding: 1rem;
+    background: #fff;
+}
+
+.compare-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.9rem;
+}
+
+.compare-editor-header h4 {
+    margin: 0;
+}
+
+.compare-editor-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.compare-editor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.compare-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.compare-col textarea {
+    width: 100%;
+    min-height: 220px;
+    resize: vertical;
+    border: 1px solid var(--border-color);
+    border-radius: 0.6rem;
+    padding: 0.75rem;
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.compare-col textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+}
+
 .btn-primary svg, .btn-secondary svg, .btn-accent svg {
     width: 20px;
     height: 20px;
@@ -410,10 +665,22 @@ body {
     border-bottom: 2px solid var(--border-color);
 }
 
+.history-header-actions {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
 .history-header h3 {
     font-size: 1.5rem;
     color: var(--text-color);
     margin: 0;
+}
+
+.history-refresh-btn {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+    border-radius: 0.5rem;
 }
 
 .history-list {
@@ -522,6 +789,31 @@ body {
     border-color: var(--primary-color);
 }
 
+.history-action-btn.danger {
+    background: #fee2e2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+
+.history-action-btn.danger:hover {
+    background: #fecaca;
+}
+
+.history-clear-btn {
+    padding: 0.55rem 1.1rem;
+    border-radius: 0.5rem;
+    border: 2px solid #fecaca;
+    background: #fee2e2;
+    color: #b91c1c;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.history-clear-btn:hover {
+    background: #fecaca;
+}
+
 .history-empty {
     text-align: center;
     padding: 3rem;
@@ -533,6 +825,42 @@ body {
     height: 64px;
     margin: 0 auto 1rem;
     stroke: var(--text-secondary);
+}
+
+.history-pagination {
+    margin-top: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.history-page-btn {
+    padding: 0.45rem 0.9rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+    background: white;
+    color: var(--text-color);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.history-page-btn:hover:not(:disabled) {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.history-page-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.history-page-info {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    font-weight: 600;
 }
 
 /* 页脚 */
@@ -554,6 +882,14 @@ body {
 
 /* 响应式 */
 @media (max-width: 768px) {
+    .latex-modal {
+        top: 4vh;
+        width: 96vw;
+        height: 88vh;
+        max-height: 92vh;
+        resize: none;
+    }
+
     .container {
         padding: 1rem;
     }
@@ -582,6 +918,10 @@ body {
     
     .btn-primary, .btn-secondary, .btn-accent {
         width: 100%;
+    }
+
+    .compare-editor-grid {
+        grid-template-columns: 1fr;
     }
 }
 

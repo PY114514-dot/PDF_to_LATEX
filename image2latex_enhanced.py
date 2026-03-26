@@ -13,6 +13,7 @@ import asyncio
 from ocr_client import ocr_client
 from clients import LLMClient
 from config import settings
+from latex_utils import sanitize_latex_body, wrap_with_template
 
 
 class Image2LaTeXEnhanced:
@@ -180,7 +181,8 @@ class Image2LaTeXEnhanced:
     async def convert_to_latex(
         self,
         text: str,
-        content_type: str = 'mixed'
+        content_type: str = 'mixed',
+        quality_mode: str = 'standard'
     ) -> Tuple[str, Dict[str, Any]]:
         """
         将识别的文本转换为LaTeX
@@ -319,6 +321,24 @@ class Image2LaTeXEnhanced:
             )
             
             latex_content = response['choices'][0]['message']['content'].strip()
+            latex_content = sanitize_latex_body(latex_content)
+
+            if quality_mode == 'high':
+                refine_prompt = """你是 LaTeX 修复助手。请仅修复语法和结构问题，不改变内容语义，只输出修复后的 LaTeX 正文。"""
+                refine_resp = await self.llm_client.chat(
+                    messages=[
+                        {"role": "system", "content": refine_prompt},
+                        {"role": "user", "content": latex_content}
+                    ],
+                    temperature=0.1,
+                    max_tokens=4000
+                )
+                latex_content = refine_resp['choices'][0]['message']['content'].strip()
+                latex_content = sanitize_latex_body(latex_content)
+
+                total_usage['prompt_tokens'] += refine_resp.get('usage', {}).get('prompt_tokens', 0)
+                total_usage['completion_tokens'] += refine_resp.get('usage', {}).get('completion_tokens', 0)
+                total_usage['total_tokens'] += refine_resp.get('usage', {}).get('total_tokens', 0)
             
             # 累加token统计
             total_usage['prompt_tokens'] += response.get('usage', {}).get('prompt_tokens', 0)
@@ -345,7 +365,9 @@ class Image2LaTeXEnhanced:
         image_path: str,
         output_path: Optional[str] = None,
         ocr_provider: Optional[str] = None,
-        add_document_wrapper: bool = True
+        add_document_wrapper: bool = True,
+        template_name: str = 'article',
+        quality_mode: str = 'standard'
     ) -> Dict[str, Any]:
         """
         转换单张图片为LaTeX
@@ -385,12 +407,17 @@ class Image2LaTeXEnhanced:
         # 不在这里显示进度，让 convert_to_latex 内部处理
         latex_content, usage_stats = await self.convert_to_latex(
             ocr_result['text'],
-            ocr_result['content_type']
+            ocr_result['content_type'],
+            quality_mode=quality_mode
         )
         
         # 添加文档包装
         if add_document_wrapper:
-            latex_content = self._wrap_latex_document(latex_content)
+            latex_content = wrap_with_template(
+                latex_content,
+                template_name=template_name,
+                use_chinese=self.translate
+            )
         
         # 保存输出
         if output_path is None:
@@ -420,7 +447,8 @@ class Image2LaTeXEnhanced:
             'output_file': str(output_path),
             'ocr_result': ocr_result,
             'usage_stats': usage_stats,
-            'elapsed_time': elapsed_time
+            'elapsed_time': elapsed_time,
+            'source_text': ocr_result.get('text', '')
         }
     
     async def batch_convert_images(
@@ -428,7 +456,9 @@ class Image2LaTeXEnhanced:
         image_paths: List[str],
         output_dir: Optional[str] = None,
         ocr_provider: Optional[str] = None,
-        add_document_wrapper: bool = True
+        add_document_wrapper: bool = True,
+        template_name: str = 'article',
+        quality_mode: str = 'standard'
     ) -> Dict[str, Any]:
         """
         批量转换图片
@@ -464,7 +494,9 @@ class Image2LaTeXEnhanced:
                 image_path,
                 output_path=output_path,
                 ocr_provider=ocr_provider,
-                add_document_wrapper=add_document_wrapper
+                add_document_wrapper=add_document_wrapper,
+                template_name=template_name,
+                quality_mode=quality_mode
             )
             
             results.append(result)

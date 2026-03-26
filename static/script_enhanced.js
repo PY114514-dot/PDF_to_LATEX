@@ -7,9 +7,13 @@ let downloadUrl = null;
 let latexContent = null;
 let socket = null;
 let currentTaskId = null;
+let activeAsyncTask = null;
 let isBatchMode = false;  // 是否批量模式
 let isImageMode = false;  // 是否图片模式
 let currentPhaseRank = 0;
+let historyCurrentPage = 1;
+const HISTORY_PAGE_SIZE = 10;
+const HISTORY_MAX_RECORDS = 20;
 
 const STATUS_RANK = {
     preparing: 0,
@@ -23,7 +27,7 @@ const STATUS_RANK = {
 };
 
 // 货币设置
-const USD_TO_CNY_RATE = 7.2;  // 美元到人民币汇率
+let USD_TO_CNY_RATE = 7.2;  // 美元到人民币汇率（可由后端配置覆盖）
 
 // 货币转换函数
 function formatCurrency(usdAmount) {
@@ -80,16 +84,188 @@ const errorMessage = document.getElementById('errorMessage');
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
+    loadPublicConfig();
     setupDragAndDrop();
     setupFileInput();
     setupImageInput();
     setupBatchFileInput();
     setupPasteImage();
     setupConvertButton();
+    setupLatexSidebar();
+    setupHistoryPagination();
     initWebSocket();
     loadAvailableModels();
     loadHistory();
+    loadTaskCenter();
 });
+
+async function loadPublicConfig() {
+    try {
+        const response = await fetch('/api/public-config');
+        if (!response.ok) {
+            return;
+        }
+        const data = await response.json();
+        const rate = data?.config?.usd_to_cny_rate;
+        if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) {
+            USD_TO_CNY_RATE = rate;
+        }
+    } catch (error) {
+        console.warn('读取公开配置失败，使用默认汇率:', error.message);
+    }
+}
+
+function setupHistoryPagination() {
+    const prevBtn = document.getElementById('historyPrevBtn');
+    const nextBtn = document.getElementById('historyNextBtn');
+    if (!prevBtn || !nextBtn) {
+        return;
+    }
+
+    prevBtn.addEventListener('click', () => {
+        if (historyCurrentPage > 1) {
+            historyCurrentPage -= 1;
+            loadHistory();
+        }
+    });
+
+    nextBtn.addEventListener('click', () => {
+        historyCurrentPage += 1;
+        loadHistory();
+    });
+}
+
+function setupLatexSidebar() {
+    const sidebar = document.getElementById('latexSidebar');
+    const backdrop = document.getElementById('latexSidebarBackdrop');
+    const openBtn = document.getElementById('openLatexSidebar');
+    const closeBtn = document.getElementById('closeLatexSidebar');
+    const renderBtn = document.getElementById('renderLatexBtn');
+    const clearBtn = document.getElementById('clearLatexBtn');
+    const input = document.getElementById('latexInput');
+    const preview = document.getElementById('latexPreview');
+
+    if (!sidebar || !openBtn || !closeBtn || !renderBtn || !clearBtn || !input || !preview) {
+        return;
+    }
+
+    const openSidebar = () => {
+        sidebar.classList.add('open');
+        sidebar.setAttribute('aria-hidden', 'false');
+        backdrop.classList.add('show');
+        backdrop.setAttribute('aria-hidden', 'false');
+        input.focus();
+        queueRender();
+    };
+
+    const closeSidebar = () => {
+        sidebar.classList.remove('open');
+        sidebar.setAttribute('aria-hidden', 'true');
+        backdrop.classList.remove('show');
+        backdrop.setAttribute('aria-hidden', 'true');
+    };
+
+    let renderDebounceTimer = null;
+
+    const delimiters = [
+        { left: '$$', right: '$$', display: true },
+        { left: '\\[', right: '\\]', display: true },
+        { left: '$', right: '$', display: false },
+        { left: '\\(', right: '\\)', display: false }
+    ];
+
+    const hasMathDelimiters = (text) => {
+        return /\$\$[\s\S]*\$\$|\\\[[\s\S]*\\\]|\\\([\s\S]*\\\)|\$[^$]+\$/.test(text);
+    };
+
+    const normalizeStandaloneBlock = (text) => {
+        const trimmed = text.trim();
+        if (!trimmed) {
+            return trimmed;
+        }
+        if ((trimmed.startsWith('\\[') && trimmed.endsWith('\\]')) ||
+            (trimmed.startsWith('$$') && trimmed.endsWith('$$'))) {
+            return trimmed;
+        }
+        // 兼容用户输入 [ ... ] 形式的块公式。
+        if (trimmed.startsWith('[') && trimmed.endsWith(']') && trimmed.includes('\\')) {
+            return `\\[${trimmed.slice(1, -1).trim()}\\]`;
+        }
+        return trimmed;
+    };
+
+    const renderLatexPreview = () => {
+        const rawText = input.value;
+        const text = rawText.trim();
+
+        if (!text) {
+            preview.textContent = '请输入 LaTeX 内容后点击渲染';
+            return;
+        }
+
+        preview.textContent = text;
+        let rendered = false;
+
+        if (typeof renderMathInElement === 'function' && hasMathDelimiters(text)) {
+            renderMathInElement(preview, {
+                delimiters,
+                throwOnError: false
+            });
+            rendered = Boolean(preview.querySelector('.katex'));
+        }
+
+        if (!rendered && typeof katex !== 'undefined' && typeof katex.render === 'function') {
+            try {
+                const normalized = normalizeStandaloneBlock(text);
+                if (normalized.startsWith('\\[') && normalized.endsWith('\\]')) {
+                    katex.render(normalized.slice(2, -2).trim(), preview, {
+                        displayMode: true,
+                        throwOnError: false
+                    });
+                } else if (normalized.startsWith('$$') && normalized.endsWith('$$')) {
+                    katex.render(normalized.slice(2, -2).trim(), preview, {
+                        displayMode: true,
+                        throwOnError: false
+                    });
+                } else {
+                    katex.render(normalized, preview, {
+                        displayMode: true,
+                        throwOnError: false
+                    });
+                }
+                rendered = true;
+            } catch (error) {
+                preview.textContent = text;
+            }
+        }
+
+        if (!rendered && typeof renderMathInElement === 'function') {
+            renderMathInElement(preview, {
+                delimiters,
+                throwOnError: false
+            });
+        }
+    };
+
+    const queueRender = () => {
+        if (renderDebounceTimer) {
+            clearTimeout(renderDebounceTimer);
+        }
+        renderDebounceTimer = setTimeout(renderLatexPreview, 220);
+    };
+
+    openBtn.addEventListener('click', openSidebar);
+    closeBtn.addEventListener('click', closeSidebar);
+    backdrop.addEventListener('click', closeSidebar);
+    renderBtn.addEventListener('click', renderLatexPreview);
+    input.addEventListener('input', queueRender);
+    input.addEventListener('paste', () => setTimeout(queueRender, 0));
+    clearBtn.addEventListener('click', () => {
+        input.value = '';
+        preview.textContent = '请输入 LaTeX 内容后点击渲染';
+        input.focus();
+    });
+}
 
 // 初始化WebSocket
 function initWebSocket() {
@@ -563,6 +739,73 @@ function setupConvertButton() {
     convertBtn.addEventListener('click', startConversion);
 }
 
+function collectCommonOptions() {
+    return {
+        model: document.getElementById('modelSelect').value,
+        template: document.getElementById('templateSelect')?.value || 'article',
+        quality_mode: document.getElementById('qualityModeSelect')?.value || 'standard',
+        preserve_layout_images: document.getElementById('preserveLayoutImagesOption')?.checked || false
+    };
+}
+
+async function pollAsyncTask(taskId) {
+    activeAsyncTask = taskId;
+    const maxRounds = 3600; // 最多轮询 1 小时
+    let rounds = 0;
+    while (activeAsyncTask === taskId && rounds < maxRounds) {
+        rounds += 1;
+        try {
+            const res = await fetch(`/api/task/${taskId}`);
+            const data = await res.json();
+            if (data.success && data.task) {
+                const status = data.task.status;
+                if (status === 'completed' && data.task.result) {
+                    showResult(data.task.result);
+                    loadTaskCenter();
+                    activeAsyncTask = null;
+                    return;
+                }
+                if (status === 'failed') {
+                    showError(data.task.error || '异步任务失败');
+                    loadTaskCenter();
+                    activeAsyncTask = null;
+                    return;
+                }
+            }
+        } catch (err) {
+            console.warn('轮询异步任务失败:', err.message);
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+}
+
+async function resumeLastAsyncTask() {
+    const taskId = safeStorage.getItem('lastAsyncTaskId');
+    if (!taskId) {
+        showToast('没有找到可恢复的异步任务ID', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/task/${taskId}/resume`, { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '恢复失败');
+        }
+        currentTaskId = taskId;
+        socket.emit('join_task', { task_id: taskId });
+        progressSection.style.display = 'block';
+        optionsSection.style.display = 'none';
+        resultSection.style.display = 'none';
+        errorSection.style.display = 'none';
+        addTerminalLog('info', `已恢复异步任务: ${taskId}`);
+        pollAsyncTask(taskId);
+        loadTaskCenter();
+    } catch (err) {
+        showToast(`恢复失败: ${err.message}`, 'error');
+    }
+}
+
 // 开始转换
 async function startConversion() {
     if (!selectedFile && selectedFiles.length === 0) {
@@ -593,7 +836,8 @@ async function startSingleConversion() {
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
     const pagesInput = document.getElementById('pagesInput').value.trim();
-    const model = document.getElementById('modelSelect').value;
+    const options = collectCommonOptions();
+    const asyncMode = document.getElementById('asyncOption')?.checked;
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'block';
@@ -639,7 +883,10 @@ async function startSingleConversion() {
         formData.append('file', selectedFile);
         formData.append('translate', translate);
         formData.append('add_wrapper', addWrapper);
-        formData.append('model', model);
+        formData.append('model', options.model);
+        formData.append('template', options.template);
+        formData.append('quality_mode', options.quality_mode);
+        formData.append('preserve_layout_images', options.preserve_layout_images);
         formData.append('task_id', taskId);  // 传递task_id
         if (pages) {
             formData.append('pages', pages);
@@ -696,12 +943,20 @@ async function startSingleConversion() {
             xhr.onerror = () => reject(new Error('网络请求失败'));
             xhr.ontimeout = () => reject(new Error('请求超时'));
             
-            xhr.open('POST', '/api/convert');
+            xhr.open('POST', asyncMode ? '/api/convert-async' : '/api/convert');
             xhr.timeout = 1800000; // 30分钟超时（翻译需要更长时间）
             xhr.send(formData);
         });
 
         const result = await uploadPromise;
+
+        if (asyncMode) {
+            addTerminalLog('info', `异步任务已提交: ${result.task_id}`);
+            safeStorage.setItem('lastAsyncTaskId', result.task_id);
+            pollAsyncTask(result.task_id);
+            loadTaskCenter();
+            return;
+        }
 
         // 不再直接调用 showResult，等待 WebSocket 的 'completed' 事件
         // WebSocket 会在转换完成时自动调用 showResult
@@ -727,7 +982,7 @@ async function startBatchConversion() {
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
     const pagesInput = document.getElementById('pagesInput').value.trim();
-    const model = document.getElementById('modelSelect').value;
+    const options = collectCommonOptions();
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'block';
@@ -772,7 +1027,10 @@ async function startBatchConversion() {
         
         formData.append('translate', translate);
         formData.append('add_wrapper', addWrapper);
-        formData.append('model', model);
+        formData.append('model', options.model);
+        formData.append('template', options.template);
+        formData.append('quality_mode', options.quality_mode);
+        formData.append('preserve_layout_images', options.preserve_layout_images);
         if (pages) {
             formData.append('pages', pages);
         }
@@ -855,6 +1113,12 @@ function showResult(result) {
 
     downloadUrl = result.download_url;
     latexContent = result.content;
+    const sourceText = result.source_text || result.ocr_result?.text || '';
+
+    const sourceTextArea = document.getElementById('sourceTextArea');
+    const latexEditorArea = document.getElementById('latexEditorArea');
+    if (sourceTextArea) sourceTextArea.value = sourceText;
+    if (latexEditorArea) latexEditorArea.value = result.content || '';
 
     // 使用 Prism.js 高亮显示代码
     codeContent.textContent = result.content;
@@ -913,6 +1177,34 @@ function showResult(result) {
     loadHistory();
 
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderLatexFromEditor() {
+    const latexEditorArea = document.getElementById('latexEditorArea');
+    const content = latexEditorArea?.value || '';
+    if (!content.trim()) {
+        showToast('右栏没有可渲染的内容', 'error');
+        return;
+    }
+    renderLatex(content);
+}
+
+function downloadEditedLatex() {
+    const latexEditorArea = document.getElementById('latexEditorArea');
+    const content = latexEditorArea?.value || '';
+    if (!content.trim()) {
+        showToast('右栏没有可下载的内容', 'error');
+        return;
+    }
+    const blob = new Blob([content], { type: 'application/x-tex;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `edited_${Date.now()}.tex`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
 }
 
 // 显示错误
@@ -1117,6 +1409,12 @@ function showBatchResult(result) {
                         <line x1="12" y1="15" x2="12" y2="3"></line>
                     </svg>
                 </button>
+                        <button class="icon-btn" onclick="mergeBatchResults(window.batchResults)" title="合并为单个tex">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M8 6h13M8 12h13M8 18h13"></path>
+                                <path d="M3 6h.01M3 12h.01M3 18h.01"></path>
+                            </svg>
+                        </button>
             </div>
         </div>
         <div class="batch-results-list">
@@ -1169,6 +1467,36 @@ function showBatchResult(result) {
 // 下载批量结果
 function downloadBatchResults(batchId) {
     window.location.href = `/api/download-batch/${batchId}`;
+}
+
+async function mergeBatchResults(results) {
+    const successful = (results || []).filter(r => r.success && r.output_filename).map(r => r.output_filename);
+    if (successful.length < 2) {
+        showToast('至少需要 2 个成功文件才能合并', 'error');
+        return;
+    }
+
+    try {
+        const payload = {
+            filenames: successful,
+            template: document.getElementById('templateSelect')?.value || 'article',
+            use_chinese: document.getElementById('translateOption')?.checked || false,
+            merged_name: `merged_${Date.now()}.tex`
+        };
+        const response = await fetch('/api/merge-outputs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '合并失败');
+        }
+        window.location.href = data.download_url;
+        showToast('合并完成，已开始下载', 'success');
+    } catch (error) {
+        showToast(`合并失败: ${error.message}`, 'error');
+    }
 }
 
 // 解析页码输入（支持范围和逗号分隔）
@@ -1285,6 +1613,14 @@ function resetApp() {
     document.getElementById('translateOption').checked = false;
     document.getElementById('wrapperOption').checked = true;
     document.getElementById('pagesInput').value = '';
+    const templateSelect = document.getElementById('templateSelect');
+    const qualityModeSelect = document.getElementById('qualityModeSelect');
+    const asyncOption = document.getElementById('asyncOption');
+    if (templateSelect) templateSelect.value = 'article';
+    if (qualityModeSelect) qualityModeSelect.value = 'standard';
+    if (asyncOption) asyncOption.checked = false;
+    const preserveLayoutImagesOption = document.getElementById('preserveLayoutImagesOption');
+    if (preserveLayoutImagesOption) preserveLayoutImagesOption.checked = false;
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'none';
@@ -1381,13 +1717,25 @@ checkApiStatus();
 // 加载历史记录
 async function loadHistory() {
     const historyList = document.getElementById('historyList');
+    const pagination = document.getElementById('historyPagination');
+    const pageInfo = document.getElementById('historyPageInfo');
+    const prevBtn = document.getElementById('historyPrevBtn');
+    const nextBtn = document.getElementById('historyNextBtn');
     
     try {
-        const response = await fetch('/api/history?limit=10');
+        const offset = (historyCurrentPage - 1) * HISTORY_PAGE_SIZE;
+        const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}&offset=${offset}`);
         const data = await response.json();
+        const total = Math.min(data.total || 0, HISTORY_MAX_RECORDS);
+        const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+        const safePage = Math.min(Math.max(1, historyCurrentPage), totalPages);
+        if (safePage !== historyCurrentPage) {
+            historyCurrentPage = safePage;
+        }
         
         if (data.success && data.history && data.history.length > 0) {
             historyList.innerHTML = data.history.map((record, index) => {
+                const absoluteIndex = offset + index;
                 const date = new Date(record.timestamp);
                 const dateStr = date.toLocaleString('zh-CN');
                 const model = record.model || 'unknown';
@@ -1397,7 +1745,7 @@ async function loadHistory() {
                 const tokens = record.stats?.total_tokens || 0;
                 
                 return `
-                    <div class="history-item" onclick="viewHistory(${index})">
+                    <div class="history-item" onclick="viewHistory(${absoluteIndex})">
                         <div class="history-icon">📄</div>
                         <div class="history-info">
                             <div class="history-filename">${record.filename}</div>
@@ -1411,16 +1759,25 @@ async function loadHistory() {
                             </div>
                         </div>
                         <div class="history-actions" onclick="event.stopPropagation()">
-                            <button class="history-action-btn primary" onclick="downloadHistory(${index})">
+                            <button class="history-action-btn primary" onclick="downloadHistory(${absoluteIndex})">
                                 📥 下载
                             </button>
-                            <button class="history-action-btn secondary" onclick="viewHistory(${index})">
+                            <button class="history-action-btn secondary" onclick="viewHistory(${absoluteIndex})">
                                 👁️ 查看
+                            </button>
+                            <button class="history-action-btn danger" onclick="deleteHistory(${absoluteIndex})">
+                                🗑️ 删除
                             </button>
                         </div>
                     </div>
                 `;
             }).join('');
+            if (pagination && pageInfo && prevBtn && nextBtn) {
+                pagination.style.display = total > HISTORY_PAGE_SIZE ? 'flex' : 'none';
+                pageInfo.textContent = `${historyCurrentPage} / ${totalPages}`;
+                prevBtn.disabled = historyCurrentPage <= 1;
+                nextBtn.disabled = historyCurrentPage >= totalPages;
+            }
         } else {
             historyList.innerHTML = `
                 <div class="history-empty">
@@ -1430,6 +1787,9 @@ async function loadHistory() {
                     <p>暂无历史记录</p>
                 </div>
             `;
+            if (pagination) {
+                pagination.style.display = 'none';
+            }
         }
     } catch (error) {
         console.error('加载历史记录失败:', error);
@@ -1438,12 +1798,95 @@ async function loadHistory() {
                 <p>加载历史记录失败</p>
             </div>
         `;
+        if (pagination) {
+            pagination.style.display = 'none';
+        }
     }
 }
 
 // 刷新历史记录
 function refreshHistory() {
+    historyCurrentPage = 1;
     loadHistory();
+}
+
+async function loadTaskCenter() {
+    const taskList = document.getElementById('taskCenterList');
+    if (!taskList) return;
+
+    try {
+        const response = await fetch('/api/tasks?limit=50');
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '加载任务中心失败');
+        }
+
+        if (!data.tasks || data.tasks.length === 0) {
+            taskList.innerHTML = '<div class="history-empty"><p>暂无异步任务</p></div>';
+            return;
+        }
+
+        taskList.innerHTML = data.tasks.map(task => {
+            const status = task.status || 'unknown';
+            const taskId = task.task_id;
+            const updatedAt = task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : '-';
+            const progress = task.progress || {};
+            const result = task.result || null;
+
+            return `
+                <div class="history-item">
+                    <div class="history-icon">🧩</div>
+                    <div class="history-info">
+                        <div class="history-filename">任务 ${taskId}</div>
+                        <div class="history-meta">
+                            <span>状态: ${status}</span>
+                            <span>进度: ${progress.percent ?? 0}%</span>
+                            <span>信息: ${progress.message || '-'}</span>
+                            <span>更新时间: ${updatedAt}</span>
+                        </div>
+                    </div>
+                    <div class="history-actions">
+                        ${result ? `<button class="history-action-btn primary" onclick="openTaskResult('${taskId}')">查看结果</button>` : ''}
+                        ${status === 'failed' ? `<button class="history-action-btn secondary" onclick="resumeTaskById('${taskId}')">恢复</button>` : ''}
+                        ${result?.download_url ? `<button class="history-action-btn secondary" onclick="window.location.href='${result.download_url}'">下载</button>` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        taskList.innerHTML = `<div class="history-empty"><p>加载失败: ${error.message}</p></div>`;
+    }
+}
+
+async function openTaskResult(taskId) {
+    try {
+        const response = await fetch(`/api/task/${taskId}`);
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.task?.result) {
+            throw new Error(data.error || '结果不存在');
+        }
+        showResult(data.task.result);
+    } catch (error) {
+        showToast(`打开任务结果失败: ${error.message}`, 'error');
+    }
+}
+
+async function resumeTaskById(taskId) {
+    try {
+        const response = await fetch(`/api/task/${taskId}/resume`, { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '恢复失败');
+        }
+        currentTaskId = taskId;
+        socket.emit('join_task', { task_id: taskId });
+        safeStorage.setItem('lastAsyncTaskId', taskId);
+        pollAsyncTask(taskId);
+        loadTaskCenter();
+        showToast('任务已恢复', 'success');
+    } catch (error) {
+        showToast(`恢复失败: ${error.message}`, 'error');
+    }
 }
 
 // 查看历史记录
@@ -1494,6 +1937,47 @@ async function downloadHistory(index) {
     } catch (error) {
         console.error('下载历史记录失败:', error);
         alert('下载失败: ' + error.message);
+    }
+}
+
+// 删除单条历史记录
+async function deleteHistory(index) {
+    if (!confirm('确定删除这条历史记录吗？')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/history/${index}`, { method: 'DELETE' });
+        const data = await response.json();
+        if (data.success) {
+            loadHistory();
+        } else {
+            alert(data.error || '删除失败');
+        }
+    } catch (error) {
+        console.error('删除历史记录失败:', error);
+        alert('删除失败: ' + error.message);
+    }
+}
+
+// 一键清空历史记录
+async function clearAllHistory() {
+    if (!confirm('确定清空所有历史记录吗？此操作不可恢复。')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/history/clear', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            historyCurrentPage = 1;
+            loadHistory();
+        } else {
+            alert(data.error || '清空失败');
+        }
+    } catch (error) {
+        console.error('清空历史记录失败:', error);
+        alert('清空失败: ' + error.message);
     }
 }
 
@@ -1768,7 +2252,10 @@ async function startImageConversion() {
     const formData = new FormData();
     formData.append('task_id', currentTaskId);
     formData.append('file', selectedFile);
-    formData.append('model', document.getElementById('modelSelect').value);
+    const options = collectCommonOptions();
+    formData.append('model', options.model);
+    formData.append('template', options.template);
+    formData.append('quality_mode', options.quality_mode);
     formData.append('translate', document.getElementById('translateOption').checked);
     formData.append('ocr_provider', document.getElementById('ocrProviderSelect')?.value || 'mixed');
     formData.append('add_document_wrapper', document.getElementById('wrapperOption').checked);
@@ -1834,7 +2321,10 @@ async function startBatchImageConversion() {
     selectedImages.forEach(file => {
         formData.append('files', file);
     });
-    formData.append('model', document.getElementById('modelSelect').value);
+    const options = collectCommonOptions();
+    formData.append('model', options.model);
+    formData.append('template', options.template);
+    formData.append('quality_mode', options.quality_mode);
     formData.append('translate', document.getElementById('translateOption').checked);
     formData.append('ocr_provider', document.getElementById('ocrProviderSelect')?.value || 'mixed');
     formData.append('add_document_wrapper', document.getElementById('wrapperOption').checked);

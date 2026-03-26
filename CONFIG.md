@@ -14,13 +14,16 @@ DEEPSEEK_API_KEY=sk-your-deepseek-api-key-here
 OPENAI_API_KEY=sk-your-openai-api-key-here
 
 # GLM (智谱清言)
-GLM_API_KEY=your-glm-api-key-here
+ZHIPU_API_KEY=your-zhipu-api-key-here
 
 # Gemini (Google)
 GEMINI_API_KEY=your-gemini-api-key-here
 
 # Doubao (字节豆包)
 DOUBAO_API_KEY=your-doubao-api-key-here
+
+# 默认模型 (可选)
+DEFAULT_MODEL=deepseek-chat
 
 # 美元兑人民币汇率 (默认: 7.2)
 USD_TO_CNY_RATE=7.2
@@ -72,7 +75,7 @@ USD_TO_CNY_RATE=7.2
 # API密钥
 DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-GLM_API_KEY: str = os.getenv("GLM_API_KEY", "")
+ZHIPU_API_KEY: str = os.getenv("ZHIPU_API_KEY", os.getenv("GLM_API_KEY", ""))
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 DOUBAO_API_KEY: str = os.getenv("DOUBAO_API_KEY", "")
 
@@ -101,10 +104,7 @@ USD_TO_CNY_RATE=7.3
 USD_TO_CNY_RATE: float = 7.3
 ```
 
-**方法3**: 在 `static/script_enhanced.js` 中修改前端显示
-```javascript
-const USD_TO_CNY_RATE = 7.3;
-```
+前端会通过 `/api/public-config` 自动读取后端汇率配置，无需手动改前端常量。
 
 ### 修改上传限制
 

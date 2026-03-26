@@ -9,6 +9,10 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-latex.min.js"></script>
+    <!-- KaTeX for live LaTeX rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
     <!-- Socket.IO for real-time progress -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
@@ -18,6 +22,7 @@
         <header class="header">
             <h1>📄 PDF2LaTeX Enhanced</h1>
             <p class="subtitle">智能PDF转LaTeX工具 - 实时进度 · Token统计 · 美化展示</p>
+            <button class="render-sidebar-btn" id="openLatexSidebar" type="button">实时渲染</button>
         </header>
 
         <!-- 主内容区 -->
@@ -90,6 +95,41 @@
                         </select>
                     </div>
 
+                    <div class="option-group">
+                        <label>
+                            <span>📚 文档模板</span>
+                            <span class="hint">（包装 LaTeX 文档结构）</span>
+                        </label>
+                        <select id="templateSelect" class="select-input">
+                            <option value="article">Article（默认）</option>
+                            <option value="report">Report</option>
+                            <option value="book">Book</option>
+                            <option value="beamer">Beamer</option>
+                            <option value="cn-article">中文 Article</option>
+                        </select>
+                    </div>
+
+                    <div class="option-group">
+                        <label>
+                            <span>🧪 LaTeX 质量模式</span>
+                            <span class="hint">（高质量模式会额外调用一次模型修复语法）</span>
+                        </label>
+                        <select id="qualityModeSelect" class="select-input">
+                            <option value="standard">标准</option>
+                            <option value="high">高质量</option>
+                        </select>
+                    </div>
+
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="asyncOption">
+                            <span>异步任务模式（可恢复）</span>
+                        </label>
+                        <div style="margin-top: 0.5rem;">
+                            <button class="btn-secondary" type="button" onclick="resumeLastAsyncTask()">恢复上次异步任务</button>
+                        </div>
+                    </div>
+
                     <div class="option-group" id="ocrProviderGroup" style="display: none;">
                         <label>
                             <span>👁️ OCR 识别引擎</span>
@@ -130,6 +170,13 @@
                             <span class="hint">（可选，支持范围和逗号分隔）</span>
                         </label>
                         <input type="text" id="pagesInput" placeholder="例如: 1-3,5,7-9" class="text-input">
+                    </div>
+
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="preserveLayoutImagesOption">
+                            <span>识别到图片时保留原论文排版和图片（实验）</span>
+                        </label>
                     </div>
 
                     <button class="convert-btn" id="convertBtn">
@@ -258,6 +305,26 @@
                     </button>
                 </div>
 
+                <div class="compare-editor" id="compareEditor">
+                    <div class="compare-editor-header">
+                        <h4>双栏对照编辑器</h4>
+                        <div class="compare-editor-actions">
+                            <button class="btn-secondary" type="button" onclick="renderLatexFromEditor()">渲染右栏</button>
+                            <button class="btn-secondary" type="button" onclick="downloadEditedLatex()">下载右栏</button>
+                        </div>
+                    </div>
+                    <div class="compare-editor-grid">
+                        <div class="compare-col">
+                            <label for="sourceTextArea">原文 / OCR 文本</label>
+                            <textarea id="sourceTextArea" readonly></textarea>
+                        </div>
+                        <div class="compare-col">
+                            <label for="latexEditorArea">LaTeX 可编辑区</label>
+                            <textarea id="latexEditorArea"></textarea>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 美化的代码预览 -->
                 <div class="code-preview">
                     <div class="code-header">
@@ -293,13 +360,39 @@
             <div class="history-section" id="historySection">
                 <div class="history-header">
                     <h3>📜 转换历史</h3>
-                    <button class="btn-secondary" onclick="refreshHistory()" style="padding: 0.5rem 1rem;">
-                        🔄 刷新
-                    </button>
+                    <div class="history-header-actions">
+                        <button class="browse-btn" onclick="refreshHistory()" type="button">
+                            🔄 刷新
+                        </button>
+                        <button class="history-clear-btn" onclick="clearAllHistory()" type="button">
+                            🗑️ 清空
+                        </button>
+                    </div>
                 </div>
                 <div class="history-list" id="historyList">
                     <div class="loading-history">
                         <p>加载历史记录中...</p>
+                    </div>
+                </div>
+                <div class="history-pagination" id="historyPagination" style="display: none;">
+                    <button class="history-page-btn" id="historyPrevBtn" type="button">上一页</button>
+                    <span class="history-page-info" id="historyPageInfo">1 / 1</span>
+                    <button class="history-page-btn" id="historyNextBtn" type="button">下一页</button>
+                </div>
+            </div>
+
+            <div class="history-section" id="taskCenterSection">
+                <div class="history-header">
+                    <h3>🧭 任务中心</h3>
+                    <div class="history-header-actions">
+                        <button class="browse-btn" onclick="loadTaskCenter()" type="button">
+                            🔄 刷新
+                        </button>
+                    </div>
+                </div>
+                <div class="history-list" id="taskCenterList">
+                    <div class="loading-history">
+                        <p>加载任务中...</p>
                     </div>
                 </div>
             </div>
@@ -313,6 +406,27 @@
             </p>
         </footer>
     </div>
+
+    <aside class="latex-modal" id="latexSidebar" aria-hidden="true">
+        <div class="latex-sidebar-header">
+            <div class="latex-sidebar-title">
+                <span>🧮 实时 LaTeX 渲染</span>
+                <span class="latex-sidebar-subtitle">支持 $...$、$$...$$、\(...\)、\[...\]</span>
+            </div>
+            <button class="latex-sidebar-close" id="closeLatexSidebar" type="button">关闭</button>
+        </div>
+        <div class="latex-sidebar-body">
+            <label class="latex-sidebar-label" for="latexInput">输入 LaTeX</label>
+            <textarea class="latex-sidebar-input" id="latexInput" rows="8" placeholder="例如: $E=mc^2$ 或 $$\int_0^1 x^2 dx$$"></textarea>
+            <div class="latex-sidebar-actions">
+                <button class="latex-sidebar-render" id="renderLatexBtn" type="button">渲染</button>
+                <button class="latex-sidebar-clear" id="clearLatexBtn" type="button">清空</button>
+            </div>
+            <div class="latex-sidebar-hint">提示：拖动窗口右下角可调整大小</div>
+            <div class="latex-sidebar-preview" id="latexPreview"></div>
+        </div>
+    </aside>
+    <div class="latex-sidebar-backdrop" id="latexSidebarBackdrop" aria-hidden="true"></div>
 
     <script src="{{ url_for('static', filename='script_enhanced.js') }}"></script>
 </body>
