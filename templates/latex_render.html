@@ -306,18 +306,18 @@
 </head>
 <body>
     <div class="header">
-        <h1>📄 LaTeX 渲染预览</h1>
+        <h1>LaTeX 渲染预览</h1>
         <p style="opacity: 0.9;">实时预览LaTeX文档效果</p>
         
         <div class="header-controls">
             <button class="btn btn-primary" onclick="renderLatex()">
-                🔄 重新渲染
+                重新渲染
             </button>
             <button class="btn btn-secondary" onclick="downloadPDF()">
-                📥 下载PDF
+                下载PDF
             </button>
             <button class="btn btn-secondary" onclick="window.close()">
-                ✖ 关闭
+                关闭
             </button>
         </div>
     </div>
@@ -335,11 +335,11 @@
                 <textarea class="source-editor" id="latexSource"></textarea>
                 <div class="stats-bar">
                     <div class="stat-item">
-                        <span>📝 行数:</span>
+                        <span>行数:</span>
                         <span id="lineCount">0</span>
                     </div>
                     <div class="stat-item">
-                        <span>🔤 字符:</span>
+                        <span>字符:</span>
                         <span id="charCount">0</span>
                     </div>
                 </div>
@@ -389,8 +389,33 @@
     </script>
 
     <script>
-        // 从URL参数或localStorage获取LaTeX内容
+        // 从URL参数、window.name、opener 或 localStorage 获取 LaTeX 内容
         let latexContent = '';
+        let latexFilename = '';
+
+        function safeStorageGet(key) {
+            try {
+                return localStorage.getItem(key) || '';
+            } catch (error) {
+                console.warn('localStorage 不可用:', error.message);
+                return '';
+            }
+        }
+
+        function parseWindowNamePayload() {
+            if (!window.name) {
+                return null;
+            }
+            try {
+                const payload = JSON.parse(window.name);
+                if (payload && typeof payload === 'object') {
+                    return payload;
+                }
+            } catch (error) {
+                console.warn('window.name 解析失败:', error.message);
+            }
+            return null;
+        }
         
         // 尝试从URL参数获取
         const urlParams = new URLSearchParams(window.location.search);
@@ -403,13 +428,29 @@
                 console.error('解码失败:', e);
             }
         }
+
+        // 从 window.name 获取（由主页面打开新窗口时写入）
+        if (!latexContent) {
+            const payload = parseWindowNamePayload();
+            if (payload) {
+                latexContent = payload.latexContent || '';
+                latexFilename = payload.latexFilename || '';
+            }
+        }
+
+        // 从 opener 获取（最稳妥）
+        if (!latexContent && window.opener && window.opener.__latexRenderPayload) {
+            latexContent = window.opener.__latexRenderPayload.latexContent || '';
+            latexFilename = window.opener.__latexRenderPayload.latexFilename || '';
+        }
         
         // 如果没有URL参数，尝试从localStorage获取
         if (!latexContent) {
-            latexContent = localStorage.getItem('latexContent') || '';
+            latexContent = safeStorageGet('latexContent');
+            latexFilename = latexFilename || safeStorageGet('latexFilename');
         }
         
-        // 如果还是没有，尝试从opener获取
+        // 兼容旧逻辑：从 opener 全局变量读取
         if (!latexContent && window.opener && window.opener.latexContent) {
             latexContent = window.opener.latexContent;
         }
@@ -417,6 +458,10 @@
         // 显示源代码
         const sourceEditor = document.getElementById('latexSource');
         sourceEditor.value = latexContent;
+
+        if (latexFilename) {
+            document.title = `LaTeX 渲染预览 - ${latexFilename}`;
+        }
         
         // 更新统计
         updateStats();
@@ -547,6 +592,51 @@
             content = content.replace(/\\begin\{center\}([\s\S]*?)\\end\{center\}/g, '<div style="text-align: center; margin: 1.5rem 0;">$1</div>');
             content = content.replace(/\\begin\{flushleft\}([\s\S]*?)\\end\{flushleft\}/g, '<div style="text-align: left; margin: 1rem 0;">$1</div>');
             content = content.replace(/\\begin\{flushright\}([\s\S]*?)\\end\{flushright\}/g, '<div style="text-align: right; margin: 1rem 0;">$1</div>');
+
+            // 转换表格环境（table + tabular）
+            content = content.replace(/\\begin\{table\}[\s\S]*?\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}[\s\S]*?\\end\{table\}/g, (match, tableBody) => {
+                const captionMatch = match.match(/\\caption\{([^}]*)\}/);
+                const caption = captionMatch ? `<div style="font-weight: 600; margin-bottom: 0.5rem;">${captionMatch[1]}</div>` : '';
+                const cleaned = (tableBody || '')
+                    .replace(/\\hline/g, '')
+                    .replace(/\\cline\{[^}]*\}/g, '')
+                    .trim();
+
+                const rows = cleaned
+                    .split('\\\\')
+                    .map(row => row.trim())
+                    .filter(row => row.length > 0);
+
+                const htmlRows = rows.map((row, idx) => {
+                    const cols = row.split('&').map(c => c.trim());
+                    const tag = idx === 0 ? 'th' : 'td';
+                    const cells = cols.map(c => `<${tag} style="border: 1px solid #e5e7eb; padding: 0.45rem 0.6rem;">${c}</${tag}>`).join('');
+                    return `<tr>${cells}</tr>`;
+                }).join('');
+
+                return `<div style="margin: 1rem 0; overflow-x: auto;">${caption}<table style="border-collapse: collapse; min-width: 420px;">${htmlRows}</table></div>`;
+            });
+
+            content = content.replace(/\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/g, (match, tableBody) => {
+                const cleaned = (tableBody || '')
+                    .replace(/\\hline/g, '')
+                    .replace(/\\cline\{[^}]*\}/g, '')
+                    .trim();
+
+                const rows = cleaned
+                    .split('\\\\')
+                    .map(row => row.trim())
+                    .filter(row => row.length > 0);
+
+                const htmlRows = rows.map((row, idx) => {
+                    const cols = row.split('&').map(c => c.trim());
+                    const tag = idx === 0 ? 'th' : 'td';
+                    const cells = cols.map(c => `<${tag} style="border: 1px solid #e5e7eb; padding: 0.45rem 0.6rem;">${c}</${tag}>`).join('');
+                    return `<tr>${cells}</tr>`;
+                }).join('');
+
+                return `<div style="margin: 1rem 0; overflow-x: auto;"><table style="border-collapse: collapse; min-width: 420px;">${htmlRows}</table></div>`;
+            });
             
             // 转换定理环境
             content = content.replace(/\\begin\{theorem\}([\s\S]*?)\\end\{theorem\}/g, '<div style="border-left: 4px solid #667eea; padding: 1rem; margin: 1rem 0; background: #f0f4ff;"><strong>定理:</strong> $1</div>');
@@ -600,7 +690,7 @@
         function copySource() {
             sourceEditor.select();
             document.execCommand('copy');
-            alert('✅ 源代码已复制到剪贴板！');
+            alert('源代码已复制到剪贴板');
         }
         
         function toggleFullscreen() {

@@ -45,6 +45,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'pdf'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif'}
+MAX_BATCH_PDF_FILES = 5
 
 # 存储转换任务的状态
 conversion_tasks = {}
@@ -97,6 +98,40 @@ def secure_filename(filename):
     if ext:
         return f"{name}.{ext}"
     return name
+
+
+def _sanitize_task_label(raw: str) -> str:
+    """生成适合 task_id 的短标签（仅字母数字、下划线、连字符）。"""
+    if not raw:
+        return 'task'
+    text = unicodedata.normalize('NFKD', raw)
+    text = re.sub(r'[^\w\-]+', '_', text, flags=re.UNICODE)
+    text = re.sub(r'_+', '_', text).strip('_.-')
+    return text[:48] or 'task'
+
+
+def build_task_id(prefix: str, source_filename: str, timestamp: int) -> str:
+    """按文件名生成可读 task_id。"""
+    stem = Path(source_filename or '').stem
+    label = _sanitize_task_label(stem)
+    return f"{prefix}_{label}_{timestamp}"
+
+
+def build_output_filename(source_filename: str, translate: bool = False, index: int = None) -> str:
+    """按源文件名生成输出 tex 名称，重名自动加序号。"""
+    safe_source = secure_filename(source_filename)
+    stem = Path(safe_source).stem or 'output'
+    stem = stem.strip() or 'output'
+    suffix = '_cn' if translate else ''
+    index_suffix = f"_{index + 1}" if index is not None else ''
+
+    base_name = f"{stem}{index_suffix}{suffix}"
+    candidate = f"{base_name}.tex"
+    sequence = 2
+    while (OUTPUT_FOLDER / candidate).exists():
+        candidate = f"{base_name}_{sequence}.tex"
+        sequence += 1
+    return candidate
 
 
 def parse_pages_input(pages_str):
@@ -178,7 +213,7 @@ def _save_async_pdf_history(filename, model, translate, pages_str, output_path, 
             'total_pages': result.get('total_pages', 0),
             'processed_pages': result.get('processed_pages', 0),
             'total_tokens': result.get('total_tokens', 0),
-            'estimated_cost': result.get('estimated_cost', 0),
+            'estimated_cost': 0,
             'processing_time': result.get('processing_time', 0)
         }
     })
@@ -201,7 +236,6 @@ def _run_async_pdf_task(task_id: str):
     add_wrapper = payload.get('add_wrapper', True)
     template_name = payload.get('template_name', 'article')
     quality_mode = payload.get('quality_mode', 'standard')
-    preserve_layout_images = payload.get('preserve_layout_images', False)
 
     try:
         if not pdf_path or not Path(pdf_path).exists():
@@ -223,8 +257,7 @@ def _run_async_pdf_task(task_id: str):
             translate=translate,
             task_id=task_id,
             template_name=template_name,
-            quality_mode=quality_mode,
-            preserve_layout_images=preserve_layout_images
+            quality_mode=quality_mode
         )
 
         latex_content = Path(result['output_path']).read_text(encoding='utf-8')
@@ -241,7 +274,7 @@ def _run_async_pdf_task(task_id: str):
                 'total_tokens': result.get('total_tokens', 0),
                 'prompt_tokens': result.get('prompt_tokens', 0),
                 'completion_tokens': result.get('completion_tokens', 0),
-                'estimated_cost': result.get('estimated_cost', 0),
+                'estimated_cost': 0,
                 'processing_time': result.get('processing_time', 0)
             }
         }
@@ -346,7 +379,6 @@ def convert_pdf():
         task_id = request.form.get('task_id', '')  # 获取前端传来的task_id
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
-        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
         
         # 解析页码
         pages = None
@@ -360,7 +392,7 @@ def convert_pdf():
         filename = secure_filename(file.filename)
         timestamp = int(time.time())
         if not task_id:  # 如果前端没有传task_id，则生成一个
-            task_id = f"task_{timestamp}"
+            task_id = build_task_id('task', filename, timestamp)
         unique_filename = f"{timestamp}_{filename}"
         filepath = app.config['UPLOAD_FOLDER'] / unique_filename
         file.save(filepath)
@@ -387,7 +419,7 @@ def convert_pdf():
         
         # 生成输出文件名
         suffix = "_cn" if translate else ""
-        output_filename = f"{timestamp}_{Path(filename).stem}{suffix}.tex"
+        output_filename = build_output_filename(filename, translate=translate)
         output_path = app.config['OUTPUT_FOLDER'] / output_filename
         
         # 执行转换
@@ -399,8 +431,7 @@ def convert_pdf():
             translate=translate,
             task_id=task_id,
             template_name=template_name,
-            quality_mode=quality_mode,
-            preserve_layout_images=preserve_layout_images
+            quality_mode=quality_mode
         )
         
         # 读取生成的LaTeX内容
@@ -418,7 +449,7 @@ def convert_pdf():
                 'total_pages': result.get('total_pages', 0),
                 'processed_pages': result.get('processed_pages', 0),
                 'total_tokens': result.get('total_tokens', 0),
-                'estimated_cost': result.get('estimated_cost', 0),
+                'estimated_cost': 0,
                 'processing_time': result.get('processing_time', 0)
             }
         })
@@ -443,7 +474,7 @@ def convert_pdf():
                 'total_tokens': result.get('total_tokens', 0),
                 'prompt_tokens': result.get('prompt_tokens', 0),
                 'completion_tokens': result.get('completion_tokens', 0),
-                'estimated_cost': result.get('estimated_cost', 0),
+                'estimated_cost': 0,
                 'processing_time': result.get('processing_time', 0)
             }
         }
@@ -520,9 +551,16 @@ def batch_convert_pdf():
             return jsonify({'error': '文件列表为空'}), 400
         
         # 限制批量数量
-        max_files = 10
-        if len(files) > max_files:
-            return jsonify({'error': f'最多支持同时上传{max_files}个文件'}), 400
+        if len(files) > MAX_BATCH_PDF_FILES:
+            return jsonify({'error': f'最多支持同时上传{MAX_BATCH_PDF_FILES}个PDF文件'}), 400
+
+        # 校验重复文件名（视为非“不同PDF”）
+        normalized_names = []
+        for f in files:
+            if f and f.filename:
+                normalized_names.append(secure_filename(f.filename).lower())
+        if len(normalized_names) != len(set(normalized_names)):
+            return jsonify({'error': '检测到重复PDF文件名，请上传不同的PDF文件'}), 400
         
         # 验证所有文件
         for file in files:
@@ -538,7 +576,6 @@ def batch_convert_pdf():
         model = request.form.get('model', settings.DEFAULT_MODEL)  # 获取模型参数
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
-        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
         
         # 解析页码
         pages = None
@@ -548,9 +585,9 @@ def batch_convert_pdf():
             except ValueError as e:
                 return jsonify({'error': str(e)}), 400
         
-        # 创建批量任务ID
+        # 创建批量任务ID（优先使用前端传入，确保WebSocket房间一致）
         timestamp = int(time.time())
-        batch_id = f"batch_{timestamp}"
+        batch_id = request.form.get('task_id', '').strip() or f"batch_{timestamp}"
         
         # 初始化批量任务状态
         conversion_tasks[batch_id] = {
@@ -597,7 +634,7 @@ def batch_convert_pdf():
                 
                 # 生成输出文件名
                 suffix = "_cn" if translate else ""
-                output_filename = f"{timestamp}_{idx}_{Path(filename).stem}{suffix}.tex"
+                output_filename = build_output_filename(filename, translate=translate, index=idx)
                 output_path = app.config['OUTPUT_FOLDER'] / output_filename
                 
                 # 执行转换
@@ -609,8 +646,7 @@ def batch_convert_pdf():
                     translate=translate,
                     task_id=task_id,
                     template_name=template_name,
-                    quality_mode=quality_mode,
-                    preserve_layout_images=preserve_layout_images
+                    quality_mode=quality_mode
                 )
                 
                 # 读取内容
@@ -630,7 +666,7 @@ def batch_convert_pdf():
                         'total_tokens': result.get('total_tokens', 0),
                         'prompt_tokens': result.get('prompt_tokens', 0),
                         'completion_tokens': result.get('completion_tokens', 0),
-                        'estimated_cost': result.get('estimated_cost', 0),
+                        'estimated_cost': 0,
                         'processing_time': result.get('processing_time', 0)
                     },
                     'success': True
@@ -651,7 +687,7 @@ def batch_convert_pdf():
                         'total_pages': result.get('total_pages', 0),
                         'processed_pages': result.get('processed_pages', 0),
                         'total_tokens': result.get('total_tokens', 0),
-                        'estimated_cost': result.get('estimated_cost', 0),
+                        'estimated_cost': 0,
                         'processing_time': result.get('processing_time', 0)
                     }
                 })
@@ -675,7 +711,7 @@ def batch_convert_pdf():
             'failed_files': sum(1 for r in results if not r.get('success', False)),
             'total_pages': sum(r.get('stats', {}).get('total_pages', 0) for r in results if r.get('success', False)),
             'total_tokens': sum(r.get('stats', {}).get('total_tokens', 0) for r in results if r.get('success', False)),
-            'total_cost': sum(r.get('stats', {}).get('estimated_cost', 0) for r in results if r.get('success', False)),
+            'total_cost': 0,
             'total_time': sum(r.get('stats', {}).get('processing_time', 0) for r in results if r.get('success', False))
         }
         
@@ -954,7 +990,6 @@ def convert_image():
         add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
-        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
         
         # 调试日志
         print(f"[图片转换] 原始参数: translate_raw='{translate_raw}' (type={type(translate_raw)})")
@@ -976,7 +1011,7 @@ def convert_image():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        output_filename = f"{timestamp}_{Path(filename).stem}.tex"
+        output_filename = build_output_filename(filename, translate=False)
         output_path = OUTPUT_FOLDER / output_filename
         
         result = loop.run_until_complete(
@@ -1019,21 +1054,7 @@ def convert_image():
         }
         history_manager.add_entry(history_entry)
         
-        # 计算成本（根据模型）
         usage = result['usage_stats']
-        estimated_cost = 0.0
-        
-        # DeepSeek 定价 (per 1M tokens)
-        if 'deepseek' in model.lower():
-            input_cost_per_m = 0.14  # $0.14 per 1M input tokens
-            output_cost_per_m = 0.28  # $0.28 per 1M output tokens
-            estimated_cost = (
-                usage.get('prompt_tokens', 0) * input_cost_per_m / 1_000_000 +
-                usage.get('completion_tokens', 0) * output_cost_per_m / 1_000_000
-            )
-        else:
-            # 其他模型使用通用估算
-            estimated_cost = usage.get('total_tokens', 0) * 0.002 / 1000
         
         # 构建统一的stats结构
         stats = {
@@ -1042,7 +1063,7 @@ def convert_image():
             'prompt_tokens': usage.get('prompt_tokens', 0),
             'completion_tokens': usage.get('completion_tokens', 0),
             'total_tokens': usage.get('total_tokens', 0),
-            'estimated_cost': estimated_cost,
+            'estimated_cost': 0,
             'processing_time': round(result['elapsed_time'], 2)
         }
         
@@ -1163,26 +1184,15 @@ def convert_images():
             except:
                 pass
         
-        # 计算总成本和统计信息
-        total_cost = 0.0
+        # 汇总统计信息（不再计算成本）
         total_tokens = 0
         total_time = 0.0
-        
-        # DeepSeek 定价
-        input_cost_per_m = 0.14 if 'deepseek' in model.lower() else 0.002
-        output_cost_per_m = 0.28 if 'deepseek' in model.lower() else 0.002
         
         # 处理每个结果，添加统一的stats结构
         processed_results = []
         for res in result.get('results', []):
             if res.get('success'):
                 usage = res.get('usage_stats', {})
-                estimated_cost = (
-                    usage.get('prompt_tokens', 0) * input_cost_per_m / 1_000_000 +
-                    usage.get('completion_tokens', 0) * output_cost_per_m / 1_000_000
-                )
-                
-                total_cost += estimated_cost
                 total_tokens += usage.get('total_tokens', 0)
                 total_time += res.get('elapsed_time', 0)
                 
@@ -1193,7 +1203,7 @@ def convert_images():
                     'prompt_tokens': usage.get('prompt_tokens', 0),
                     'completion_tokens': usage.get('completion_tokens', 0),
                     'total_tokens': usage.get('total_tokens', 0),
-                    'estimated_cost': estimated_cost,
+                    'estimated_cost': 0,
                     'processing_time': round(res.get('elapsed_time', 0), 2)
                 }
                 
@@ -1216,7 +1226,7 @@ def convert_images():
                 'successful_files': result.get('successful_images', 0),
                 'total_pages': result.get('successful_images', 0),  # 图片按成功数量计
                 'total_tokens': total_tokens,
-                'total_cost': total_cost,
+                'total_cost': 0,
                 'total_time': round(total_time, 2)
             }
         }
@@ -1261,7 +1271,6 @@ def convert_pdf_async():
         model = request.form.get('model', settings.DEFAULT_MODEL)
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
-        preserve_layout_images = request.form.get('preserve_layout_images', 'false').lower() == 'true'
 
         pages = None
         if pages_str:
@@ -1272,14 +1281,13 @@ def convert_pdf_async():
 
         filename = secure_filename(file.filename)
         timestamp = int(time.time())
-        task_id = request.form.get('task_id', f'async_{timestamp}')
+        task_id = request.form.get('task_id', '').strip() or build_task_id('async', filename, timestamp)
 
         upload_name = f"async_{timestamp}_{filename}"
         filepath = app.config['UPLOAD_FOLDER'] / upload_name
         file.save(filepath)
 
-        suffix = '_cn' if translate else ''
-        output_filename = f"{timestamp}_{Path(filename).stem}{suffix}.tex"
+        output_filename = build_output_filename(filename, translate=translate)
         output_path = app.config['OUTPUT_FOLDER'] / output_filename
 
         payload = {
@@ -1292,8 +1300,7 @@ def convert_pdf_async():
             'pages': pages,
             'add_wrapper': add_wrapper,
             'template_name': template_name,
-            'quality_mode': quality_mode,
-            'preserve_layout_images': preserve_layout_images
+            'quality_mode': quality_mode
         }
         async_task_manager.create_task(task_id, payload)
         _start_async_pdf_task(task_id)

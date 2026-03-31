@@ -14,6 +14,7 @@ let currentPhaseRank = 0;
 let historyCurrentPage = 1;
 const HISTORY_PAGE_SIZE = 10;
 const HISTORY_MAX_RECORDS = 20;
+const MAX_BATCH_PDF_FILES = 5;
 
 const STATUS_RANK = {
     preparing: 0,
@@ -26,14 +27,7 @@ const STATUS_RANK = {
     error: 5
 };
 
-// 货币设置
-let USD_TO_CNY_RATE = 7.2;  // 美元到人民币汇率（可由后端配置覆盖）
-
-// 货币转换函数
-function formatCurrency(usdAmount) {
-    const cnyAmount = usdAmount * USD_TO_CNY_RATE;
-    return `¥${cnyAmount.toFixed(2)}`;
-}
+// 成本统计已移除，保留接口结构但不再进行货币计算。
 
 // 安全的localStorage访问（避免跟踪保护阻止）
 const safeStorage = {
@@ -97,7 +91,38 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAvailableModels();
     loadHistory();
     loadTaskCenter();
+    initMinimalMotion();
 });
+
+function initMinimalMotion() {
+    const revealTargets = document.querySelectorAll('.header, .main-content, .history-section, .footer');
+    if (!revealTargets.length) {
+        return;
+    }
+
+    revealTargets.forEach((el) => el.classList.add('reveal-item'));
+
+    if (!('IntersectionObserver' in window)) {
+        revealTargets.forEach((el) => el.classList.add('is-visible'));
+        return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('is-visible');
+                observer.unobserve(entry.target);
+            }
+        });
+    }, {
+        threshold: 0.14
+    });
+
+    revealTargets.forEach((el, index) => {
+        el.style.transitionDelay = `${Math.min(index * 90, 360)}ms`;
+        observer.observe(el);
+    });
+}
 
 async function loadPublicConfig() {
     try {
@@ -106,10 +131,7 @@ async function loadPublicConfig() {
             return;
         }
         const data = await response.json();
-        const rate = data?.config?.usd_to_cny_rate;
-        if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) {
-            USD_TO_CNY_RATE = rate;
-        }
+        // 兼容保留：当前前端不再使用成本换算。
     } catch (error) {
         console.warn('读取公开配置失败，使用默认汇率:', error.message);
     }
@@ -269,6 +291,12 @@ function setupLatexSidebar() {
 
 // 初始化WebSocket
 function initWebSocket() {
+    if (typeof io !== 'function') {
+        console.error('Socket.IO 客户端未加载，实时进度功能将降级。');
+        addTerminalLog('warning', '实时通信库加载失败，已切换为非实时模式。');
+        return;
+    }
+
     socket = io({
         transports: ['websocket', 'polling'],
         reconnection: true,
@@ -283,35 +311,35 @@ function initWebSocket() {
     });
     
     socket.on('connect', () => {
-        console.log('✅ WebSocket 已连接');
+        console.log('WebSocket 已连接');
         if (currentTaskId) {
             socket.emit('join_task', { task_id: currentTaskId });
         }
     });
     
     socket.on('disconnect', (reason) => {
-        console.warn('⚠️ WebSocket 已断开:', reason);
+        console.warn('WebSocket 已断开:', reason);
         // 如果是ping timeout，尝试重连
         if (reason === 'ping timeout' || reason === 'transport close') {
-            console.log('🔄 尝试重新连接...');
+            console.log('尝试重新连接...');
             setTimeout(() => socket.connect(), 1000);
         }
     });
     
     socket.on('connect_error', (error) => {
-        console.error('❌ WebSocket 连接错误:', error.message);
+        console.error('WebSocket 连接错误:', error.message);
     });
     
     socket.on('reconnect', (attemptNumber) => {
-        console.log('✅ WebSocket 重连成功，尝试次数:', attemptNumber);
+        console.log('WebSocket 重连成功，尝试次数:', attemptNumber);
     });
     
     socket.on('reconnect_error', (error) => {
-        console.error('❌ WebSocket 重连失败:', error.message);
+        console.error('WebSocket 重连失败:', error.message);
     });
     
     socket.on('reconnect_attempt', () => {
-        console.log('🔄 WebSocket 尝试重连...');
+        console.log('WebSocket 尝试重连...');
     });
     
     socket.on('progress', (data) => {
@@ -404,11 +432,11 @@ function addTerminalLog(type, message) {
 function getLogPrompt(type) {
     const prompts = {
         'info': '→',
-        'success': '✓',
-        'warning': '⚠',
+        'success': 'OK',
+        'warning': '!',
         'error': '✗',
-        'quality': '📊',
-        'progress': '⚙'
+        'quality': 'Q',
+        'progress': '>'
     };
     return prompts[type] || '→';
 }
@@ -453,7 +481,6 @@ function updateProgress(data) {
         document.getElementById('promptTokens').textContent = (data.tokens.prompt_tokens || 0).toLocaleString();
         document.getElementById('completionTokens').textContent = (data.tokens.completion_tokens || 0).toLocaleString();
         document.getElementById('totalTokens').textContent = (data.tokens.total_tokens || 0).toLocaleString();
-        document.getElementById('estimatedCost').textContent = formatCurrency(data.tokens.estimated_cost || 0);
     }
     
     // 显示终端日志
@@ -470,43 +497,43 @@ function updateProgress(data) {
     progressBarFill.style.transition = 'width 0.3s ease';
     progressBarFill.style.width = `${Math.min(data.percent || 0, 100)}%`;
     
-    // 根据状态显示不同的消息和图标
+    // 根据状态显示不同的消息前缀
     let message = data.message || '';
-    let icon = '';
+    let label = '';
     
     switch (data.status) {
         case 'preparing':
-            icon = '⏳';
+            label = '准备中';
             break;
         case 'uploading':
-            icon = '📤';
+            label = '上传中';
             break;
         case 'extracting':
-            icon = '📄';
+            label = '提取中';
             message = data.message;
             break;
         case 'translating':
-            icon = '🌏';
+            label = '翻译中';
             tokenStats.style.display = 'block';
             break;
         case 'converting':
-            icon = '⚙️';
+            label = '转换中';
             tokenStats.style.display = 'block';
             break;
         case 'processing':
-            icon = '🔄';
+            label = '处理中';
             break;
         case 'completed':
-            icon = '✅';
+            label = '已完成';
             progressBarFill.style.width = '100%';
             break;
         default:
-            icon = '📊';
+            label = '进度';
     }
     
-    // 更新文本（如果消息中没有图标，则添加）
-    if (!message.match(/^[📄📤⏳🌏⚙️✅🔄📊📦📸]/)) {
-        progressText.textContent = `${icon} ${message}`;
+    // 更新文本（如果消息中不含状态前缀，则补充）
+    if (!message.match(/^(准备中|上传中|提取中|翻译中|转换中|处理中|已完成|进度)/)) {
+        progressText.textContent = `${label} · ${message}`;
     } else {
         progressText.textContent = message;
     }
@@ -538,9 +565,9 @@ function updateProgress(data) {
         // 完成时显示完成标记
         if (data.total !== undefined) {
             const unit = isImageMode ? '张图片' : '页';
-            progressDetail.textContent = `✓ 已完成 ${data.total} ${unit}`;
+            progressDetail.textContent = `已完成 ${data.total} ${unit}`;
         } else {
-            progressDetail.textContent = '✓ 已完成';
+            progressDetail.textContent = '已完成';
         }
         progressDetail.style.color = 'var(--success-color)';
     } else {
@@ -624,7 +651,7 @@ function setupBatchFileInput() {
     if (batchInput) {
         batchInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
-                handleBatchFileSelect(Array.from(e.target.files));
+                handleBatchFileSelect(e);
             }
         });
     }
@@ -648,7 +675,7 @@ async function handleFileSelect(file) {
     isBatchMode = false;
     
     const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong> <span style="color: #888;">(正在检测页数...)</span>`;
+    dropText.innerHTML = `已选择: <strong>${file.name}</strong> <span style="color: #888;">(正在检测页数...)</span>`;
     dropText.style.color = 'var(--success-color)';
     
     optionsSection.style.display = 'block';
@@ -656,81 +683,16 @@ async function handleFileSelect(file) {
     // 获取PDF页数
     try {
         const pageCount = await getPdfPageCount(file);
-        dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong> <span style="color: #888;">(共 ${pageCount} 页)</span>`;
+        dropText.innerHTML = `已选择: <strong>${file.name}</strong> <span style="color: #888;">(共 ${pageCount} 页)</span>`;
         
         // 更新页码输入提示
         const pagesInput = document.getElementById('pagesInput');
         pagesInput.placeholder = `例如: 1-3,5,7-9 (共${pageCount}页)`;
     } catch (error) {
         console.error('获取页数失败:', error);
-        dropText.innerHTML = `✓ 已选择: <strong>${file.name}</strong>`;
+        dropText.innerHTML = `已选择: <strong>${file.name}</strong>`;
     }
     
-    optionsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-// 处理批量文件选择
-async function handleBatchFileSelect(files) {
-    // 验证文件
-    const maxFiles = 10;
-    if (files.length > maxFiles) {
-        showError(`最多支持同时上传${maxFiles}个文件`);
-        return;
-    }
-
-    const maxSize = 50 * 1024 * 1024;
-    const validFiles = [];
-    const invalidFiles = [];
-
-    for (const file of files) {
-        if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
-            invalidFiles.push(`${file.name} (不是PDF)`);
-        } else if (file.size > maxSize) {
-            invalidFiles.push(`${file.name} (超过50MB)`);
-        } else {
-            validFiles.push(file);
-        }
-    }
-
-    if (invalidFiles.length > 0) {
-        showError(`以下文件无效:\n${invalidFiles.join('\n')}`);
-        if (validFiles.length === 0) return;
-    }
-
-    selectedFiles = validFiles;
-    selectedFile = null;
-    isBatchMode = true;
-
-    const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件 <span style="color: #888;">(正在检测页数...)</span>`;
-    dropText.style.color = 'var(--success-color)';
-    
-    optionsSection.style.display = 'block';
-    
-    // 异步获取所有文件的页数
-    try {
-        const fileInfos = await Promise.all(
-            validFiles.map(async (file) => {
-                try {
-                    const pageCount = await getPdfPageCount(file);
-                    return { name: file.name, pages: pageCount };
-                } catch (error) {
-                    console.error(`获取${file.name}页数失败:`, error);
-                    return { name: file.name, pages: '?' };
-                }
-            })
-        );
-        
-        const totalPages = fileInfos.reduce((sum, info) => sum + (typeof info.pages === 'number' ? info.pages : 0), 0);
-        
-        dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件 <span style="color: #888;">(共 ${totalPages} 页)</span>:<br>` +
-            fileInfos.map(info => `<small>• ${info.name} (${info.pages}页)</small>`).join('<br>');
-    } catch (error) {
-        console.error('批量获取页数失败:', error);
-        dropText.innerHTML = `✓ 已选择 <strong>${validFiles.length}</strong> 个文件:<br>` +
-            validFiles.map(f => `<small>• ${f.name}</small>`).join('<br>');
-    }
-
     optionsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -743,8 +705,7 @@ function collectCommonOptions() {
     return {
         model: document.getElementById('modelSelect').value,
         template: document.getElementById('templateSelect')?.value || 'article',
-        quality_mode: document.getElementById('qualityModeSelect')?.value || 'standard',
-        preserve_layout_images: document.getElementById('preserveLayoutImagesOption')?.checked || false
+        quality_mode: document.getElementById('qualityModeSelect')?.value || 'standard'
     };
 }
 
@@ -793,7 +754,9 @@ async function resumeLastAsyncTask() {
             throw new Error(data.error || '恢复失败');
         }
         currentTaskId = taskId;
-        socket.emit('join_task', { task_id: taskId });
+        if (socket) {
+            socket.emit('join_task', { task_id: taskId });
+        }
         progressSection.style.display = 'block';
         optionsSection.style.display = 'none';
         resultSection.style.display = 'none';
@@ -850,7 +813,9 @@ async function startSingleConversion() {
     const taskId = `task_${timestamp}`;
     currentTaskId = taskId;
     currentPhaseRank = 0;
-    socket.emit('join_task', { task_id: taskId });
+    if (socket) {
+        socket.emit('join_task', { task_id: taskId });
+    }
     
     // 重置并显示终端日志
     const terminalLog = document.getElementById('terminalLog');
@@ -863,7 +828,7 @@ async function startSingleConversion() {
         percent: 0,
         current: 0,
         total: 100,
-        message: '📤 准备上传文件...',
+        message: '准备上传文件...',
         status: 'preparing'
     });
 
@@ -886,7 +851,6 @@ async function startSingleConversion() {
         formData.append('model', options.model);
         formData.append('template', options.template);
         formData.append('quality_mode', options.quality_mode);
-        formData.append('preserve_layout_images', options.preserve_layout_images);
         formData.append('task_id', taskId);  // 传递task_id
         if (pages) {
             formData.append('pages', pages);
@@ -903,7 +867,7 @@ async function startSingleConversion() {
                     percent: percentComplete,
                     current: e.loaded,
                     total: e.total,
-                    message: `📤 正在上传文件... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`,
+                    message: `上传文件中... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`,
                     status: 'uploading'
                 });
             }
@@ -915,7 +879,7 @@ async function startSingleConversion() {
                 percent: 15,
                 current: 1,
                 total: 1,
-                message: '✅ 文件上传完成，开始处理...',
+                message: '文件上传完成，开始处理...',
                 status: 'processing'
             });
         });
@@ -979,6 +943,11 @@ function formatBytes(bytes) {
 
 // 批量转换
 async function startBatchConversion() {
+    if (selectedFiles.length > MAX_BATCH_PDF_FILES) {
+        showError(`最多支持同时翻译 ${MAX_BATCH_PDF_FILES} 个不同的PDF文件`);
+        return;
+    }
+
     const translate = document.getElementById('translateOption').checked;
     const addWrapper = document.getElementById('wrapperOption').checked;
     const pagesInput = document.getElementById('pagesInput').value.trim();
@@ -995,14 +964,19 @@ async function startBatchConversion() {
     const terminalBody = document.getElementById('terminalBody');
     terminalLog.style.display = 'block';
     terminalBody.innerHTML = '';
-    addTerminalLog('info', `开始批量转换 ${selectedFiles.length} 个文件...`);
+    const batchTaskId = `batch_${Date.now()}`;
+    currentTaskId = batchTaskId;
+    if (socket) {
+        socket.emit('join_task', { task_id: batchTaskId });
+    }
+    addTerminalLog('info', `开始批量转换 ${selectedFiles.length} 个文件... (任务ID: ${batchTaskId})`);
     currentPhaseRank = 0;
 
     updateProgress({
         percent: 0,
         current: 0,
         total: selectedFiles.length,
-        message: `📦 准备批量处理 ${selectedFiles.length} 个文件...`,
+        message: `准备批量处理 ${selectedFiles.length} 个文件...`,
         status: 'preparing'
     });
 
@@ -1030,7 +1004,7 @@ async function startBatchConversion() {
         formData.append('model', options.model);
         formData.append('template', options.template);
         formData.append('quality_mode', options.quality_mode);
-        formData.append('preserve_layout_images', options.preserve_layout_images);
+        formData.append('task_id', batchTaskId);
         if (pages) {
             formData.append('pages', pages);
         }
@@ -1049,7 +1023,7 @@ async function startBatchConversion() {
                     percent: percentComplete,
                     current: e.loaded,
                     total: e.total,
-                    message: `📤 正在上传 ${selectedFiles.length} 个文件... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`,
+                    message: `上传 ${selectedFiles.length} 个文件中... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`,
                     status: 'uploading'
                 });
             }
@@ -1061,7 +1035,7 @@ async function startBatchConversion() {
                 percent: 10,
                 current: 0,
                 total: selectedFiles.length,
-                message: '✅ 文件上传完成，开始批量处理...',
+                message: '文件上传完成，开始批量处理...',
                 status: 'processing'
             });
         });
@@ -1095,10 +1069,18 @@ async function startBatchConversion() {
         });
 
         const result = await uploadPromise;
-        
-        // 不再直接调用 showBatchResult，等待 WebSocket 的 'completed' 事件
-        // WebSocket 会在转换完成时自动调用 showBatchResult
-        console.log('批量转换请求已发送，等待 WebSocket 完成通知...');
+
+        // 优先使用 WebSocket；若连接异常导致未收到 completed，则使用 HTTP 结果兜底。
+        setTimeout(() => {
+            const waitingForSocket =
+                currentTaskId === batchTaskId &&
+                resultSection.style.display !== 'block' &&
+                progressSection.style.display === 'block';
+            if (waitingForSocket && result?.success) {
+                addTerminalLog('info', '未收到实时完成事件，已切换为HTTP结果展示。');
+                showBatchResult(result);
+            }
+        }, 1200);
 
     } catch (error) {
         console.error('批量转换错误:', error);
@@ -1140,8 +1122,6 @@ function showResult(result) {
         
         document.getElementById('resultTokens').textContent = 
             (result.stats.total_tokens || 0).toLocaleString();
-        document.getElementById('resultCost').textContent = 
-            formatCurrency(result.stats.estimated_cost || 0);
         document.getElementById('resultTime').textContent = 
             `${result.stats.processing_time || 0}s`;
         
@@ -1152,20 +1132,16 @@ function showResult(result) {
             (result.stats.completion_tokens || 0).toLocaleString();
         document.getElementById('totalTokens').textContent = 
             (result.stats.total_tokens || 0).toLocaleString();
-        document.getElementById('estimatedCost').textContent = 
-            formatCurrency(result.stats.estimated_cost || 0);
     } else {
         // 如果没有stats，显示默认值
         const pagesText = isImageMode ? '1 张' : '0 / 0';
         document.getElementById('resultPages').textContent = pagesText;
         document.getElementById('resultTokens').textContent = '0';
-        document.getElementById('resultCost').textContent = '¥0.00';
         document.getElementById('resultTime').textContent = '0s';
         
         document.getElementById('promptTokens').textContent = '0';
         document.getElementById('completionTokens').textContent = '0';
         document.getElementById('totalTokens').textContent = '0';
-        document.getElementById('estimatedCost').textContent = '¥0.00';
     }
 
     // 设置下载按钮
@@ -1218,13 +1194,13 @@ function showError(message) {
 }
 
 // 复制到剪贴板（增强版，支持多种方式）
-function copyToClipboard() {
+function copyToClipboard(event) {
     if (!latexContent) {
         showCopyMessage('没有可复制的内容', false);
         return;
     }
 
-    const btn = event.target.closest('button');
+    const btn = event?.target?.closest ? event.target.closest('button') : null;
     const originalHTML = btn.innerHTML;
 
     // 方法1: 使用现代 Clipboard API
@@ -1356,11 +1332,14 @@ function showToast(message, type = 'info') {
 }
 
 // 全屏切换
-function toggleFullscreen() {
+function toggleFullscreen(event) {
     const codePreview = document.querySelector('.code-preview');
     codePreview.classList.toggle('fullscreen');
     
-    const btn = event.target.closest('button');
+    const btn = event?.target?.closest ? event.target.closest('button') : null;
+    if (!btn) {
+        return;
+    }
     if (codePreview.classList.contains('fullscreen')) {
         btn.innerHTML = `
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -1393,7 +1372,6 @@ function showBatchResult(result) {
         : `${stats.total_pages || 0}`;
     document.getElementById('resultPages').textContent = pagesText;
     document.getElementById('resultTokens').textContent = (stats.total_tokens || 0).toLocaleString();
-    document.getElementById('resultCost').textContent = formatCurrency(stats.total_cost || 0);
     document.getElementById('resultTime').textContent = `${(stats.total_time || 0).toFixed(1)}s`;
 
     // 显示批量结果列表
@@ -1421,7 +1399,7 @@ function showBatchResult(result) {
             ${results.map((r, idx) => `
                 <div class="batch-result-item ${r.success ? 'success' : 'error'}">
                     <div class="batch-result-header">
-                        <span class="batch-result-icon">${r.success ? '✅' : '❌'}</span>
+                        <span class="batch-result-icon">${r.success ? 'SUCCESS' : 'FAILED'}</span>
                         <span class="batch-result-filename">${r.filename}</span>
                         <div class="batch-result-actions">
                             ${r.success ? `
@@ -1445,10 +1423,9 @@ function showBatchResult(result) {
                     </div>
                     ${r.success ? `
                         <div class="batch-result-stats">
-                            <span>📄 ${r.stats.processed_pages} 页</span>
-                            <span>🔤 ${r.stats.total_tokens.toLocaleString()} tokens</span>
-                            <span>💰 ${formatCurrency(r.stats.estimated_cost)}</span>
-                            <span>⏱️ ${r.stats.processing_time}s</span>
+                            <span>页数 ${r.stats.processed_pages}</span>
+                            <span>Tokens ${r.stats.total_tokens.toLocaleString()}</span>
+                            <span>耗时 ${r.stats.processing_time}s</span>
                         </div>
                     ` : `
                         <div class="batch-result-error">错误: ${r.error}</div>
@@ -1603,7 +1580,7 @@ function resetApp() {
     isBatchMode = false;
 
     const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = '拖拽PDF文件到这里';
+    dropText.innerHTML = '拖拽文件到这里';
     dropText.style.color = '';
 
     fileInput.value = '';
@@ -1619,8 +1596,6 @@ function resetApp() {
     if (templateSelect) templateSelect.value = 'article';
     if (qualityModeSelect) qualityModeSelect.value = 'standard';
     if (asyncOption) asyncOption.checked = false;
-    const preserveLayoutImagesOption = document.getElementById('preserveLayoutImagesOption');
-    if (preserveLayoutImagesOption) preserveLayoutImagesOption.checked = false;
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'none';
@@ -1629,6 +1604,33 @@ function resetApp() {
     tokenStats.style.display = 'none';
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function openRenderPreview(content, filename = '') {
+    if (!content) {
+        showToast('没有可渲染的LaTeX代码', 'error');
+        return;
+    }
+
+    // 多通道传递，避免浏览器阻止 localStorage 时首次渲染失败。
+    safeStorage.setItem('latexContent', content);
+    if (filename) {
+        safeStorage.setItem('latexFilename', filename);
+    }
+
+    window.__latexRenderPayload = {
+        latexContent: content,
+        latexFilename: filename || ''
+    };
+
+    const renderWindow = window.open('/render', '_blank', 'width=1400,height=900');
+    if (renderWindow) {
+        try {
+            renderWindow.name = JSON.stringify(window.__latexRenderPayload);
+        } catch (error) {
+            console.warn('写入渲染窗口 payload 失败:', error.message);
+        }
+    }
 }
 
 // LaTeX本地渲染（使用KaTeX）
@@ -1640,11 +1642,7 @@ function renderLatex(content = null) {
         return;
     }
 
-    // 保存到localStorage供渲染页面使用
-    safeStorage.setItem('latexContent', contentToRender);
-    
-    // 在新窗口打开渲染页面
-    window.open('/render', '_blank', 'width=1400,height=900');
+    openRenderPreview(contentToRender, safeStorage.getItem('latexFilename') || '');
 }
 
 // 为批量结果渲染特定文件
@@ -1653,13 +1651,8 @@ function renderBatchFile(fileContent, filename) {
         showToast('无法获取文件内容', 'error');
         return;
     }
-    
-    // 保存到localStorage
-    safeStorage.setItem('latexContent', fileContent);
-    safeStorage.setItem('latexFilename', filename);
-    
-    // 打开渲染页面
-    window.open('/render', '_blank', 'width=1400,height=900');
+
+    openRenderPreview(fileContent, filename || '');
 }
 
 // 加载可用模型列表
@@ -1739,34 +1732,32 @@ async function loadHistory() {
                 const date = new Date(record.timestamp);
                 const dateStr = date.toLocaleString('zh-CN');
                 const model = record.model || 'unknown';
-                const translated = record.translated ? '是' : '否';
+                const language = record.translated ? '中文' : '英文';
                 const pages = record.pages || 'all';
-                const cost = record.stats?.estimated_cost || 0;
                 const tokens = record.stats?.total_tokens || 0;
                 
                 return `
                     <div class="history-item" onclick="viewHistory(${absoluteIndex})">
-                        <div class="history-icon">📄</div>
+                        <div class="history-icon">PDF</div>
                         <div class="history-info">
                             <div class="history-filename">${record.filename}</div>
                             <div class="history-meta">
-                                <span>🤖 ${model}</span>
-                                <span>🌏 翻译: ${translated}</span>
-                                <span>📄 页码: ${pages}</span>
-                                <span>💰 ${formatCurrency(cost)}</span>
-                                <span>🔢 ${tokens.toLocaleString()} tokens</span>
-                                <span>⏰ ${dateStr}</span>
+                                <span>模型 ${model}</span>
+                                <span>语言 ${language}</span>
+                                <span>页码 ${pages}</span>
+                                <span>Tokens ${tokens.toLocaleString()}</span>
+                                <span>时间 ${dateStr}</span>
                             </div>
                         </div>
                         <div class="history-actions" onclick="event.stopPropagation()">
                             <button class="history-action-btn primary" onclick="downloadHistory(${absoluteIndex})">
-                                📥 下载
+                                下载
                             </button>
                             <button class="history-action-btn secondary" onclick="viewHistory(${absoluteIndex})">
-                                👁️ 查看
+                                查看
                             </button>
                             <button class="history-action-btn danger" onclick="deleteHistory(${absoluteIndex})">
-                                🗑️ 删除
+                                删除
                             </button>
                         </div>
                     </div>
@@ -1827,19 +1818,35 @@ async function loadTaskCenter() {
         }
 
         taskList.innerHTML = data.tasks.map(task => {
-            const status = task.status || 'unknown';
+            const rawStatus = task.status || 'unknown';
+            let status = '未完成';
+            if (rawStatus === 'completed') {
+                status = '完成';
+            } else if (rawStatus === 'queued' || rawStatus === 'preparing' || rawStatus === 'uploading') {
+                status = '未完成-排队中';
+            } else if (rawStatus === 'processing' || rawStatus === 'extracting' || rawStatus === 'converting' || rawStatus === 'translating') {
+                status = '未完成-处理中';
+            } else if (rawStatus === 'failed' || rawStatus === 'error') {
+                status = '未完成-失败';
+            } else {
+                status = `未完成-${rawStatus}`;
+            }
             const taskId = task.task_id;
             const updatedAt = task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : '-';
             const progress = task.progress || {};
             const result = task.result || null;
+            const sourceName = task.payload?.filename || result?.source_filename || taskId;
+            const texName = result?.filename || (task.payload?.output_path ? task.payload.output_path.split(/[\\/]/).pop() : '-');
 
             return `
                 <div class="history-item">
-                    <div class="history-icon">🧩</div>
+                    <div class="history-icon">TASK</div>
                     <div class="history-info">
-                        <div class="history-filename">任务 ${taskId}</div>
+                        <div class="history-filename">${sourceName}</div>
                         <div class="history-meta">
+                            <span>任务ID: ${taskId}</span>
                             <span>状态: ${status}</span>
+                            <span>TEX: ${texName}</span>
                             <span>进度: ${progress.percent ?? 0}%</span>
                             <span>信息: ${progress.message || '-'}</span>
                             <span>更新时间: ${updatedAt}</span>
@@ -1847,7 +1854,7 @@ async function loadTaskCenter() {
                     </div>
                     <div class="history-actions">
                         ${result ? `<button class="history-action-btn primary" onclick="openTaskResult('${taskId}')">查看结果</button>` : ''}
-                        ${status === 'failed' ? `<button class="history-action-btn secondary" onclick="resumeTaskById('${taskId}')">恢复</button>` : ''}
+                        ${rawStatus === 'failed' ? `<button class="history-action-btn secondary" onclick="resumeTaskById('${taskId}')">恢复</button>` : ''}
                         ${result?.download_url ? `<button class="history-action-btn secondary" onclick="window.location.href='${result.download_url}'">下载</button>` : ''}
                     </div>
                 </div>
@@ -1879,7 +1886,9 @@ async function resumeTaskById(taskId) {
             throw new Error(data.error || '恢复失败');
         }
         currentTaskId = taskId;
-        socket.emit('join_task', { task_id: taskId });
+        if (socket) {
+            socket.emit('join_task', { task_id: taskId });
+        }
         safeStorage.setItem('lastAsyncTaskId', taskId);
         pollAsyncTask(taskId);
         loadTaskCenter();
@@ -1903,13 +1912,8 @@ async function viewHistory(index) {
                 // 读取文件内容
                 const fileResponse = await fetch(`/api/download/${filename}`);
                 const latexContent = await fileResponse.text();
-                
-                // 保存到localStorage并打开渲染页面
-                safeStorage.setItem('latexContent', latexContent);
-                safeStorage.setItem('latexFilename', filename);
-                
-                // 在新窗口打开渲染页面
-                window.open('/render', '_blank', 'width=1400,height=900');
+
+                openRenderPreview(latexContent, filename);
             }
         } else {
             alert('记录不存在');
@@ -2018,7 +2022,7 @@ function handleImageFileSelect(event) {
     
     // 更新拖放区域提示
     const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `✓ 已选择图片: <strong>${file.name}</strong>`;
+    dropText.innerHTML = `已选择图片: <strong>${file.name}</strong>`;
     dropText.style.color = 'var(--success-color)';
     
     // 显示图片预览
@@ -2040,9 +2044,11 @@ function handleImageFileSelect(event) {
     }
 }
 
-// 处理批量文件选择（支持图片和PDF混合）
-function handleBatchFileSelect(event) {
-    const files = Array.from(event.target.files);
+// 处理批量文件选择（支持图片或PDF，不支持混合）
+function handleBatchFileSelect(eventOrFiles) {
+    const files = Array.isArray(eventOrFiles)
+        ? eventOrFiles
+        : Array.from(eventOrFiles?.target?.files || []);
     if (files.length === 0) return;
     
     // 检查文件类型
@@ -2053,6 +2059,76 @@ function handleBatchFileSelect(event) {
         alert('批量转换不支持混合PDF和图片，请分别上传');
         return;
     }
+
+    // PDF 批量限制：最多 5 个，且过滤重复文件。
+    if (hasPDFs) {
+        const maxSize = 50 * 1024 * 1024;
+        const dedupMap = new Map();
+        const invalidFiles = [];
+
+        for (const file of files) {
+            const isPdf = file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type.includes('pdf'));
+            if (!isPdf) {
+                invalidFiles.push(`${file.name} (不是PDF)`);
+                continue;
+            }
+            if (file.size > maxSize) {
+                invalidFiles.push(`${file.name} (超过50MB)`);
+                continue;
+            }
+            const signature = `${file.name}::${file.size}::${file.lastModified || 0}`;
+            if (!dedupMap.has(signature)) {
+                dedupMap.set(signature, file);
+            }
+        }
+
+        const uniquePdfFiles = Array.from(dedupMap.values());
+        if (uniquePdfFiles.length > MAX_BATCH_PDF_FILES) {
+            showError(`最多支持同时翻译 ${MAX_BATCH_PDF_FILES} 个不同的PDF文件`);
+            return;
+        }
+        if (uniquePdfFiles.length === 0) {
+            showError('请至少选择1个有效PDF文件');
+            return;
+        }
+        if (invalidFiles.length > 0) {
+            showError(`以下文件无效:\n${invalidFiles.join('\n')}`);
+            return;
+        }
+
+        selectedFile = null;
+        selectedImages = [];
+        selectedFiles = uniquePdfFiles;
+        isImageMode = false;
+        isBatchMode = true;
+
+        const dropText = dropZone.querySelector('.drop-text');
+        dropText.innerHTML = `已选择 <strong>${uniquePdfFiles.length}</strong> 个PDF文件（最多${MAX_BATCH_PDF_FILES}个）`;
+        dropText.style.color = 'var(--success-color)';
+
+        // PDF 模式恢复页码选项，隐藏 OCR 图片选项。
+        const ocrGroup = document.getElementById('ocrProviderGroup');
+        if (ocrGroup) {
+            ocrGroup.style.display = 'none';
+        }
+        const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
+        if (pagesGroup) {
+            pagesGroup.style.display = 'block';
+        }
+        const previewSection = document.getElementById('imagePreviewSection');
+        if (previewSection) {
+            previewSection.style.display = 'none';
+        }
+
+        optionsSection.style.display = 'block';
+
+        const batchInfo = document.getElementById('batchInfo');
+        if (batchInfo) {
+            batchInfo.textContent = `已选择 ${uniquePdfFiles.length} 个PDF文件（上限 ${MAX_BATCH_PDF_FILES}）`;
+            batchInfo.style.display = 'block';
+        }
+        return;
+    }
     
     selectedFile = null;
     selectedFiles = files;
@@ -2061,7 +2137,7 @@ function handleBatchFileSelect(event) {
     
     // 更新拖放区域提示
     const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `✓ 已选择 <strong>${files.length}</strong> 个${hasImages ? '图片' : 'PDF'}文件`;
+    dropText.innerHTML = `已选择 <strong>${files.length}</strong> 个${hasImages ? '图片' : 'PDF'}文件`;
     dropText.style.color = 'var(--success-color)';
     
     if (hasImages) {
@@ -2148,7 +2224,7 @@ function removeImage(index) {
         displayImagePreview(selectedImages);
         // 更新提示文本
         const dropText = dropZone.querySelector('.drop-text');
-        dropText.innerHTML = `✓ 已选择 <strong>${selectedImages.length}</strong> 个图片`;
+        dropText.innerHTML = `已选择 <strong>${selectedImages.length}</strong> 个图片`;
     }
 }
 
@@ -2179,7 +2255,7 @@ function handlePaste(event) {
             
             // 更新拖放区域提示
             const dropText = dropZone.querySelector('.drop-text');
-            dropText.innerHTML = `✓ 已粘贴截图: <strong>${file.name}</strong>`;
+            dropText.innerHTML = `已粘贴截图: <strong>${file.name}</strong>`;
             dropText.style.color = 'var(--success-color)';
             
             displayImagePreview([file]);
@@ -2203,7 +2279,7 @@ function handlePaste(event) {
             const pasteHint = document.getElementById('pasteHint');
             if (pasteHint) {
                 pasteHint.style.display = 'block';
-                pasteHint.textContent = '✅ 截图已粘贴！';
+                pasteHint.textContent = '截图已粘贴';
                 setTimeout(() => {
                     pasteHint.style.display = 'none';
                 }, 3000);
@@ -2237,7 +2313,9 @@ async function startImageConversion() {
     const timestamp = Date.now();
     currentTaskId = `task_${timestamp}`;
     currentPhaseRank = 0;
-    socket.emit('join_task', { task_id: currentTaskId });
+    if (socket) {
+        socket.emit('join_task', { task_id: currentTaskId });
+    }
     addTerminalLog('info', `开始图片转换任务: ${currentTaskId}`);
     
     // 初始化进度
@@ -2245,7 +2323,7 @@ async function startImageConversion() {
         percent: 0,
         current: 0,
         total: 100,
-        message: '📸 准备识别图片...',
+        message: '准备识别图片...',
         status: 'preparing'
     });
     
@@ -2304,7 +2382,9 @@ async function startBatchImageConversion() {
     const timestamp = Date.now();
     currentTaskId = `task_${timestamp}`;
     currentPhaseRank = 0;
-    socket.emit('join_task', { task_id: currentTaskId });
+    if (socket) {
+        socket.emit('join_task', { task_id: currentTaskId });
+    }
     addTerminalLog('info', `开始批量图片转换任务: ${currentTaskId} (共 ${selectedImages.length} 张)`);
     
     // 初始化进度
@@ -2312,7 +2392,7 @@ async function startBatchImageConversion() {
         percent: 0,
         current: 0,
         total: selectedImages.length,
-        message: `📸 准备识别 ${selectedImages.length} 张图片...`,
+        message: `准备识别 ${selectedImages.length} 张图片...`,
         status: 'preparing'
     });
     
@@ -2342,7 +2422,7 @@ async function startBatchImageConversion() {
         }
         
         // 批量转换成功
-        addTerminalLog('success', `✅ 批量转换完成！共处理 ${result.successful_images} 张图片`);
+        addTerminalLog('success', `批量转换完成，共处理 ${result.successful_images} 张图片`);
         
     } catch (error) {
         console.error('批量转换失败:', error);

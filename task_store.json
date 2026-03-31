@@ -47,5 +47,109 @@
       "total_tokens": 59754,
       "estimated_cost": 0.084243
     }
+  },
+  "task_1774496609800": {
+    "task_id": "task_1774496609800",
+    "status": "completed",
+    "created_at": "2026-03-26T11:43:29.839687",
+    "updated_at": "2026-03-26T11:44:27.506764",
+    "payload": {
+      "filename": "2303.17992v2.pdf",
+      "pdf_path": "uploads\\async_1774496609_2303.17992v2.pdf",
+      "output_path": "outputs\\1774496609_2303.17992v2_cn.tex",
+      "model": "deepseek-chat",
+      "translate": true,
+      "pages_str": "1,2",
+      "pages": [
+        0,
+        1
+      ],
+      "add_wrapper": true,
+      "template_name": "article",
+      "quality_mode": "standard",
+      "preserve_layout_images": false
+    },
+    "progress": {
+      "current": 2,
+      "total": 2,
+      "percent": 100,
+      "message": "转换完成！处理了 2 页"
+    },
+    "result": {
+      "success": true,
+      "task_id": "task_1774496609800",
+      "filename": "1774496609_2303.17992v2_cn.tex",
+      "content": "\\\\documentclass[12pt]{article}\n\\\\usepackage{amsmath,amssymb,amsthm}\n\\\\usepackage{graphicx}\n\\\\usepackage{hyperref}\n\\\\usepackage{xeCJK}\n\n\\\\begin{document}\n\n% ===== 第 1 页 =====\n\\textbf{一种快速的非负矩阵分解乘法更新算法}\n\n\\textbf{Mai-Quyen Pham$^{*\\dagger}$ J\\'er\\'emy Cohen$^{\\ddagger}$ Thierry Chonavel$^{*}$}\n\n\\textbf{摘要}\n\n非负矩阵分解是无监督机器学习中的重要工具，用于将数据矩阵分解为通常可解释的部分之和。过去三十年间，人们提出了许多专用算法。一个著名的方法是 Lee 和 Seung 于 2002 年提出的乘法更新算法。乘法更新具有许多有趣的特性：易于实现，可适用于稀疏非负矩阵分解等流行变体，并且根据最近的基准测试，对于损失函数不是平方 Frobenius 范数的许多问题，它是最先进的方法。在本手稿中，我们提出通过为每个交替子问题构造更紧致的 Hessian 矩阵上界，来改进被视为交替主化最小化算法的乘法更新算法。收敛性仍然得到保证，并且我们在合成数据集和真实世界数据集上的实践观察到，所提出的快速乘法更新算法通常比常规乘法更新算法显著更快，甚至对于 Frobenius 损失可以与最先进的方法竞争。\n\n\\textbf{关键词---} 非负矩阵分解，二次主化，乘法更新，交替优化\n\n\\section{引言}\n\n非负矩阵分解是将一个矩阵（近似）分解为非负矩阵因子的乘积。在许多应用中，分解的因子为其内容提供了作为部分之和的有趣解释。虽然 Paatero 和 Tapper 可能被认为是数据科学中现代 NMF 公式的提出者\\cite{23}，但其根源更早，源于许多领域，主要是化学计量学和比尔-朗伯定律，例如参见\\cite{11}中的文献综述。NMF 可以表述如下：给定一个矩阵 $V \\in \\mathbb{R}^{M \\times N}$，找到两个非负（逐元素）矩阵 $W \\in \\mathbb{R}^{R \\times N}_{+}$ 和 $H \\in \\mathbb{R}^{R \\times N}_{+}$，其中固定的 $R \\leq \\min(M,N)$，通常选择 $R \\ll \\min(M,N)$，使得\n\\[\nV \\approx W^{T}H. \\tag{1}\n\\]\n形式上，我们通过最小化损失函数 $\\Psi(W,H)$ 来解决一个低秩近似问题：\n\\[\n\\text{找到 } (\\hat{W}, \\hat{H}) \\in \\operatorname*{argmin}_{(W,H)\\in \\mathbb{R}^{R \\times N}_{+} \\times \\mathbb{R}^{R \\times N}_{+}} \\Psi(W,H) \\tag{2}\n\\]\n$\\Psi$ 的经典实例是平方 Frobenius 范数或 Kullback-Leibler 散度，分别在方程 (5) 和 (6) 中定义。整数 $R$ 通常称为近似矩阵 $W^{T}H$ 的非负秩。\n\n$^{*}$IMT Atlantique; UMR CNRS 6285 Lab-STICC (电子邮件: firstname.lastname@imt-atlantique.fr)\n\n$^{\\dagger}$CROSSING IRL CNRS (电子邮件: mai-quyen.pham@cnrs.fr)\n\n$^{\\ddagger}$Univ Lyon, INSA-Lyon, UCBL, UJM-Saint Etienne, CNRS, Inserm, CREATIS UMR 5220, U1206, F-69100 Villeurbanne, France (电子邮件: jeremy.cohen@cnrs.fr).\n\n% ===== 第 2 页 =====\n关于如何计算非负矩阵分解（NMF）问题的解，已有大量文献。现有算法可根据两个标准进行分类：其最小化的损失函数，以及它们是交替求解 $\\mathbf{W}$ 和 $\\mathbf{H}$（即，对于每次迭代 $k\\in\\mathbb{N}$，执行\n\\[\n\\mathbf{H}^{k+1} = \\argmin_{\\mathbf{H}\\in\\mathbb{R}^{R\\times N}_{+}} \\Psi(\\mathbf{W}^{k},\\mathbf{H}) \\tag{3}\n\\]\n\\[\n\\mathbf{W}^{k+1} = \\argmin_{\\mathbf{W}\\in\\mathbb{R}^{R\\times M}_{+}} \\Psi(\\mathbf{W},\\mathbf{H}^{k+1}), \\tag{4}\n\\]\n）还是同时更新 $\\mathbf{W}$ 和 $\\mathbf{H}$。在许多常用的损失函数中，交替算法的子问题是（强）凸的。因此，可以利用块坐标下降理论来确保收敛性保证。此外，这些方法在实践中通常表现良好。对于 Frobenius 损失，最先进的交替算法包括分层交替最小二乘法 \\cite{7,12}。对于包含流行 KL 散度的更一般的 beta 散度损失，由 Lee 和 Seung \\cite{18,19} 提出的乘法更新算法（在本文后续部分我们将简称为 MU）对于许多数据集来说仍然是最先进的 \\cite{14}。\n\nMU 算法实际上是计算 NMF 时非常流行的算法，即使在最小化 Frobenius 损失时也是如此。实现一个基础的 MU 很简单，并且易于修改以纳入正则化项（一种流行的选择是诱导稀疏性的 $\\ell_1$ 惩罚 \\cite{15,30}）。已有许多关于 MU 收敛性和实现的工作 \\cite{20,25,26,29,33}，但这些工作并未修改算法的核心：即用于在梯度下降中定义类矩阵步长的近似对角 Hessian 矩阵的设计。MU 的一个缺点（特别是对于 Frobenius 损失而言）是其收敛速度可能显著慢于其他方法。\n\n在这项工作中，我们的目标是加快 MU 算法的收敛速度。为此，我们提出计算不同的近似对角 Hessian 矩阵，这些矩阵是对真实 Hessian 矩阵更紧密的近似。所提出的算法（我们称之为 fastMU）的迭代保证收敛到目标函数的驻点，但收敛速度未知。更新不再是乘法形式的，而是遵循前向后向算法的通常结构。我们在合成数据集和真实数据集上观察到，对于 Frobenius 损失，fastMU 与最先进的方法具有竞争力，并且可以在 Frobenius 损失和 KL 散度上将 MU 的速度提高几个数量级。然而，当数据非常稀疏或残差很大时，它可能会遇到困难。\n\n\\subsection*{1.1 本文结构}\n第 1 节介绍了研究动机，并阐明了我们工作在该主题中的定位。第 2 节涵盖了关于二次优化技术的相关背景材料。第 3 节提供了支撑 fastMU 算法的 Majorize Minimize 框架的技术细节。第 4 节详细介绍了 fastMU 算法，这是我们工作的主要贡献，它在经验收敛速度上优于 MU。第 5 节展示了在模拟和真实数据案例中的多个实验，并与文献中多种知名经典方法进行了比较。最后，第 6 节给出了我们工作的结论以及未来工作的一些可能展望。\n\n\\subsection*{1.2 符号说明}\n在本节结束前，我们引入以下符号：$\\odot$ 和 $\\oslash$ 分别表示 Hadamard（逐元素）乘法和除法。$\\operatorname{Diag}(\\mathbf{v})$ 表示由向量 $\\mathbf{v}$ 定义元素的对角矩阵。大写粗体字母表示矩阵，小写粗体字母表示列向量。带下标 $n$ 的向量表示对应矩阵的第 $n$ 列。例如，对于矩阵 $\\mathbf{V}\\in\\mathbb{R}^{M\\times N}$（$1\\leq n\\leq N$），$\\mathbf{v}_n$ 表示其第 $n$ 列，且 $\\mathbf{v}_n \\in \\mathbb{R}^{M}$。同样，$v_{a,b}$ 表示矩阵 $\\mathbf{V}$ 的 $(a,b)$ 元素。对于 $\\mathbf{A} \\in \\mathbb{R}^{M\\times N}$，如果 $\\mathbf{A} \\in [\\epsilon,+\\infty)^{M\\times N}$（相应地，$\\mathbf{A} \\in (\\epsilon,+\\infty)^{M\\times N}$），我们记作 $\\mathbf{A} \\geq \\epsilon$（相应地，$\\mathbf{A} > \\epsilon$）。$\\mathbf{A} \\succeq 0$（相应地，$\\mathbf{A} \\succ 0$）表示 $\\mathbf{A} \\in \\mathbb{R}^{N\\times N}$ 是半正定的（相应地，正定的），即对于所有 $\\mathbf{x}\\in\\mathbb{R}^{N}$，有 $\\mathbf{x}^{\\top}\\mathbf{A}\\mathbf{x}\\geq 0$（相应地，$\\mathbf{x}^{\\top}\\mathbf{A}\\mathbf{x}>0$）。$\\mathbf{1}_N$ 表示长度为 $N$ 的全 1 向量，且 $\\mathbf{1}_{M,N} = \\mathbf{1}_M \\mathbf{1}_N^{\\top}$。\n\n\\\\end{document}",
+      "source_text": "A fast Multiplicative Updates algorithm for Non-negative Matrix\nFactorization\nMai-Quyen Pham ∗† J´er´emy Cohen ‡ Thierry Chonavel ∗\nAbstract\nNonnegative Matrix Factorization is an important tool in unsupervised machine learning to de-\ncompose a data matrix into a sum of parts that are often interpretable. Many dedicated algorithms\nhavebeenproposedduringthelastthreedecades. Awell-knownmethodistheMultiplicativeUpdates\nalgorithmproposedbyLeeandSeungin2002. Multiplicativeupdateshavemanyinterestingfeatures:\ntheyaresimpletoimplement,canbeadaptedtopopularvariantssuchassparseNonnegativeMatrix\nFactorization, and, according to recent benchmarks, are state-of-the-art for many problems where\nthe loss function is not the squared Frobenius norm. In this manuscript, we propose to improve\ntheMultiplicativeUpdatesalgorithmseenasanalternatingmajorizationminimizationalgorithmby\ncrafting a tighter upper bound of the Hessian matrix for each alternate subproblem. Convergence is\nstill ensured and we observe in practice on both synthetic and real world dataset that the proposed\nfastMUalgorithmisoftensignificantlyfasterthantheregularMultiplicativeUpdatesalgorithm,and\ncan even be competitive with state-of-the-art methods for the Frobenius loss.\nKeywords— Nonnegative Matrix Factorization, Quadratic majorization, Multiplicative Updates, Alternating\nOptimization\n1 Introduction\nNonnegativeMatrixFactorization(NMF)isthe(approximate)decompositionofamatrixintoaproductofnon-\nnegativematrixfactors. Inmanyapplications,thefactorsofthedecompositiongiveaninterestinginterpretation\nof its content as a sum of parts. While Paatero and Tapper could be attributed with the modern formulation of\nNMF[23]asknowninthedatasciences,itsrootsaremucholderandstemfrommanyfields,primarilychemomet-\nrics, andtheBeerLambertlaw, seeforinstancetheliteraturesurveyin[11]. NMFcanbeformulatedasfollows:\ngiven a matrix V ∈RM×N, find two non-negative (entry-wise) matrices W ∈RR×M and H∈RR×N with fixed\n+ +\nR≤min(M,N), typically, one selects R≪min(M,N), that satisfy\nV≈W⊤H. (1)\nFormally, we solve a low-rank approximation problem by minimizing a loss function Ψ(W,H):\n(cid:16) (cid:17)\nFind W(cid:99),H(cid:98) ∈ argmin Ψ(W,H) (2)\n(W,H)∈RR×M×RR×N\n+ +\nClassical instances of Ψ are the squared Frobenius norm or the Kullback-Leibler divergence (KL) defined in\nEquations (5) and (6). The integer R is often called the nonnegative rank of the approximation matrix W⊤H.\n∗IMTAtlantique;UMRCNRS6285Lab-STICC(email: firstname.lastname@imt-atlantique.fr)\n†CROSSINGIRLCNRS(email: mai-quyen.pham@cnrs.fr)\n‡Univ Lyon, INSA-Lyon, UCBL, UJM-Saint Etienne, CNRS, Inserm, CREATIS UMR 5220, U1206, F-69100 Villeur-\nbanne,France(email: jeremy.cohen@cnrs.fr).\n1\n4202\nraM\n91\n]CO.htam[\n2v29971.3032:viXra\n\nThere is a large body of literature on how to compute solutions to the NMF problem. Existing algorithms could\nbe classified based on two criteria: the loss they minimize, and whether they alternatively solve for W and H,\nthat is, for each iteration k∈N\nHk+1 = argminΨ(Wk,H) (3)\nH∈RR×N\n+\nWk+1 = argmin Ψ(W,Hk+1), (4)\nW∈RR×M\n+\norupdateWandHsimultaneoustly. Inmanyusuallossfunctions,thesubproblemsofthealternatingalgorithms\nare (strongly) convex. Therefore convergence guarantees can be ensured using the theory of block-coordinate\ndescent. Moreover, these methods generally perform well in practice. For the Frobenius loss, state-of-the-art\nalternating algorithms include the Hierarchical Alternating Least Squares [7,12]. For the more general beta-\ndivergencelosswhichincludesthepopularKLdivergence,theMultiplicativeUpdatesalgorithmproposedbyLee\nand Seung [18,19], that we will denote by MU in the rest of this manuscript, is still state-of-the-art for many\ndataset [14].\nThe MU algorithm is in fact a very popular algorithm for computing NMF even when minimizing the Frobenius\nloss. ItissimpletoimplementavanillaMUandeasytomodifyittoaccountforregularizations,apopularchoice\nbeingthesparsity-inducingℓ penalizations[15,30]. Therehasbeenanumberofworksregardingtheconvergence\n1\nand the implementation of MU [20,25,26,29,33], but these works do not modify the core of the algorithm: the\ndesign of an approximate diagonal Hessian matrix used to define matrix-like step sizes in gradient descent. A\ndownsideofMU,inparticularfortheFrobeniusloss,isthatitsconvergencecanbesignificantlyslowerthanother\nmethods.\nIn this work, we aim at speeding up the convergence of the MU algorithm. To this end, we propose to compute\ndifferent approximate diagonal Hessian matrices which are tighter approximations of the true Hessian matrices.\nTheiteratesoftheproposedalgorithm,whichiscoinedfastMU,areguaranteedtoconvergetoastationarypoint\noftheobjectivefunction,buttheconvergencespeedisunknown. Theupdatesarenotmultiplicativeanymorebut\ninstead follow the usual structure of forward-backward algorithms. We observe on both synthetic and realistic\ndataset that fastMU is competitive with state-of-the-art methods for the Frobenius loss, and can speed-up MU\nby several orders of magnitudes in Frobenius loss and KL divergence. It can however struggle when the data is\nvery sparse or when the residuals are large.\n1.1 Structure of the manuscript\nSection 1 introduces the motivation and also specifies the position of our work in the topic. Section 2 covers\nthe relevant background material on quadratic majorization technique. Section 3 provides the technical details\nabout the Majorize Minimize framework which underpins the fastMU algorithm. Section 4 details the fastMU\nalgorithm, the main contribution of our work, which allows for improved empirical convergence speed over MU.\nSection5showsseveralexperimentsinbothsimulationandrealdatacaseswithmanycomparisonswithdifferent\nwell-known and classical methods in the literature. Finally, Section 6 gives the conclusion of our work and some\npossible perspectives for future work.\n1.2 Notations\nToendthissection,letusintroducethefollowingnotations: ⊙and⊘denotetheHadamard(entry-wise)product\nand division, respectively. Diag(v) denotes the diagonal matrix with entries defined from vector v. Uppercase\nbold letters denote matrices, and lowercase bold letters denote column vectors. Vector with index n denotes the\nnthcolumnofthecorrespondingmatrix. Forexample,v willbethen-thcolumnofV∈RM×N with1≤n≤N\nn\nand v ∈ RM. In the same way, v denotes entry (a,b) of matrix V. For A ∈ RM×N, we note A ≥ ϵ (resp.\nn a,b\nA > ϵ) if A ∈ [ϵ,+∞)M×N (resp. A ∈ (ϵ,+∞)M×N). A ⪰ 0 (resp. A ≻ 0) means that A ∈ RN×N is positive\nsemi-definite (resp. positive definite), that is, for all x∈RN, x⊤Ax≥0 (resp. x⊤Ax>0). 1 denotes vector\nN\nof ones with length N and 1 =1 1⊤.\nM,N M N\n2",
+      "download_url": "/api/download/1774496609_2303.17992v2_cn.tex",
+      "stats": {
+        "total_pages": 19,
+        "processed_pages": 2,
+        "total_tokens": 7272,
+        "prompt_tokens": 3891,
+        "completion_tokens": 3381,
+        "estimated_cost": 0.010653,
+        "processing_time": 57.63
+      }
+    },
+    "error": null,
+    "tokens": {
+      "prompt_tokens": 3891,
+      "completion_tokens": 3381,
+      "total_tokens": 7272,
+      "estimated_cost": 0.010653
+    }
+  },
+  "task_1774496624577": {
+    "task_id": "task_1774496624577",
+    "status": "completed",
+    "created_at": "2026-03-26T11:43:44.893506",
+    "updated_at": "2026-03-26T11:44:30.591572",
+    "payload": {
+      "filename": "multconv.pdf",
+      "pdf_path": "uploads\\async_1774496624_multconv.pdf",
+      "output_path": "outputs\\1774496624_multconv_cn.tex",
+      "model": "deepseek-chat",
+      "translate": true,
+      "pages_str": "1,2",
+      "pages": [
+        0,
+        1
+      ],
+      "add_wrapper": true,
+      "template_name": "article",
+      "quality_mode": "standard",
+      "preserve_layout_images": false
+    },
+    "progress": {
+      "current": 2,
+      "total": 2,
+      "percent": 100,
+      "message": "转换完成！处理了 2 页"
+    },
+    "result": {
+      "success": true,
+      "task_id": "task_1774496624577",
+      "filename": "1774496624_multconv_cn.tex",
+      "content": "\\\\documentclass[12pt]{article}\n\\\\usepackage{amsmath,amssymb,amsthm}\n\\\\usepackage{graphicx}\n\\\\usepackage{hyperref}\n\\\\usepackage{xeCJK}\n\n\\\\begin{document}\n\n% ===== 第 1 页 =====\n\\textbf{关于非负矩阵分解中乘法更新算法的收敛性研究}\n\n\\textbf{林智仁}\\\\\n国立台湾大学资讯工程学系，台北 106，台湾\\\\\n\\texttt{cjlin@csie.ntu.edu.tw}\n\n\\textbf{摘要}\\\\\n非负矩阵分解（NMF）对于发现非负数据的基信息非常有用。目前，乘法更新是一种寻找该分解的简单且流行的方法。然而，对于通过最小化近似值与真实值之间欧氏距离这一常见的 NMF 方法，尚无证明表明乘法更新会收敛到 NMF 优化问题的驻点。驻点性很重要，因为它是局部最小值的必要条件。本文讨论了证明该收敛性的困难。我们提出了对现有更新规则的轻微修改，并证明了其收敛性。本文提出的技术可用于证明其他边界约束优化问题的收敛性。\n\n\\textbf{关键词：}\\\\\n非负矩阵分解，乘法更新，驻点性，渐近收敛\n\n\\textbf{I. 引言}\\\\\n非负矩阵分解（NMF）对于发现非负数据的基信息非常有用[12], [9]。给定一个 $n \\times m$ 的数据矩阵 $V$，其中 $V \\ge 0$，以及一个预先确定的正整数 $r < \\min(n,m)$，NMF 旨在找到两个非负矩阵 $W \\in \\mathbb{R}^{n \\times r}$ 和 $H \\in \\mathbb{R}^{r \\times m}$，使得\n\\[\nV \\approx WH。\n\\]\n如果 $V$ 的每一列代表一个对象，则此方法通过 $W$ 中 $r$ 个“基”列的线性组合来近似该对象。NMF 已被应用于许多领域。近期的一篇 NMF 综述见[1]。\n\n% ===== 第 2 页 =====\n寻找 $W$ 和 $H$ 的一种常见方法是最小化 $V$ 与 $WH$ 之间的欧几里得距离：\n\n\\[\n\\min_{W,H} f(W,H) \\equiv \\frac{1}{2} \\sum_{i=1}^{n} \\sum_{j=1}^{m} \\left( V_{ij} - (WH)_{ij} \\right)^2\n\\]\n\n约束条件为 $W_{ia} \\geq 0, H_{bj} \\geq 0, \\forall i, a, b, j$。 (1)\n\n每个非负不等式都是一个“边界约束”，因为它只涉及单个变量。我们还注意到\n\n\\[\n\\sum_{i=1}^{n} \\sum_{j=1}^{m} \\left( V_{ij} - (WH)_{ij} \\right)^2 = \\|V - WH\\|_F^2,\n\\]\n\n其中 $\\|\\cdot\\|_F$ 表示 Frobenius 范数。\n\n解决 NMF 优化问题 (1) 的一种流行方法是 Lee 和 Seung [10] 提出的乘法更新算法。尽管一些论文如 [11] 指出了其可能收敛缓慢，但由于其简单性，该方法仍很流行。Lee 和 Seung [10] 证明了更新会导致函数值非增，但尚未有证据表明任何极限点是驻点。虽然这里的优化问题可能是非凸的且难以找到全局最小值，但驻点性仍然很重要——它是局部最小值的必要条件。因此，现有的乘法更新算法缺乏可靠的优化性质。Gonzales 和 Zhang [6] 提供了数值示例，表明 Lee 和 Seung 在 [10] 中的算法未能逼近驻点。然而，由于可能存在数值不准确性，我们认为要么需要一个收敛性证明，要么需要一个不收敛的示例。其他涉及收敛性问题的研究包括 [1]、[3]。本文对乘法更新方法的收敛性质进行了详细研究。\n\n除了乘法更新外，还有其他方法可用于最小化 NMF 问题 (1)。例如 [4]、[1]、[11]。这些方法可能更高效，但也更复杂。\n\n证明乘法更新收敛性的主要困难来自于非负约束。尽管乘法更新接近标准的定点方法，但现有的定点证明主要处理无约束情况。第二节回顾了 Lee 和 Seung 针对 (1) 的算法，并讨论了证明收敛性的困难。第三节提出了一种改进算法，其每次迭代的计算复杂度相同。对于这个改进过程，第四节随后证明了任何极限点都是驻点。我们还证明了迭代位于一个闭且有界的集合中，因此至少存在一个极限点。\n\n另一种 NMF 公式是最小化 $V$ 与 $WH$ 之间的（广义）Kullback-Leibler 散度：\n\n\\[\n\\min_{W,H} f(W,H) = \\sum_{i=1}^{n} \\sum_{j=1}^{m} \\left( V_{ij} \\log \\frac{V_{ij}}{(WH)_{ij}} - V_{ij} + (WH)_{ij} \\right)\n\\]\n\n约束条件为 $W_{ia} \\geq 0, H_{bj} \\geq 0, \\forall i, a, b, j$。 (2)\n\nLee 和 Seung 也提出了一种乘法算法来最小化 (2)。通过将 (2) 转换为另一种形式，Finesso 和 Spreij [5] 成功分析了其收敛性质。针对 (2) 的乘法更新接近于最大似然中的 EM（期望最大化）算法，因此他们的分析与我们的有很大不同。\n\n\\\\end{document}",
+      "source_text": "1\nOn the Convergence of Multiplicative Update\nAlgorithms for Non-negative Matrix\nFactorization\nChih-Jen Lin\nDepartment of Computer Science\nNational Taiwan University, Taipei 106, Taiwan\ncjlin@csie.ntu.edu.tw\nAbstract\nNon-negative matrix factorization (NMF) is useful to find basis information of non-negative data. Currently,\nmultiplicative updates are a simple and popular way to find the factorization. However, for the common NMF\napproach of minimizing the Euclidean distance between approximate and true values, no proof has shown that that\nmultiplicative updates converge to a stationary point of the NMF optimization problem. Stationarity is important\nas it is a necessary condition of a local minimum. This paper discusses the difficulty of proving the convergence.\nWe propose slight modifications of existing updates and prove their convergence. Techniques invented in this paper\nmay be applied to prove the convergence for other bound-constrained optimization problems.\nKeywords:\nNon-negative matrix factorization, multiplicative updates, stationarity, asymptotic convergence\nI. INTRODUCTION\nNon-negative matrix factorization (NMF) is useful to find basis information of non-negative data [12], [9]. Given\nan n×m data matrix V with V ≥ 0 and a pre-determined positive integer r < min(n,m), NMF finds two\nij\nnon-negative matrices W ∈Rn×r and H ∈Rr×m so that\nV ≈WH.\nIfeachcolumnofV representsanobject,thismethodapproximatesitbyalinearcombinationofr “basis”columns\nin W. NMF has been applied to many application areas. A recent NMF survey is [1].\n\n2\nA common way to find W and H is by minimizing the Euclidean distance between V and WH:\nn m\n1XX(cid:0) (cid:1)2\nmin f(W,H)≡ V −(WH)\nW,H 2 ij ij\ni=1j=1\nsubject to W ≥0,H ≥0,∀i,a,b,j. (1)\nia bj\nEach non-negative inequality is a “bound constraint,” as it relates to only a single variable. We also note that\nn m\nXX(cid:0) V −(WH) (cid:1)2 =kV −WHk2,\nij ij F\ni=1j=1\nwhere k·k is the Frobenius norm.\nF\nA popular approach to solve the NMF optimization problems (1) is a multiplicative update algorithm by Lee and\nSeung [10]. Though some papers such as [11] pointed out its possible slow convergence, this method is popular\ndue to the simplicity. Lee and Seung [10] proved that the update causes the function value to be non-increasing,\nbut there is no proof yet showing that any limit point is stationary. While optimization problems here may be non-\nconvex and finding a global minimum is difficult, the stationarity is still important–it is a necessary condition of a\nlocal minimum. Therefore, existing multiplicative update algorithms lack sound optimization properties. Gonzales\nand Zhang [6] presented numerical examples showing that Lee and Seung’s algorithm in [10] fails to approach a\nstationary point. However, due to possible numerical inaccuracy, we think either a convergence proof or a non-\nconvergenceexampleisdesired.Otherworkwhichhastouchedtheconvergenceissuesincludes[1],[3].Thispaper\nconducts a detailed study about the convergence properties of multiplicative update methods.\nBesides multiplicative updates, other methods are available to minimize the NMF problem (1). Some examples\nare [4], [1], [11]. These approaches may be more efficient, but are also more complicated.\nThe main difficulty of proving the convergence of multiplicative updates comes from the non-negativity con-\nstraints. Though multiplicative updates are close to standard fixed-point methods, existing fix-point proofs mainly\ndealwithunconstrainedsituations.SectionIIreviewsLeeandSeung’salgorithmfor(1)anddiscussesdifficultiesof\nproving the convergence. Section III proposes a modified algorithm, which has the same computational complexity\nper iteration. For this modified procedure, Section IV then proves that any limit point is stationary. We also show\nthat iterations are in a closed and bounded set, so at least one limit point exists.\nAnother NMF formulation minimizes the (generalized) Kullback-Leibler divergence between V and WH:\nn m (cid:18) (cid:19)\nmin f(W,H)= XX V log V ij −V +(WH)\nW,H ij (WH) ij ij ij\ni=1j=1\nsubject to W ≥0,H ≥0,∀i,a,b,j. (2)\nia bj\nLee and Seung also proposed a multiplicative algorithm to minimize (2). By transforming (2) to another form,\nFinesso and Spreij [5] successfully analyzed the convergence property. Multiplicative updates for (2) are close to\nEM (Expectation Maximization) algorithm in maximum likelihood, so their analysis is quite different from ours",
+      "download_url": "/api/download/1774496624_multconv_cn.tex",
+      "stats": {
+        "total_pages": 15,
+        "processed_pages": 2,
+        "total_tokens": 4874,
+        "prompt_tokens": 2691,
+        "completion_tokens": 2183,
+        "estimated_cost": 0.007057,
+        "processing_time": 45.66
+      }
+    },
+    "error": null,
+    "tokens": {
+      "prompt_tokens": 2691,
+      "completion_tokens": 2183,
+      "total_tokens": 4874,
+      "estimated_cost": 0.007057
+    }
   }
 }

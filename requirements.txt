@@ -20,7 +20,7 @@ pdfminer.six==20221105  # 备用PDF提取库
 # 图片处理和OCR
 Pillow==10.1.0  # 图片读取、格式转换
 pytesseract==0.3.10  # 本地OCR识别（Python封装）
-# opencv-python==4.8.1.78  # 图像预处理（可选，与NumPy 2.x不兼容，已改用Pillow）
+opencv-python==4.10.0.84  # 图像预处理（已启用）
 
 # 注意：Tesseract OCR 引擎需要单独安装
 # Windows: 下载安装 https://github.com/UB-Mannheim/tesseract/wiki

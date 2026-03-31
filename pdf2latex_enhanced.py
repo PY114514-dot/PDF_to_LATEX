@@ -18,7 +18,7 @@ from clients import (
     LLMClient
 )
 from config import settings
-from latex_utils import sanitize_latex_body, wrap_with_template
+from latex_utils import sanitize_latex_body, wrap_with_template, split_references_section
 
 load_dotenv()
 
@@ -138,51 +138,11 @@ class PDF2LaTeXEnhanced:
         
         return max(0.0, min(1.0, quality_score))
 
-    def _extract_images_from_page(self, page, page_num: int, image_output_dir: Optional[str]) -> List[str]:
-        """从页面中裁剪图片并保存到输出目录。"""
-        if not image_output_dir:
-            return []
-
-        page_images = getattr(page, 'images', []) or []
-        if not page_images:
-            return []
-
-        output_dir = Path(image_output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        saved_paths = []
-
-        for idx, img in enumerate(page_images, start=1):
-            try:
-                x0 = img.get('x0')
-                x1 = img.get('x1')
-                top = img.get('top')
-                bottom = img.get('bottom')
-                if None in (x0, x1, top, bottom):
-                    continue
-
-                # bbox 顺序: (x0, top, x1, bottom)
-                cropped = page.crop((x0, top, x1, bottom))
-                image_obj = cropped.to_image(resolution=180)
-                pil_image = getattr(image_obj, 'original', None)
-                if pil_image is None:
-                    continue
-
-                image_name = f"page_{page_num + 1}_img_{idx}.png"
-                image_path = output_dir / image_name
-                pil_image.save(image_path, format='PNG')
-                saved_paths.append(str(image_path).replace('\\', '/'))
-            except Exception as e:
-                print(f"[PDF提取] 提取第 {page_num + 1} 页图片 {idx} 失败: {e}")
-
-        return saved_paths
-    
     def extract_text_from_pdf(
         self,
         pdf_path: str,
-        pages: Optional[List[int]] = None,
-        preserve_layout_images: bool = False,
-        image_output_dir: Optional[str] = None
-    ) -> tuple:
+        pages: Optional[List[int]] = None
+    ) -> List[str]:
         """
         从PDF提取文本，使用多种方法以获得最佳效果
         优先级：pdfplumber > PyPDF2
@@ -195,7 +155,6 @@ class PDF2LaTeXEnhanced:
             提取的文本列表，索引对应页码
         """
         pages_text = []
-        page_images = {}
         
         try:
             # 首先尝试使用 pdfplumber（效果更好）
@@ -218,10 +177,7 @@ class PDF2LaTeXEnhanced:
                 
                 for idx, page_num in enumerate(pages_to_extract):
                     page = pdf.pages[page_num]
-                    if preserve_layout_images:
-                        text = page.extract_text(layout=True, x_tolerance=2, y_tolerance=2)
-                    else:
-                        text = page.extract_text()
+                    text = page.extract_text()
                     
                     if text:
                         text = text.strip()
@@ -259,10 +215,6 @@ class PDF2LaTeXEnhanced:
                             print(f"[PDF提取] 备用方法失败: {str(e)}")
                     
                     pages_text[page_num] = text
-
-                    if preserve_layout_images:
-                        images = self._extract_images_from_page(page, page_num, image_output_dir)
-                        page_images[page_num] = images
                     
                     self._emit_progress(
                         'extracting',
@@ -316,10 +268,15 @@ class PDF2LaTeXEnhanced:
             except Exception as e2:
                 raise Exception(f"所有PDF提取方法均失败: PyPDF2={str(e2)}, pdfplumber={str(e)}")
         
-        return pages_text, page_images
+        return pages_text
     
     def translate_text(self, text: str, page_num: int, total_pages: int) -> str:
         """翻译文本"""
+        main_text, refs_text = split_references_section(text)
+        if not main_text.strip():
+            # 整页为参考文献时保持原文，避免错误翻译作者名/刊名等。
+            return text.strip()
+
         system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
 
 要求：
@@ -332,7 +289,7 @@ class PDF2LaTeXEnhanced:
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {page_num + 1}/{total_pages} 页）：
 
-{text}
+    {main_text}
 
 请直接输出翻译后的中文文本。"""
 
@@ -362,14 +319,20 @@ class PDF2LaTeXEnhanced:
                 self.total_tokens += usage.get('total_tokens', 0)
             
             # 提取内容
-            content = LLMClient.extract_content(response)
-            return content.strip()
+            content = LLMClient.extract_content(response).strip()
+            if refs_text.strip():
+                return f"{content}\n\n{refs_text.strip()}"
+            return content
             
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
 
     async def translate_text_async(self, text: str, page_num: int, total_pages: int) -> str:
         """异步翻译文本"""
+        main_text, refs_text = split_references_section(text)
+        if not main_text.strip():
+            return text.strip()
+
         system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
 
 要求：
@@ -382,7 +345,7 @@ class PDF2LaTeXEnhanced:
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {page_num + 1}/{total_pages} 页）：
 
-{text}
+    {main_text}
 
 请直接输出翻译后的中文文本。"""
 
@@ -409,8 +372,10 @@ class PDF2LaTeXEnhanced:
                 self.completion_tokens += usage.get('completion_tokens', 0)
                 self.total_tokens += usage.get('total_tokens', 0)
 
-            content = LLMClient.extract_content(response)
-            return content.strip()
+            content = LLMClient.extract_content(response).strip()
+            if refs_text.strip():
+                return f"{content}\n\n{refs_text.strip()}"
+            return content
 
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
@@ -617,8 +582,7 @@ class PDF2LaTeXEnhanced:
         translate: bool = False,
         task_id: Optional[str] = None,
         template_name: str = 'article',
-        quality_mode: str = 'standard',
-        preserve_layout_images: bool = False
+        quality_mode: str = 'standard'
     ) -> dict:
         """转换PDF到LaTeX"""
         print(f"\n[转换开始] PDF路径={pdf_path}, 页码={pages}, 翻译={translate}")
@@ -657,19 +621,8 @@ class PDF2LaTeXEnhanced:
         
         print(f"[转换] 准备提取 {len(pages)}/{total_pages} 页: {pages}")
         
-        image_output_dir = None
-        if preserve_layout_images:
-            out_base = Path(output_path).parent
-            image_output_dir = out_base / f"{Path(output_path).stem}_assets"
-            image_output_dir.mkdir(parents=True, exist_ok=True)
-
         # 只提取需要的页面
-        pages_text, page_images = self.extract_text_from_pdf(
-            pdf_path,
-            pages,
-            preserve_layout_images=preserve_layout_images,
-            image_output_dir=str(image_output_dir) if image_output_dir else None
-        )
+        pages_text = self.extract_text_from_pdf(pdf_path, pages)
         
         # 构建LaTeX正文
         latex_content = []
@@ -731,19 +684,6 @@ class PDF2LaTeXEnhanced:
             latex_content.append(f"% ===== 第 {page_num + 1} 页 =====")
             latex_content.append(latex_page)
 
-            # 可选：保留页面中的原始图片
-            if preserve_layout_images and page_images.get(page_num):
-                for img_path in page_images.get(page_num, []):
-                    try:
-                        rel_path = Path(img_path).relative_to(Path(output_path).parent)
-                    except Exception:
-                        rel_path = Path(img_path).name
-                    rel_path = str(rel_path).replace('\\', '/')
-                    latex_content.append(r"\begin{figure}[h]")
-                    latex_content.append(r"\centering")
-                    latex_content.append(fr"\includegraphics[width=0.95\linewidth]{{{rel_path}}}")
-                    latex_content.append(r"\end{figure}")
-
             latex_content.append("")
             processed_pages += 1
         
@@ -783,6 +723,5 @@ class PDF2LaTeXEnhanced:
             'completion_tokens': self.completion_tokens,
             'estimated_cost': self._calculate_cost(),
             'processing_time': round(processing_time, 2),
-            'source_text': source_text,
-            'preserved_images': sum(len(v) for v in page_images.values())
+            'source_text': source_text
         }

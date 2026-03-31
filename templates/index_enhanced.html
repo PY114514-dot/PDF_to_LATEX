@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF2LaTeX - PDF转LaTeX在线工具</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
     <!-- Prism.js for code highlighting -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
@@ -15,12 +18,18 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
     <!-- Socket.IO for real-time progress -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // CDN 不可用时，回退到 Flask-SocketIO 本地脚本。
+        if (typeof io === 'undefined') {
+            document.write('<script src="/socket.io/socket.io.js"><\\/script>');
+        }
+    </script>
 </head>
 <body>
     <div class="container">
         <!-- 头部 -->
         <header class="header">
-            <h1>📄 PDF2LaTeX Enhanced</h1>
+            <h1>PDF2LaTeX</h1>
             <p class="subtitle">智能PDF转LaTeX工具 - 实时进度 · Token统计 · 美化展示</p>
             <button class="render-sidebar-btn" id="openLatexSidebar" type="button">实时渲染</button>
         </header>
@@ -68,16 +77,16 @@
                         <input type="file" id="fileInput" accept=".pdf" style="display: none;">
                         <input type="file" id="imageInput" accept=".png,.jpg,.jpeg,.webp,.bmp,.tiff,.gif" style="display: none;">
                         <input type="file" id="batchFileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display: none;">
-                        <p class="file-hint">💾 支持最大50MB | 📋 支持 Ctrl+V 粘贴截图</p>
+                        <p class="file-hint">单文件最大 50MB | 批量 PDF 最多 5 个 | 支持 Ctrl+V 粘贴截图</p>
                         <p class="paste-hint" id="pasteHint" style="display: none;">
-                            ✨ 检测到剪贴板图片，按 Ctrl+V 直接粘贴
+                            检测到剪贴板图片，按 Ctrl+V 直接粘贴
                         </p>
                     </div>
                 </div>
 
                 <!-- 图片预览区域 -->
                 <div class="image-preview-section" id="imagePreviewSection" style="display: none;">
-                    <h3>📷 图片预览</h3>
+                    <h3>图片预览</h3>
                     <div class="image-thumbnails" id="imageThumbnails"></div>
                 </div>
 
@@ -87,7 +96,7 @@
                     
                     <div class="option-group">
                         <label>
-                            <span>🤖 选择模型</span>
+                            <span>选择模型</span>
                             <span class="hint">（不同模型性能和价格不同）</span>
                         </label>
                         <select id="modelSelect" class="select-input">
@@ -97,7 +106,7 @@
 
                     <div class="option-group">
                         <label>
-                            <span>📚 文档模板</span>
+                            <span>文档模板</span>
                             <span class="hint">（包装 LaTeX 文档结构）</span>
                         </label>
                         <select id="templateSelect" class="select-input">
@@ -111,7 +120,7 @@
 
                     <div class="option-group">
                         <label>
-                            <span>🧪 LaTeX 质量模式</span>
+                            <span>LaTeX 质量模式</span>
                             <span class="hint">（高质量模式会额外调用一次模型修复语法）</span>
                         </label>
                         <select id="qualityModeSelect" class="select-input">
@@ -132,7 +141,7 @@
 
                     <div class="option-group" id="ocrProviderGroup" style="display: none;">
                         <label>
-                            <span>👁️ OCR 识别引擎</span>
+                            <span>OCR 识别引擎</span>
                             <span class="hint">（图片识别方式）</span>
                         </label>
                         <select id="ocrProviderSelect" class="select-input">
@@ -141,11 +150,11 @@
                             <option value="tesseract">Tesseract OCR（本地免费，纯文字适用）</option>
                         </select>
                         <div class="hint" style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
-                            💡 <strong>提升识别率的技巧：</strong><br>
-                            • 数学公式：建议使用 Vision API<br>
-                            • 确保图片清晰，分辨率不低于 800x600<br>
-                            • 避免图片模糊、倾斜或反光<br>
-                            • 数学符号较多时，截图放大后再上传
+                            <strong>提升识别率的技巧：</strong><br>
+                            - 数学公式：建议使用 Vision API<br>
+                            - 确保图片清晰，分辨率不低于 800x600<br>
+                            - 避免图片模糊、倾斜或反光<br>
+                            - 数学符号较多时，截图放大后再上传
                         </div>
                     </div>
 
@@ -172,13 +181,6 @@
                         <input type="text" id="pagesInput" placeholder="例如: 1-3,5,7-9" class="text-input">
                     </div>
 
-                    <div class="option-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="preserveLayoutImagesOption">
-                            <span>识别到图片时保留原论文排版和图片（实验）</span>
-                        </label>
-                    </div>
-
                     <button class="convert-btn" id="convertBtn">
                         <span>开始转换</span>
                     </button>
@@ -197,7 +199,7 @@
                     
                     <!-- Token 统计实时显示 -->
                     <div class="token-stats" id="tokenStats" style="display: none;">
-                        <h4>📊 Token 使用统计</h4>
+                        <h4>Token 使用统计</h4>
                         <div class="stats-grid">
                             <div class="stat-item">
                                 <span class="stat-label">输入 Tokens:</span>
@@ -211,17 +213,13 @@
                                 <span class="stat-label">总计:</span>
                                 <span class="stat-value" id="totalTokens">0</span>
                             </div>
-                            <div class="stat-item">
-                                <span class="stat-label">估算成本:</span>
-                                <span class="stat-value" id="estimatedCost">$0.00</span>
-                            </div>
                         </div>
                     </div>
                     
                     <!-- 终端日志显示 -->
                     <div class="terminal-log" id="terminalLog" style="display: none;">
                         <div class="terminal-header">
-                            <span>🖥️ 处理日志</span>
+                            <span>处理日志</span>
                             <button class="terminal-clear-btn" onclick="clearTerminalLog()" title="清空日志">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"></path>
@@ -241,37 +239,30 @@
             <!-- 结果区域 -->
             <div class="result-section" id="resultSection" style="display: none;">
                 <div class="result-header">
-                    <h3>✅ 转换完成</h3>
+                    <h3>转换完成</h3>
                     <button class="btn-secondary" onclick="resetApp()">转换新文件</button>
                 </div>
 
                 <!-- Token 统计卡片 -->
                 <div class="stats-card">
-                    <h4>📊 转换统计</h4>
+                    <h4>转换统计</h4>
                     <div class="stats-grid">
                         <div class="stat-box">
-                            <div class="stat-icon">📄</div>
+                            <div class="stat-icon">页</div>
                             <div class="stat-info">
                                 <div class="stat-label">处理页数</div>
                                 <div class="stat-value" id="resultPages">0</div>
                             </div>
                         </div>
                         <div class="stat-box">
-                            <div class="stat-icon">🔤</div>
+                            <div class="stat-icon">Tok</div>
                             <div class="stat-info">
                                 <div class="stat-label">总 Tokens</div>
                                 <div class="stat-value" id="resultTokens">0</div>
                             </div>
                         </div>
                         <div class="stat-box">
-                            <div class="stat-icon">💰</div>
-                            <div class="stat-info">
-                                <div class="stat-label">估算成本</div>
-                                <div class="stat-value" id="resultCost">$0.00</div>
-                            </div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-icon">⏱️</div>
+                            <div class="stat-icon">时</div>
                             <div class="stat-info">
                                 <div class="stat-label">处理时间</div>
                                 <div class="stat-value" id="resultTime">0s</div>
@@ -289,7 +280,7 @@
                         </svg>
                         下载 .tex 文件
                     </button>
-                    <button class="btn-secondary" onclick="copyToClipboard()">
+                    <button class="btn-secondary" onclick="copyToClipboard(event)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -308,10 +299,6 @@
                 <div class="compare-editor" id="compareEditor">
                     <div class="compare-editor-header">
                         <h4>双栏对照编辑器</h4>
-                        <div class="compare-editor-actions">
-                            <button class="btn-secondary" type="button" onclick="renderLatexFromEditor()">渲染右栏</button>
-                            <button class="btn-secondary" type="button" onclick="downloadEditedLatex()">下载右栏</button>
-                        </div>
                     </div>
                     <div class="compare-editor-grid">
                         <div class="compare-col">
@@ -331,7 +318,7 @@
                         <span>LaTeX 代码预览</span>
                         <div class="code-header-right">
                             <span class="code-lines" id="codeLines">0 行</span>
-                            <button class="icon-btn" onclick="toggleFullscreen()" title="全屏">
+                            <button class="icon-btn" onclick="toggleFullscreen(event)" title="全屏">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
                                 </svg>
@@ -359,13 +346,13 @@
             <!-- 历史记录区域 -->
             <div class="history-section" id="historySection">
                 <div class="history-header">
-                    <h3>📜 转换历史</h3>
+                    <h3>转换历史</h3>
                     <div class="history-header-actions">
                         <button class="browse-btn" onclick="refreshHistory()" type="button">
-                            🔄 刷新
+                            刷新
                         </button>
                         <button class="history-clear-btn" onclick="clearAllHistory()" type="button">
-                            🗑️ 清空
+                            清空
                         </button>
                     </div>
                 </div>
@@ -383,10 +370,10 @@
 
             <div class="history-section" id="taskCenterSection">
                 <div class="history-header">
-                    <h3>🧭 任务中心</h3>
+                    <h3>任务中心</h3>
                     <div class="history-header-actions">
                         <button class="browse-btn" onclick="loadTaskCenter()" type="button">
-                            🔄 刷新
+                            刷新
                         </button>
                     </div>
                 </div>
@@ -410,7 +397,7 @@
     <aside class="latex-modal" id="latexSidebar" aria-hidden="true">
         <div class="latex-sidebar-header">
             <div class="latex-sidebar-title">
-                <span>🧮 实时 LaTeX 渲染</span>
+                <span>实时 LaTeX 渲染</span>
                 <span class="latex-sidebar-subtitle">支持 $...$、$$...$$、\(...\)、\[...\]</span>
             </div>
             <button class="latex-sidebar-close" id="closeLatexSidebar" type="button">关闭</button>

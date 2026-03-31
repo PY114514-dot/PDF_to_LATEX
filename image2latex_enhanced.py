@@ -13,7 +13,7 @@ import asyncio
 from ocr_client import ocr_client
 from clients import LLMClient
 from config import settings
-from latex_utils import sanitize_latex_body, wrap_with_template
+from latex_utils import sanitize_latex_body, split_references_section, wrap_with_template
 
 
 class Image2LaTeXEnhanced:
@@ -206,6 +206,12 @@ class Image2LaTeXEnhanced:
         
         if self.translate:
             print(f"[convert_to_latex] 开始翻译流程...")
+            main_text, refs_text = split_references_section(text)
+            if not main_text.strip():
+                # 全部是参考文献时直接保留原文。
+                main_text = text
+                refs_text = ""
+
             # 第一步：翻译英文为中文
             self._emit_progress(
                 'translating', 0, 2,
@@ -233,14 +239,18 @@ class Image2LaTeXEnhanced:
                 response = await self.llm_client.chat(
                     messages=[
                         {"role": "system", "content": translate_prompt},
-                        {"role": "user", "content": f"请将以下英文内容翻译为中文:\n\n{text}"}
+                        {"role": "user", "content": f"请将以下英文内容翻译为中文:\n\n{main_text}"}
                     ],
                     temperature=0.1,
                     max_tokens=4000
                 )
                 
                 # 使用翻译后的文本
-                text = response['choices'][0]['message']['content'].strip()
+                translated_main = response['choices'][0]['message']['content'].strip()
+                if refs_text.strip():
+                    text = f"{translated_main}\n\n{refs_text.strip()}"
+                else:
+                    text = translated_main
                 
                 # 累加token统计
                 total_usage['prompt_tokens'] += response.get('usage', {}).get('prompt_tokens', 0)
