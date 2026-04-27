@@ -36,18 +36,41 @@ def sanitize_latex_body(latex_content: str) -> str:
     content = content.replace("\\ begin", "\\begin").replace("\\ end", "\\end")
     content = normalize_align_environments(content)
     content = repair_tabular_consistency(content)
+    # 移除独立的页码数字（如 "19", "20" 等单独出现在一行的数字）
+    content = remove_standalone_page_numbers(content)
     content = re.sub(r"\n{3,}", "\n\n", content)
     return content.strip()
 
 
+def remove_standalone_page_numbers(content: str) -> str:
+    """移除单独出现在一行中的页码数字（如正文中的 "19", "20"）。"""
+    if not content:
+        return content
+    # 匹配单独一行且只有数字的内容（可能是PDF提取的页码）
+    # 但保留图表编号如 "图1", "表1", "Figure 1", "Table 1" 等
+    lines = content.split('\n')
+    filtered_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # 如果一行只有数字（2-4位），很可能是页码
+        if re.match(r'^\d{2,4}\s*$', stripped):
+            continue
+        # 移除内部的页码注释行（如 % ===== 第 19 页 =====）
+        if re.match(r'^\s*%+\s*={3,}\s*第\s*\d+\s*页\s*={3,}\s*$', stripped):
+            continue
+        filtered_lines.append(line)
+    return '\n'.join(filtered_lines)
+
+
 def normalize_align_environments(content: str) -> str:
-    """将 align/align* 统一改写为 display math + aligned，提升预览与编译兼容性。"""
+    """将 align/align* 转换为支持多行的 aligned 环境，保留 \quad 等间距命令。"""
     text = content or ""
 
     def _replace(match: re.Match) -> str:
         body = (match.group("body") or "").strip()
         if not body:
             return ""
+        # aligned 环境支持 \\ 分行，\quad 等间距命令可正常使用
         return "\\[\n\\begin{aligned}\n" + body + "\n\\end{aligned}\n\\]"
 
     pattern = re.compile(
@@ -83,6 +106,12 @@ def split_references_section(text: str) -> tuple[str, str]:
 
     if split_index is None:
         split_index = _detect_tail_references_start(content)
+
+    # 进一步检测：以 [数字] 开头的连续行（参考文献格式）
+    if split_index is None:
+        ref_start = _detect_brackets_ref_start(content)
+        if ref_start is not None:
+            split_index = ref_start
 
     if split_index is None:
         return content, ""
@@ -146,6 +175,46 @@ def _detect_tail_references_start(content: str) -> int | None:
         return None
 
     return line_offsets[start]
+
+
+def _detect_brackets_ref_start(content: str) -> int | None:
+    """检测以 [数字] 开头的连续参考文献行（如 [10]、[11] 等）。"""
+    lines = content.splitlines(keepends=True)
+    if not lines:
+        return None
+
+    line_offsets = []
+    cursor = 0
+    for line in lines:
+        line_offsets.append(cursor)
+        cursor += len(line)
+
+    # 匹配 [数字] 或 [数字, ...] 开头的行
+    bracket_ref_pattern = re.compile(r"^\s*\[\d+\]")
+
+    # 扫描寻找连续的参考文献行（至少5行）
+    consecutive_refs = 0
+    first_ref_offset = None
+
+    for i, line in enumerate(lines):
+        if bracket_ref_pattern.match(line.strip()):
+            if consecutive_refs == 0:
+                first_ref_offset = line_offsets[i]
+            consecutive_refs += 1
+        else:
+            if consecutive_refs >= 5 and first_ref_offset is not None:
+                # 参考文献必须在文档后50%才触发
+                if first_ref_offset / max(len(content), 1) > 0.5:
+                    return first_ref_offset
+            consecutive_refs = 0
+            first_ref_offset = None
+
+    # 结尾检查
+    if consecutive_refs >= 5 and first_ref_offset is not None:
+        if first_ref_offset / max(len(content), 1) > 0.5:
+            return first_ref_offset
+
+    return None
 
 
 def _count_tabular_columns(spec: str) -> int:

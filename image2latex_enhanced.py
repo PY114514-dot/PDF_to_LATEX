@@ -237,19 +237,20 @@ class Image2LaTeXEnhanced:
 2. 数学表达式不要翻译（如 "bipartite graph" 翻译为 "二分图"，但保留 G = (U, V, E)）
 3. 使用准确的学术术语（如 "matrix" → "矩阵"，"determinant" → "行列式"）
 4. 保持原文的段落结构和格式
-5. 参考文献条目（References/Bibliography/参考文献）中作者名、题名、刊名保持原文
-6. 如果已经是中文，直接输出原文
+5. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名全部保持原文
+6. 如果已经是中文的参考文献，保留其中文内容不变
+7. 如果已经是中文，直接输出原文
 
 示例：
 输入：Given a bipartite graph G = (U, V, E), its biadjacency matrix is defined as B(G).
 输出：给定一个二分图 G = (U, V, E)，其双邻接矩阵定义为 B(G)。"""
             translate_prompt += self._compose_translation_guidance()
-            
+
             try:
                 response = await self.llm_client.chat(
                     messages=[
                         {"role": "system", "content": translate_prompt},
-                        {"role": "user", "content": f"请将以下英文内容翻译为中文:\n\n{main_text}"}
+                        {"role": "user", "content": f"请将以下英文内容翻译为中文（注意：参考文献条目保持英文原样，不要翻译）:\n\n{main_text}"}
                     ],
                     temperature=0.1,
                     max_tokens=4000
@@ -303,8 +304,9 @@ class Image2LaTeXEnhanced:
 2. 使用标准的LaTeX数学环境（如 equation, align, gather 等）
 3. 行内公式用 $...$，独立公式用 $$...$$
 4. 不要添加任何解释，只输出LaTeX代码
-5. 如果有多个公式，保持它们的相对位置"""
-        
+5. 如果有多个公式，保持它们的相对位置
+6. 参考文献条目（References/Bibliography/参考文献）保持原文，不要修改"""
+
         elif content_type == 'text':
             system_prompt = """你是一个文档LaTeX转换专家。
 任务：将用户提供的文本内容转换为标准的LaTeX格式。
@@ -313,8 +315,9 @@ class Image2LaTeXEnhanced:
 1. 保持文本结构和排版
 2. 使用适当的LaTeX环境（如 section, subsection, itemize 等）
 3. 不要添加任何解释，只输出LaTeX代码
-4. 保留段落和换行"""
-        
+4. 保留段落和换行
+5. 参考文献条目（References/Bibliography/参考文献）保持原文，不要修改"""
+
         else:  # mixed
             system_prompt = """你是一个LaTeX转换专家。
 任务：将用户提供的内容（包含文字和数学公式）转换为标准的LaTeX格式。

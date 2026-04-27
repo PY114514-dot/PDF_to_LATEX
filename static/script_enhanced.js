@@ -1462,18 +1462,72 @@ function renderPaperAgentResult(payload) {
             // 公式列表（优先直接 KaTeX 渲染，避免缺少分隔符时无法显示）
             const ul = document.createElement('ul');
             if (Array.isArray(algo.formulas) && algo.formulas.length) {
-                algo.formulas.forEach((f) => {
+                algo.formulas.forEach((f, fi) => {
                     const li = document.createElement('li');
+                    li.style.marginBottom = '12px';
+
                     const formula = document.createElement('div');
                     formula.className = 'paper-formula-block';
-                    renderFormulaDirect(f.latex || '公式', formula);
+                    formula.style.marginBottom = '6px';
+
+                    const rawLatex = f.latex || '';
+                    const normalized = normalizeMathText(rawLatex);
+
+                    console.log(`[PaperAgent] 公式 ${fi + 1} 原始值:`, rawLatex.substring(0, 200));
+                    console.log(`[PaperAgent] 公式 ${fi + 1} 规范化后:`, normalized.substring(0, 200));
+
+                    // 优先尝试 auto-render（支持多种分隔符），失败时降级到纯文本
+                    if (typeof renderMathInElement === 'function' && normalized) {
+                        try {
+                            renderMathInElement(formula, {
+                                delimiters: [
+                                    { left: '$$', right: '$$', display: true },
+                                    { left: '\\[', right: '\\]', display: true },
+                                    { left: '$', right: '$', display: false },
+                                    { left: '\\(', right: '\\)', display: false }
+                                ],
+                                throwOnError: false,
+                                trust: true
+                            });
+                            console.log(`[PaperAgent] 公式 ${fi + 1} auto-render 成功`);
+                        } catch (e) {
+                            console.warn(`[PaperAgent] 公式 ${fi + 1} auto-render 失败:`, e.message);
+                            // auto-render 失败，尝试纯 KaTeX 渲染
+                            if (typeof katex !== 'undefined') {
+                                try {
+                                    katex.render(normalized, formula, {
+                                        displayMode: true,
+                                        throwOnError: false,
+                                        trust: true
+                                    });
+                                    console.log(`[PaperAgent] 公式 ${fi + 1} katex.render 成功`);
+                                } catch (e2) {
+                                    console.warn(`[PaperAgent] 公式 ${fi + 1} katex.render 也失败:`, e2.message);
+                                    formula.textContent = rawLatex || '公式';
+                                }
+                            } else {
+                                console.warn(`[PaperAgent] katex 未加载`);
+                                formula.textContent = rawLatex || '公式';
+                            }
+                        }
+                    } else {
+                        console.warn(`[PaperAgent] renderMathInElement 不可用或公式为空`);
+                        formula.textContent = rawLatex || '公式';
+                    }
+
                     const meaning = document.createElement('span');
-                    meaning.textContent = `：${f.meaning || ''}`;
+                    meaning.textContent = (f.meaning || '') ? `：${f.meaning}` : '';
+                    meaning.style.color = 'var(--text-secondary)';
+                    meaning.style.fontSize = '13px';
+
                     const evidence = document.createElement('br');
                     const evidenceSpan = document.createElement('span');
-                    evidenceSpan.textContent = `证据：${normalizeMathText(f.evidence || '原文未提供')}`;
+                    evidenceSpan.textContent = (f.evidence || '') ? `证据：${normalizeMathText(f.evidence)}` : '';
+                    evidenceSpan.style.color = 'var(--text-tertiary)';
+                    evidenceSpan.style.fontSize = '12px';
+
                     li.appendChild(formula);
-                    li.appendChild(meaning);
+                    if (meaning.textContent) li.appendChild(meaning);
                     li.appendChild(evidence);
                     li.appendChild(evidenceSpan);
                     ul.appendChild(li);

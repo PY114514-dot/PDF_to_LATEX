@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com)",
+      "Bash(python -c \"from latex_utils import split_references_section; print\\('OK'\\)\")",
+      "Bash(python -c \"from pdf2latex_enhanced import PDF2LaTeXEnhanced; from image2latex_enhanced import Image2LaTeXEnhanced; print\\('OK'\\)\")",
+      "Bash(python -c \"from latex_utils import sanitize_latex_body; print\\('OK'\\)\")",
+      "Bash(python -c \"from latex_utils import sanitize_latex_body, remove_standalone_page_numbers; print\\('OK'\\)\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

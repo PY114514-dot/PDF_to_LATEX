@@ -265,15 +265,17 @@ class PDF2LaTeXEnhanced:
     3. 专业术语使用准确的中文翻译
     4. 保持原文段落结构
     5. 翻译流畅自然
-    6. 参考文献（References/Bibliography/参考文献）条目不得翻译作者名、论文名、期刊名、会议名
-    7. 只输出翻译后的文本"""
+    6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
+    7. 如果参考文献在原文已经是中文，保留其中文内容不变
+    8. 只输出翻译后的文本"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
+注意：如果以下文本包含参考文献部分（以 [数字] 编号的条目），请勿翻译这些文献条目，保持英文原样。
 
-        {main_text}
+{main_text}
 
-    请直接输出翻译后的中文文本。"""
+参考文献条目必须保持英文，不翻译作者名、标题、期刊名。"""
 
         try:
             self._emit_progress(
@@ -332,15 +334,17 @@ class PDF2LaTeXEnhanced:
     3. 专业术语使用准确的中文翻译
     4. 保持原文段落结构
     5. 翻译流畅自然
-    6. 参考文献（References/Bibliography/参考文献）条目不得翻译作者名、论文名、期刊名、会议名
-    7. 只输出翻译后的文本"""
+    6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
+    7. 如果参考文献在原文已经是中文，保留其中文内容不变
+    8. 只输出翻译后的文本"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
+注意：如果以下文本包含参考文献部分（以 [数字] 编号的条目），请勿翻译这些文献条目，保持英文原样。
 
-        {main_text}
+{main_text}
 
-    请直接输出翻译后的中文文本。"""
+参考文献条目必须保持英文，不翻译作者名、标题、期刊名。"""
 
         try:
             self._emit_progress(

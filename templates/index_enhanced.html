@@ -3,40 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF2LaTeX - PDF转LaTeX在线工具</title>
+    <title>PDF2LaTeX - 智能PDF转LaTeX</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
-    <!-- Prism.js for code highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-latex.min.js"></script>
-    <!-- KaTeX for live LaTeX rendering -->
+    <!-- KaTeX for LaTeX rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-    <!-- Socket.IO for real-time progress -->
+    <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script>
-        // CDN 不可用时，回退到 Flask-SocketIO 本地脚本。
         if (typeof io === 'undefined') {
-            document.write('<script src="/socket.io/socket.io.js"><\\/script>');
+            document.write('<script src="/socket.io/socket.io.js"><\/script>');
         }
     </script>
 </head>
 <body>
     <div class="container">
-        <!-- 头部 -->
         <header class="header">
             <h1>PDF2LaTeX</h1>
-            <p class="subtitle">智能PDF转LaTeX工具 - 实时进度 · Token统计 · 美化展示</p>
-            <button class="render-sidebar-btn" id="openLatexSidebar" type="button">实时渲染</button>
+            <p class="subtitle">智能PDF转LaTeX工具</p>
         </header>
 
-        <!-- 主内容区 -->
         <main class="main-content">
-            <!-- 上传区域 -->
             <div class="upload-section">
                 <div id="dropZone" class="drop-zone">
                     <div class="drop-zone-content">
@@ -46,26 +37,26 @@
                             <line x1="12" y1="3" x2="12" y2="15"></line>
                         </svg>
                         <p class="drop-text">拖拽文件到这里</p>
-                        <p class="drop-text-subtitle">支持 PDF 和图片（PNG、JPG、JPEG等）</p>
+                        <p class="drop-text-subtitle">支持 PDF 和图片文件</p>
                         <p class="drop-text-or">或</p>
                         <div class="button-group">
                             <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 选择 PDF
                             </button>
-                            <button class="browse-btn-image" onclick="document.getElementById('imageInput').click()">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <button class="browse-btn-secondary" onclick="document.getElementById('imageInput').click()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                                     <circle cx="8.5" cy="8.5" r="1.5"></circle>
                                     <polyline points="21 15 16 10 5 21"></polyline>
                                 </svg>
                                 选择图片
                             </button>
-                            <button class="browse-btn-secondary" onclick="document.getElementById('batchFileInput').click()">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <button class="browse-btn-image" onclick="document.getElementById('batchFileInput').click()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <rect x="3" y="3" width="7" height="7"></rect>
                                     <rect x="14" y="3" width="7" height="7"></rect>
                                     <rect x="14" y="14" width="7" height="7"></rect>
@@ -77,38 +68,28 @@
                         <input type="file" id="fileInput" accept=".pdf" style="display: none;">
                         <input type="file" id="imageInput" accept=".png,.jpg,.jpeg,.webp,.bmp,.tiff,.gif" style="display: none;">
                         <input type="file" id="batchFileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display: none;">
-                        <p class="file-hint">单文件最大 50MB | 批量 PDF 最多 5 个 | 支持 Ctrl+V 粘贴截图</p>
-                        <p class="paste-hint" id="pasteHint" style="display: none;">
-                            检测到剪贴板图片，按 Ctrl+V 直接粘贴
-                        </p>
+                        <p class="file-hint">支持 Ctrl+V 粘贴截图</p>
+                        <p class="paste-hint" id="pasteHint" style="display: none;">检测到剪贴板图片</p>
                     </div>
                 </div>
 
-                <!-- 图片预览区域 -->
                 <div class="image-preview-section" id="imagePreviewSection" style="display: none;">
-                    <h3>图片预览</h3>
+                    <h3>已选图片</h3>
                     <div class="image-thumbnails" id="imageThumbnails"></div>
                 </div>
 
-                <!-- 选项区域 -->
                 <div class="options-section" id="optionsSection" style="display: none;">
                     <h3>转换选项</h3>
-                    
+
                     <div class="option-group">
-                        <label>
-                            <span>选择模型</span>
-                            <span class="hint">（不同模型性能和价格不同）</span>
-                        </label>
+                        <label>选择模型</label>
                         <select id="modelSelect" class="select-input">
                             <option value="">加载中...</option>
                         </select>
                     </div>
 
                     <div class="option-group">
-                        <label>
-                            <span>文档模板</span>
-                            <span class="hint">（包装 LaTeX 文档结构）</span>
-                        </label>
+                        <label>文档模板</label>
                         <select id="templateSelect" class="select-input">
                             <option value="article">Article（默认）</option>
                             <option value="report">Report</option>
@@ -119,10 +100,7 @@
                     </div>
 
                     <div class="option-group">
-                        <label>
-                            <span>LaTeX 质量模式</span>
-                            <span class="hint">（高质量模式会额外调用一次模型修复语法）</span>
-                        </label>
+                        <label>质量模式</label>
                         <select id="qualityModeSelect" class="select-input">
                             <option value="standard">标准</option>
                             <option value="high">高质量</option>
@@ -130,11 +108,8 @@
                     </div>
 
                     <div class="option-group">
-                        <label for="translationPromptInput">
-                            <span>用户提示词</span>
-                            <span class="hint">（术语替换、翻译风格或保留规则）</span>
-                        </label>
-                        <textarea id="translationPromptInput" class="text-input" rows="4" placeholder="例如：将 NMF 统一翻译为非负矩阵分解；全文保持正式学术风格；参考文献作者名不翻译。"></textarea>
+                        <label for="translationPromptInput">用户提示词 <span class="hint">（可选）</span></label>
+                        <textarea id="translationPromptInput" class="text-input" rows="3" placeholder="术语替换、翻译风格或保留规则..."></textarea>
                     </div>
 
                     <div class="option-group">
@@ -142,35 +117,22 @@
                             <input type="checkbox" id="asyncOption">
                             <span>异步任务模式（可恢复）</span>
                         </label>
-                        <div style="margin-top: 0.5rem;">
-                            <button class="btn-secondary" type="button" onclick="resumeLastAsyncTask()">恢复上次异步任务</button>
-                        </div>
+                        <button class="btn-secondary" style="margin-top:8px;width:100%" type="button" onclick="resumeLastAsyncTask()">恢复上次任务</button>
                     </div>
 
                     <div class="option-group" id="ocrProviderGroup" style="display: none;">
-                        <label>
-                            <span>OCR 识别引擎</span>
-                            <span class="hint">（图片识别方式）</span>
-                        </label>
+                        <label>OCR 识别引擎</label>
                         <select id="ocrProviderSelect" class="select-input">
-                            <option value="mixed">混合方案（智能选择，推荐）</option>
-                            <option value="vision">Vision API（GPT-4o/Gemini，数学公式推荐）</option>
-                            <option value="tesseract">Tesseract OCR（本地免费，纯文字适用）</option>
+                            <option value="mixed">混合方案（推荐）</option>
+                            <option value="vision">Vision API（适合数学公式）</option>
+                            <option value="tesseract">Tesseract OCR（本地免费）</option>
                         </select>
-                        <div class="hint" style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
-                            <strong>提升识别率的技巧：</strong><br>
-                            - 数学公式：建议使用 Vision API<br>
-                            - 确保图片清晰，分辨率不低于 800x600<br>
-                            - 避免图片模糊、倾斜或反光<br>
-                            - 数学符号较多时，截图放大后再上传
-                        </div>
                     </div>
 
                     <div class="option-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="translateOption">
                             <span>翻译成中文</span>
-                            <span class="hint">（会调用两次API）</span>
                         </label>
                     </div>
 
@@ -182,27 +144,20 @@
                     </div>
 
                     <div class="option-group">
-                        <label>
-                            <span>指定页码</span>
-                            <span class="hint">（可选，支持范围和逗号分隔）</span>
-                        </label>
+                        <label>指定页码 <span class="hint">（可选）</span></label>
                         <input type="text" id="pagesInput" placeholder="例如: 1-3,5,7-9" class="text-input">
                     </div>
 
-                    <button class="convert-btn" id="convertBtn">
-                        <span>开始转换</span>
-                    </button>
+                    <button class="convert-btn" id="convertBtn">开始转换</button>
                 </div>
             </div>
 
-            <!-- 实时进度区域 -->
             <div class="progress-section" id="progressSection" style="display: none;">
                 <div class="progress-content">
                     <div class="spinner"></div>
                     <p class="progress-text" id="progressText">准备开始...</p>
-
                     <div class="stage-progress-group">
-                        <div class="stage-progress-item" id="translateProgressItem">
+                        <div class="stage-progress-item">
                             <div class="stage-progress-header">
                                 <span>翻译进度</span>
                                 <span id="translateProgressLabel">0%</span>
@@ -211,7 +166,7 @@
                                 <div class="progress-bar-fill" id="translateProgressFill"></div>
                             </div>
                         </div>
-                        <div class="stage-progress-item" id="convertProgressItem">
+                        <div class="stage-progress-item">
                             <div class="stage-progress-header">
                                 <span>转换进度</span>
                                 <span id="convertProgressLabel">0%</span>
@@ -221,33 +176,30 @@
                             </div>
                         </div>
                     </div>
+                    <p class="progress-detail" id="progressDetail"></p>
 
-                    <p class="progress-detail" id="progressDetail">0 / 0</p>
-                    
-                    <!-- Token 统计实时显示 -->
                     <div class="token-stats" id="tokenStats" style="display: none;">
                         <h4>Token 使用统计</h4>
                         <div class="stats-grid">
                             <div class="stat-item">
-                                <span class="stat-label">输入 Tokens:</span>
+                                <span class="stat-label">输入</span>
                                 <span class="stat-value" id="promptTokens">0</span>
                             </div>
                             <div class="stat-item">
-                                <span class="stat-label">输出 Tokens:</span>
+                                <span class="stat-label">输出</span>
                                 <span class="stat-value" id="completionTokens">0</span>
                             </div>
                             <div class="stat-item">
-                                <span class="stat-label">总计:</span>
+                                <span class="stat-label">总计</span>
                                 <span class="stat-value" id="totalTokens">0</span>
                             </div>
                         </div>
                     </div>
-                    
-                    <!-- 终端日志显示 -->
+
                     <div class="terminal-log" id="terminalLog" style="display: none;">
                         <div class="terminal-header">
                             <span>处理日志</span>
-                            <button class="terminal-clear-btn" onclick="clearTerminalLog()" title="清空日志">
+                            <button class="terminal-clear-btn" onclick="clearTerminalLog()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"></path>
                                 </svg>
@@ -263,36 +215,34 @@
                 </div>
             </div>
 
-            <!-- 结果区域 -->
             <div class="result-section" id="resultSection" style="display: none;">
                 <div class="result-header">
                     <h3>转换完成</h3>
                     <button class="btn-secondary" onclick="resetApp()">转换新文件</button>
                 </div>
 
-                <!-- Token 统计卡片 -->
                 <div class="stats-card">
                     <h4>转换统计</h4>
                     <div class="stats-grid">
                         <div class="stat-box">
                             <div class="stat-icon">页</div>
                             <div class="stat-info">
-                                <div class="stat-label">处理页数</div>
-                                <div class="stat-value" id="resultPages">0</div>
+                                <span class="stat-label">处理页数</span>
+                                <span class="stat-value" id="resultPages">0</span>
                             </div>
                         </div>
                         <div class="stat-box">
                             <div class="stat-icon">Tok</div>
                             <div class="stat-info">
-                                <div class="stat-label">总 Tokens</div>
-                                <div class="stat-value" id="resultTokens">0</div>
+                                <span class="stat-label">总 Tokens</span>
+                                <span class="stat-value" id="resultTokens">0</span>
                             </div>
                         </div>
                         <div class="stat-box">
                             <div class="stat-icon">时</div>
                             <div class="stat-info">
-                                <div class="stat-label">处理时间</div>
-                                <div class="stat-value" id="resultTime">0s</div>
+                                <span class="stat-label">处理时间</span>
+                                <span class="stat-value" id="resultTime">0s</span>
                             </div>
                         </div>
                     </div>
@@ -301,16 +251,16 @@
                 <div class="result-actions">
                     <button class="btn-primary" id="downloadBtn">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
                             <polyline points="7 10 12 15 17 10"></polyline>
                             <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
-                        下载编辑版 .tex
+                        下载 .tex
                     </button>
                     <button class="btn-secondary" onclick="copyToClipboard(event)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
                         </svg>
                         复制代码
                     </button>
@@ -319,15 +269,15 @@
                             <circle cx="12" cy="12" r="10"></circle>
                             <polygon points="10 8 16 12 10 16 10 8"></polygon>
                         </svg>
-                        在线编辑
+                        在线渲染
                     </button>
                     <button class="btn-secondary" id="paperAgentBtn" type="button">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                            <path d="M20 22V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5v15"></path>
+                            <path d="M4 19.5A2.5 2.5 0 016.5 17H20"></path>
+                            <path d="M20 22V4a2 2 0 00-2-2H6.5A2.5 2.5 0 004 4.5v15"></path>
                             <path d="M8 7h8M8 11h8M8 15h5"></path>
                         </svg>
-                        AI学术阅读（仅PDF）
+                        AI学术阅读
                     </button>
                 </div>
 
@@ -336,7 +286,7 @@
                         <h4>数学论文智能体输出</h4>
                         <p id="paperAgentMeta">等待分析</p>
                     </div>
-                    <div class="paper-agent-loading" id="paperAgentLoading" style="display: none;">正在调用学术智能体分析PDF内容...</div>
+                    <div class="paper-agent-loading" id="paperAgentLoading" style="display: none;">正在分析...</div>
                     <div class="paper-agent-content" id="paperAgentContent" style="display: none;">
                         <div class="paper-block">
                             <h5>摘要</h5>
@@ -347,7 +297,7 @@
                             <ul id="paperOutline"></ul>
                         </div>
                         <div class="paper-block">
-                            <h5>思维导图（Markdown）</h5>
+                            <h5>思维导图</h5>
                             <pre id="paperMindmap"></pre>
                         </div>
                         <div class="paper-block">
@@ -365,16 +315,15 @@
                     </div>
                 </div>
 
-                <!-- LaTeX 在线编辑器 -->
-                <div class="code-preview code-workspace" id="latexWorkspace">
+                <div class="code-preview" id="latexWorkspace">
                     <div class="code-header">
-                        <span>LaTeX 代码编辑</span>
+                        <span>LaTeX 代码</span>
                         <div class="code-header-right">
                             <span class="code-lines" id="codeLines">0 行</span>
-                            <span class="code-hint">输入即同步到右侧预览</span>
+                            <span class="code-hint">实时预览</span>
                             <button class="icon-btn" onclick="toggleFullscreen(event)" title="全屏">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                                    <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"></path>
                                 </svg>
                             </button>
                         </div>
@@ -382,17 +331,16 @@
                     <div class="code-workspace-body">
                         <div class="code-editor-pane">
                             <div class="pane-label">源码</div>
-                            <textarea id="latexEditor" class="latex-editor" spellcheck="false" placeholder="在这里直接编辑 LaTeX 代码"></textarea>
+                            <textarea id="latexEditor" class="latex-editor" spellcheck="false" placeholder="在这里编辑 LaTeX 代码"></textarea>
                         </div>
                         <div class="code-preview-pane">
-                            <div class="pane-label">实时预览</div>
-                            <iframe id="latexRenderFrame" class="latex-render-frame" src="/render?embedded=1" title="LaTeX 实时预览"></iframe>
+                            <div class="pane-label">预览</div>
+                            <iframe id="latexRenderFrame" class="latex-render-frame" src="/render?embedded=1" title="LaTeX 预览"></iframe>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 错误提示 -->
             <div class="error-section" id="errorSection" style="display: none;">
                 <div class="error-content">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -406,28 +354,21 @@
                 </div>
             </div>
 
-            <!-- 历史记录区域 -->
             <div class="history-section" id="historySection">
                 <div class="history-header">
                     <h3>转换历史</h3>
                     <div class="history-header-actions">
-                        <button class="browse-btn" onclick="refreshHistory()" type="button">
-                            刷新
-                        </button>
-                        <button class="history-clear-btn" onclick="clearAllHistory()" type="button">
-                            清空
-                        </button>
+                        <button class="browse-btn" onclick="refreshHistory()">刷新</button>
+                        <button class="history-clear-btn" onclick="clearAllHistory()">清空</button>
                     </div>
                 </div>
                 <div class="history-list" id="historyList">
-                    <div class="loading-history">
-                        <p>加载历史记录中...</p>
-                    </div>
+                    <div class="loading-history">加载中...</div>
                 </div>
                 <div class="history-pagination" id="historyPagination" style="display: none;">
-                    <button class="history-page-btn" id="historyPrevBtn" type="button">上一页</button>
+                    <button class="history-page-btn" id="historyPrevBtn">上一页</button>
                     <span class="history-page-info" id="historyPageInfo">1 / 1</span>
-                    <button class="history-page-btn" id="historyNextBtn" type="button">下一页</button>
+                    <button class="history-page-btn" id="historyNextBtn">下一页</button>
                 </div>
             </div>
 
@@ -435,25 +376,17 @@
                 <div class="history-header">
                     <h3>任务中心</h3>
                     <div class="history-header-actions">
-                        <button class="browse-btn" onclick="loadTaskCenter()" type="button">
-                            刷新
-                        </button>
+                        <button class="browse-btn" onclick="loadTaskCenter()">刷新</button>
                     </div>
                 </div>
                 <div class="history-list" id="taskCenterList">
-                    <div class="loading-history">
-                        <p>加载任务中...</p>
-                    </div>
+                    <div class="loading-history">加载中...</div>
                 </div>
             </div>
         </main>
 
-        <!-- 页脚 -->
         <footer class="footer">
-            <p>使用 DeepSeek API 提供支持 | 
-                <a href="https://github.com" target="_blank">GitHub</a> | 
-                <a href="https://platform.deepseek.com/" target="_blank">获取API密钥</a>
-            </p>
+            <a href="https://platform.deepseek.com/" target="_blank">DeepSeek API</a> 提供支持
         </footer>
     </div>
 
@@ -467,12 +400,12 @@
         </div>
         <div class="latex-sidebar-body">
             <label class="latex-sidebar-label" for="latexInput">输入 LaTeX</label>
-            <textarea class="latex-sidebar-input" id="latexInput" rows="8" placeholder="例如: $E=mc^2$ 或 $$\int_0^1 x^2 dx$$"></textarea>
+            <textarea class="latex-sidebar-input" id="latexInput" rows="6" placeholder="例如: $E=mc^2$"></textarea>
             <div class="latex-sidebar-actions">
                 <button class="latex-sidebar-render" id="renderLatexBtn" type="button">渲染</button>
                 <button class="latex-sidebar-clear" id="clearLatexBtn" type="button">清空</button>
             </div>
-            <div class="latex-sidebar-hint">提示：拖动窗口右下角可调整大小</div>
+            <div class="latex-sidebar-hint">拖动右下角可调整窗口大小</div>
             <div class="latex-sidebar-preview" id="latexPreview"></div>
         </div>
     </aside>
