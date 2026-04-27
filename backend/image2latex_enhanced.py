@@ -103,7 +103,7 @@ class Image2LaTeXEnhanced:
             'doubao': {
                 'api_key': settings.DOUBAO_API_KEY,
                 'base_url': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
-                'model': 'doubao-seed-1-6-thinking-250715'
+                'model': 'doubao-seed-2-0-lite-260215'
             },
             'deepseek-math': {
                 'api_key': settings.CANOPY_WAVE_API_KEY,

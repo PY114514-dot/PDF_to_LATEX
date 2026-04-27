@@ -26,7 +26,7 @@ from latex_utils import merge_tex_contents
 import re
 import unicodedata
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='../frontend/templates', static_folder='../frontend/static')
 app.config['SECRET_KEY'] = 'pdf2latex-secret-key'
 CORS(app)
 socketio = SocketIO(
@@ -687,21 +687,21 @@ def download_file(filename):
         filepath = app.config['OUTPUT_FOLDER'] / filename
         if not filepath.exists():
             return jsonify({'error': '文件不存在'}), 404
-        
+
         # 使用 RFC 2231 编码中文文件名
         from urllib.parse import quote
         encoded_filename = quote(filename.encode('utf-8'))
-        
+
         response = send_file(
             filepath,
             as_attachment=True,
             download_name=filename,
             mimetype='application/x-tex'
         )
-        
+
         # 设置支持中文的 Content-Disposition header
         response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
-        
+
         return response
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -945,13 +945,13 @@ def download_batch(batch_id):
         
         # 创建ZIP文件
         zip_buffer = BytesIO()
-        
+
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for result in results:
                 if result.get('success', False):
                     output_filename = result['output_filename']
                     filepath = app.config['OUTPUT_FOLDER'] / output_filename
-                    
+
                     if filepath.exists():
                         # 添加文件到ZIP
                         zip_file.write(filepath, output_filename)

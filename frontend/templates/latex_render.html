@@ -844,17 +844,22 @@
             for (let i = 0; i < mathBlocks.length; i++) {
                 content = content.replace(`__MATH_${i}__`, mathBlocks[i]);
             }
-            
+
             // 转换段落（数学公式已恢复）
+            // 1. 先按空行分割段落
+            // 2. 每个普通段落内部，把单换行转成 <br>（避免 PDF/OCR 行内换行被 innerHTML 当空格）
             const paragraphs = content.split(/\n\s*\n/);
             content = paragraphs.map(para => {
                 para = para.trim();
                 if (!para || para.startsWith('<') || para.includes('$$') || para.includes('$') || para.match(/^\\begin|^\\end/)) {
                     return para;
                 }
-                return `<p>${para}</p>`;
+                // 段落内单换行（不是空行）转为 <br>，保留视觉换行
+                const lines = para.split(/\n/);
+                const joined = lines.map(l => l.trim()).join('<br>');
+                return `<p>${joined}</p>`;
             }).join('\n\n');
-            
+
             return content;
         }
         

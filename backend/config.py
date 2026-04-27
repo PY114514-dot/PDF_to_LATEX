@@ -98,8 +98,8 @@ class Settings:
         if cls.DOUBAO_API_KEY:
             available.append({
                 'id': 'doubao',
-                'name': '豆包',
-                'description': '字节跳动模型'
+                'name': 'Doubao Lite',
+                'description': '字节豆包轻量模型 (Seed-2.0-Lite)'
             })
         
         if cls.OPENAI_API_KEY:

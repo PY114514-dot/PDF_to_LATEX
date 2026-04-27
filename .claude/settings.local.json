@@ -6,7 +6,10 @@
       "Bash(python -c \"from pdf2latex_enhanced import PDF2LaTeXEnhanced; from image2latex_enhanced import Image2LaTeXEnhanced; print\\('OK'\\)\")",
       "Bash(python -c \"from latex_utils import sanitize_latex_body; print\\('OK'\\)\")",
       "Bash(python -c \"from latex_utils import sanitize_latex_body, remove_standalone_page_numbers; print\\('OK'\\)\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile latex_utils.py document_parser.py pdf2latex_enhanced.py)",
+      "Bash(mv static/* frontend/static/)",
+      "Bash(mv templates/* frontend/templates/)"
     ]
   }
 }

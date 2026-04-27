@@ -110,7 +110,7 @@ class LLMClient:
             try:
                 async with httpx.AsyncClient(
                     timeout=self.timeout,
-                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+                    limits=httpx.Limits(max_keepalive_connections=20, max_connections=50)
                 ) as client:
                     response = await client.post(
                         self.base_url,
@@ -138,7 +138,18 @@ class LLMClient:
                     raise Exception(f"请求超时 ({max_retries}次): {last_error}")
             except httpx.HTTPStatusError as e:
                 # HTTP 错误（4xx, 5xx）不重试
-                raise Exception(f"HTTP错误 {e.response.status_code}: {e.response.text}")
+                status = e.response.status_code
+                error_detail = e.response.text
+                if status == 404:
+                    # 可能是模型不存在或端点错误，尝试从错误信息中提取有用信息
+                    model_name = request_body.get('model', 'unknown')
+                    raise Exception(f"HTTP错误 404: 模型 '{model_name}' 不存在或无权访问。请检查：1) 模型名称是否正确；2) API Key 是否有权访问该模型；3) 端点URL是否正确。原始错误: {error_detail}")
+                elif status == 401:
+                    raise Exception(f"HTTP错误 401: 认证失败，请检查 API Key 是否正确。原始错误: {error_detail}")
+                elif status == 429:
+                    raise Exception(f"HTTP错误 429: 请求过于频繁，请稍后重试。原始错误: {error_detail}")
+                else:
+                    raise Exception(f"HTTP错误 {status}: {error_detail}")
             except Exception as e:
                 last_error = str(e)
                 if attempt < max_retries - 1:
@@ -370,7 +381,7 @@ gpt4o = LLMClient(
 doubao = LLMClient(
     api_key=settings.DOUBAO_API_KEY,
     base_url="https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-    model="doubao-seed-1-6-thinking-250715",
+    model="doubao-seed-2-0-lite-260215",
     timeout = 1000.0
 )
 
@@ -509,7 +520,7 @@ class ResponsesAPIClient:
             try:
                 async with httpx.AsyncClient(
                     timeout=self.timeout,
-                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+                    limits=httpx.Limits(max_keepalive_connections=20, max_connections=50)
                 ) as client:
                     response = await client.post(
                         self.base_url,

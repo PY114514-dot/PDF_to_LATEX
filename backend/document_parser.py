@@ -380,8 +380,57 @@ class PDFDocumentParser:
 
         return 'text'
 
+    def _detect_two_column_layout(self, page: pdfplumber.page.Page, page_width: float) -> bool:
+        """
+        检测页面是否为双栏布局。
+        通过分析文字块的 x 坐标分布，判断是否存在两个明显的文本列。
+        """
+        try:
+            chars = page.chars
+            if not chars:
+                return False
+
+            # 收集所有文字块的 x0（左边缘）坐标
+            x_coords = [c['x0'] for c in chars if c.get('x0') is not None]
+
+            if len(x_coords) < 20:
+                return False
+
+            # 计算中位数 x 坐标
+            sorted_x = sorted(x_coords)
+            mid = len(sorted_x) // 2
+            median_x = sorted_x[mid]
+
+            # 双栏布局时，文字会集中在左右两侧（中间有较大空白）
+            # 左栏文字的 x0 应该在页面宽度的 5%~45% 之间
+            # 右栏文字的 x0 应该在页面宽度的 55%~95% 之间
+            left_threshold = page_width * 0.45
+            right_threshold = page_width * 0.55
+
+            left_chars = sum(1 for x in x_coords if x < left_threshold)
+            right_chars = sum(1 for x in x_coords if x > right_threshold)
+
+            total_chars = len(x_coords)
+            left_ratio = left_chars / total_chars
+            right_ratio = right_chars / total_chars
+
+            # 如果左右两栏各有 > 20% 的文字，认为是双栏布局
+            if left_ratio > 0.2 and right_ratio > 0.2:
+                # 额外检查：中间区域（35%~65%）的文字应该很少
+                mid_chars = sum(1 for x in x_coords if left_threshold <= x <= right_threshold)
+                mid_ratio = mid_chars / total_chars
+                if mid_ratio < 0.15:
+                    return True
+
+            return False
+        except Exception:
+            return False
+
     def _should_use_ocr(self, text: str, quality: float, image_regions: List[_ImageRegion], table_bboxes: List[Tuple[float, float, float, float]]) -> bool:
         if not text.strip():
+            return True
+        # 有表格结构但文本层缺少换行符（表格内容可能为图片格式嵌入），强制 OCR
+        if table_bboxes and '\n' not in text and quality < 0.5:
             return True
         if quality < 0.28 and (image_regions or table_bboxes):
             return True
@@ -458,6 +507,15 @@ class PDFDocumentParser:
                     ]
                     quality = self.quality_fn(text_layer)
 
+                    # 检测双栏布局
+                    try:
+                        page_width = page.width if hasattr(page, 'width') else 0
+                        is_two_column = self._detect_two_column_layout(page, page_width) if page_width > 0 else False
+                        if is_two_column:
+                            print(f"[PDF提取] 第 {page_num + 1} 页: 检测到双栏布局")
+                    except Exception:
+                        is_two_column = False
+
                     print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 文本层长度: {len(text_layer)}, 质量: {quality:.2f}")
 
                     extracted_text = text_layer
@@ -505,6 +563,10 @@ class PDFDocumentParser:
                             extracted_text = f"{extracted_text}\n\n[STRUCTURED_TABLE_CONTEXT]\n{table_context}"
                         else:
                             extracted_text = f"[STRUCTURED_TABLE_CONTEXT]\n{table_context}"
+
+                    # 双栏布局提示
+                    if is_two_column:
+                        extracted_text = f"[TWO_COLUMN_PAGE]\n{extracted_text}"
 
                     extracted_text = self._cleanup_pagination(extracted_text, page_num, total_pages)
                     extracted_text = self._normalize_text(extracted_text)

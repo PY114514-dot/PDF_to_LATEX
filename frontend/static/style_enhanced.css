@@ -792,6 +792,33 @@ textarea.text-input {
     color: var(--text-secondary);
 }
 
+.paper-agent-progress {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.paper-agent-progress .progress-bar-container {
+    height: 4px;
+    background: var(--bg-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.paper-agent-progress .progress-bar {
+    height: 100%;
+    background: var(--accent-bg);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.paper-agent-progress .progress-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
 .paper-agent-loading {
     padding: 20px;
     text-align: center;

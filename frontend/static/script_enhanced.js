@@ -1376,6 +1376,12 @@ function renderPaperAgentResult(payload) {
     content.style.display = 'block';
     section.style.display = 'block';
 
+    // 隐藏进度条
+    const progressSection = document.getElementById('paperAgentProgress');
+    if (progressSection) {
+        progressSection.style.display = 'none';
+    }
+
     const stats = payload.stats || {};
     meta.textContent = `模型: ${payload.model} | 页码: ${payload.pages} | Tokens: ${(stats.total_tokens || 0).toLocaleString()}`;
     summary.textContent = payload.result?.summary || '未返回摘要';
@@ -2912,14 +2918,29 @@ function updatePaperAgentRealtime(data) {
     const loading = document.getElementById('paperAgentLoading');
     const meta = document.getElementById('paperAgentMeta');
     const section = document.getElementById('paperAgentSection');
+    const progressSection = document.getElementById('paperAgentProgress');
+    const progressBar = document.getElementById('paperAgentProgressBar');
+    const progressText = document.getElementById('paperAgentProgressText');
     if (!loading || !meta || !section) return;
 
     section.style.display = 'block';
     loading.style.display = 'block';
+
     const percent = data.percent ?? 0;
     const msg = data.message || '处理中...';
+    const current = data.current || 0;
+    const total = data.total || 0;
+    const status = data.status || 'processing';
+
     loading.textContent = `${msg} (${percent}%)`;
-    meta.textContent = `实时进度: ${data.status || 'processing'} | ${data.current || 0}/${data.total || 0}`;
+    meta.textContent = `实时进度: ${status} | ${current}/${total}`;
+
+    // 更新进度条
+    if (progressSection && progressBar && progressText) {
+        progressSection.style.display = 'block';
+        progressBar.style.width = `${percent}%`;
+        progressText.textContent = `${msg}`;
+    }
 
     if (data.status === 'error') {
         addTerminalLog('error', data.log_message || data.message || '学术阅读失败');

@@ -267,7 +267,8 @@ class PDF2LaTeXEnhanced:
     5. 翻译流畅自然
     6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
     7. 如果参考文献在原文已经是中文，保留其中文内容不变
-    8. 只输出翻译后的文本"""
+    8. 只输出翻译后的文本
+    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\begin{multicols}{2}\n<翻译内容>\n\end{multicols}"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
@@ -336,7 +337,8 @@ class PDF2LaTeXEnhanced:
     5. 翻译流畅自然
     6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
     7. 如果参考文献在原文已经是中文，保留其中文内容不变
-    8. 只输出翻译后的文本"""
+    8. 只输出翻译后的文本
+    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\begin{multicols}{2}\n<翻译内容>\n\end{multicols}"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
@@ -456,7 +458,8 @@ class PDF2LaTeXEnhanced:
     8. 每个表格行列数必须一致；缺失单元格用 -- 占位，禁止省略列
     9. 暂不处理图片内容；遇到 Figure/Fig./图像描述可保留为普通文本，禁止臆造 figure 环境
     10. 参考文献部分（References/Bibliography/参考文献）必须保持原文语言，不得翻译作者名、标题、刊名
-    11. 只输出正文内容的LaTeX代码"""
+    11. 只输出正文内容的LaTeX代码
+12. 如果文本包含 [TWO_COLUMN_PAGE] 标记，必须用 \\begin{multicols}{2} 和 \\end{multicols} 包裹正文内容"""
 
         user_prompt = f"""请将以下文本转换为LaTeX格式（第 {display_page_num + 1}/{display_total_pages} 页）：
 
@@ -552,7 +555,8 @@ class PDF2LaTeXEnhanced:
 8. 每个表格行列数必须一致；缺失单元格用 -- 占位，禁止省略列
 9. 暂不处理图片内容；遇到 Figure/Fig./图像描述可保留为普通文本，禁止臆造 figure 环境
 10. 参考文献部分（References/Bibliography/参考文献）必须保持原文语言，不得翻译作者名、标题、刊名
-11. 只输出正文内容的LaTeX代码"""
+11. 只输出正文内容的LaTeX代码
+12. 如果文本包含 [TWO_COLUMN_PAGE] 标记，必须用 \\begin{multicols}{2} 和 \\end{multicols} 包裹正文内容"""
 
         user_prompt = f"""请将以下文本转换为LaTeX格式（第 {display_page_num + 1}/{display_total_pages} 页）：
 
@@ -638,13 +642,13 @@ class PDF2LaTeXEnhanced:
         
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")
-        
+
         if output_path is None:
             pdf_file = Path(pdf_path)
             suffix = "_cn" if translate else ""
             output_path = str(pdf_file.parent / f"{pdf_file.stem}{suffix}.tex")
         else:
-            output_path = str(output_path)
+            output_path = str(Path(output_path))
         
         # 先获取PDF总页数
         try:
@@ -665,10 +669,10 @@ class PDF2LaTeXEnhanced:
             pages = [p for p in pages if 0 <= p < total_pages]
         
         print(f"[转换] 准备提取 {len(pages)}/{total_pages} 页: {pages}")
-        
+
         # 只提取需要的页面
         pages_text = self.extract_text_from_pdf(pdf_path, pages)
-        
+
         # 构建LaTeX正文
         latex_content = []
         failed_pages = []
@@ -720,7 +724,7 @@ class PDF2LaTeXEnhanced:
 
         async def process_all_pages():
             # 控制并发，避免同时发起过多LLM请求导致连接失败。
-            max_concurrency = 2
+            max_concurrency = 8
             semaphore = asyncio.Semaphore(max_concurrency)
 
             async def _run_with_limit(idx: int, page_num: int):

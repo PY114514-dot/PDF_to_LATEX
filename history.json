@@ -1,234 +1,30 @@
 [
   {
-    "filename": "dlpu22.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "20,21,22,23,24,25,26",
-    "output_file": "outputs\\dlpu22_cn_7.tex",
-    "stats": {
-      "total_pages": 26,
-      "processed_pages": 7,
-      "total_tokens": 16612,
-      "processing_time": 58.97
-    },
-    "timestamp": "2026-04-27T21:00:34.394077"
-  },
-  {
-    "filename": "dlpu22.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "3,4,5,6",
-    "output_file": "outputs\\dlpu22_cn_6.tex",
-    "stats": {
-      "total_pages": 26,
-      "processed_pages": 4,
-      "total_tokens": 14804,
-      "processing_time": 56.92
-    },
-    "timestamp": "2026-04-27T20:13:51.628633"
-  },
-  {
-    "filename": "23---The-Permanent-Function--PERMAN-_1978_Combinatorial-Algorithms.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\23---The-Permanent-Function--PERMAN-_1978_Combinatorial-Algorithms.tex",
-    "stats": {
-      "total_pages": 9,
-      "processed_pages": 2,
-      "total_tokens": 2764,
-      "processing_time": 17.99
-    },
-    "timestamp": "2026-04-27T18:21:13.019800"
-  },
-  {
-    "filename": "dlpu22.pdf",
+    "filename": "1-s2.0-S0925231214000952-main.pdf",
     "model": "deepseek-chat",
     "translated": true,
     "pages": "all",
-    "output_file": "outputs\\dlpu22_cn_5.tex",
+    "output_file": "outputs\\1-s2.0-S0925231214000952-main_cn.tex",
     "stats": {
-      "total_pages": 26,
-      "processed_pages": 26,
-      "total_tokens": 79485,
-      "processing_time": 299.7
+      "total_pages": 8,
+      "processed_pages": 8,
+      "total_tokens": 62860,
+      "processing_time": 84.54
     },
-    "timestamp": "2026-04-27T17:33:14.217905"
+    "timestamp": "2026-04-27T23:34:17.947727"
   },
   {
-    "filename": "dlpu22_dual.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "3,4,5,6",
-    "output_file": "outputs\\dlpu22_dual_cn.tex",
-    "stats": {
-      "total_pages": 26,
-      "processed_pages": 4,
-      "total_tokens": 17746,
-      "processing_time": 59.05
-    },
-    "timestamp": "2026-04-27T14:40:11.320849"
-  },
-  {
-    "filename": "dlpu22.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "3,4,5,6",
-    "output_file": "outputs\\dlpu22_cn_2.tex",
-    "stats": {
-      "total_pages": 26,
-      "processed_pages": 0,
-      "total_tokens": 0,
-      "estimated_cost": 0,
-      "processing_time": 51.82
-    },
-    "timestamp": "2026-04-25T16:05:24.826549"
-  },
-  {
-    "filename": "44565.pdf",
+    "filename": "1-s2.0-S0925231214000952-main.pdf",
     "model": "deepseek-chat",
     "translated": true,
     "pages": "all",
-    "output_file": "outputs\\44565_cn.tex",
+    "output_file": "outputs\\1-s2.0-S0925231214000952-main_cn\\1-s2.0-S0925231214000952-main_cn.tex",
     "stats": {
-      "total_pages": 4,
-      "processed_pages": 4,
-      "total_tokens": 28812,
-      "estimated_cost": 0,
-      "processing_time": 65.01
+      "total_pages": 8,
+      "processed_pages": 8,
+      "total_tokens": 70736,
+      "processing_time": 278.56
     },
-    "timestamp": "2026-04-24T09:26:35.151765"
-  },
-  {
-    "filename": "Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "all",
-    "output_file": "outputs\\Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash_2.tex",
-    "stats": {
-      "total_pages": 5,
-      "processed_pages": 5,
-      "total_tokens": 28678,
-      "estimated_cost": 0,
-      "processing_time": 77.93
-    },
-    "timestamp": "2026-04-08T10:01:33.787923"
-  },
-  {
-    "filename": "Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "all",
-    "output_file": "outputs\\Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.tex",
-    "stats": {
-      "total_pages": 5,
-      "processed_pages": 5,
-      "total_tokens": 28989,
-      "estimated_cost": 0,
-      "processing_time": 74.0
-    },
-    "timestamp": "2026-04-07T22:56:50.814474"
-  },
-  {
-    "filename": "2603.29715v1.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\2603.29715v1_cn_3.tex",
-    "stats": {
-      "total_pages": 24,
-      "processed_pages": 24,
-      "total_tokens": 101085,
-      "estimated_cost": 0,
-      "processing_time": 72.02
-    },
-    "timestamp": "2026-04-03T18:54:44.208409"
-  },
-  {
-    "filename": "2603.29715v1.pdf",
-    "model": "doubao",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\2603.29715v1_cn_2.tex",
-    "stats": {
-      "total_pages": 24,
-      "processed_pages": 9,
-      "total_tokens": 25351,
-      "estimated_cost": 0,
-      "processing_time": 42.87
-    },
-    "timestamp": "2026-04-02T13:22:02.454835"
-  },
-  {
-    "filename": "2603.29715v1.pdf",
-    "model": "doubao",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\2603.29715v1_cn.tex",
-    "stats": {
-      "total_pages": 24,
-      "processed_pages": 0,
-      "total_tokens": 0,
-      "estimated_cost": 0,
-      "processing_time": 8.97
-    },
-    "timestamp": "2026-04-02T11:06:45.200891"
-  },
-  {
-    "timestamp": 1774972412,
-    "filename": "screenshot_1774972400776.png",
-    "model": "deepseek-chat",
-    "ocr_provider": "tesseract",
-    "ocr_quality": 0.6880345572354212,
-    "content_type": "text",
-    "translate": true,
-    "output_file": "screenshot_1774972400776.tex",
-    "tokens": 5409,
-    "elapsed_time": 118.20459342002869
-  },
-  {
-    "filename": "lin2007.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "3,4,5",
-    "output_file": "outputs\\lin2007.tex",
-    "stats": {
-      "total_pages": 20,
-      "processed_pages": 3,
-      "total_tokens": 4847,
-      "estimated_cost": 0,
-      "processing_time": 27.18
-    },
-    "timestamp": "2026-03-31T23:42:03.987766"
-  },
-  {
-    "filename": "1774347683_nmf_0_cn.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "1,2",
-    "output_file": "outputs\\1774347683_nmf_0_cn_2.tex",
-    "stats": {
-      "total_pages": 15,
-      "processed_pages": 2,
-      "total_tokens": 578,
-      "estimated_cost": 0,
-      "processing_time": 4.89
-    },
-    "timestamp": "2026-03-31T23:32:51.832976"
-  },
-  {
-    "filename": "博格曼距离非负矩阵分解.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "2,3,6",
-    "output_file": "outputs\\博格曼距离非负矩阵分解_2.tex",
-    "stats": {
-      "total_pages": 6,
-      "processed_pages": 3,
-      "total_tokens": 5356,
-      "estimated_cost": 0,
-      "processing_time": 32.75
-    },
-    "timestamp": "2026-03-31T23:16:21.699512"
+    "timestamp": "2026-04-27T23:08:13.847197"
   }
 ]

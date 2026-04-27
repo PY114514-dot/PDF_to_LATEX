@@ -23,6 +23,7 @@ outputs/*
 
 # 历史记录
 history.json
+task_store.json
 
 # IDE
 .vscode/

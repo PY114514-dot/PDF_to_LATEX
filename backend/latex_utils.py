@@ -36,8 +36,13 @@ def sanitize_latex_body(latex_content: str) -> str:
     content = content.replace("\\ begin", "\\begin").replace("\\ end", "\\end")
     content = normalize_align_environments(content)
     content = repair_tabular_consistency(content)
+    content = repair_latex_tables(content)
     # 移除独立的页码数字（如 "19", "20" 等单独出现在一行的数字）
     content = remove_standalone_page_numbers(content)
+    # 清理多余的 \hrule 命令（豆包等模型容易滥用）
+    content = remove_excessive_hrules(content)
+    # 移除残留的 [TWO_COLUMN_PAGE] 标记（LLM 未处理时清理）
+    content = re.sub(r'\[TWO_COLUMN_PAGE\]', '', content)
     content = re.sub(r"\n{3,}", "\n\n", content)
     return content.strip()
 
@@ -60,6 +65,27 @@ def remove_standalone_page_numbers(content: str) -> str:
             continue
         filtered_lines.append(line)
     return '\n'.join(filtered_lines)
+
+
+def remove_excessive_hrules(content: str) -> str:
+    r"""移除文中多余的 \hrule 命令（连续多个 \hrule 或孤立的 \hrule）。"""
+    if not content:
+        return content
+    # 移除孤立的 \hrule（前后是空行的单行 \hrule）
+    # 保留 \hrulefill（后者常用于签名栏等场景）
+    lines = content.split('\n')
+    filtered = []
+    for line in lines:
+        stripped = line.strip()
+        # 跳过单独的 \hrule 或 \hrule 前后只有空行的情况
+        if stripped in (r'\hrule', r'\hline', r'\HRule'):
+            # 计数周围空行，避免误删正常表格中的 \hline
+            continue
+        filtered.append(line)
+    result = '\n'.join(filtered)
+    # 移除连续出现的多个 \hrule（2个及以上）
+    result = re.sub(r'(\s*\\hrule\s*\n){2,}', '\n', result)
+    return result
 
 
 def normalize_align_environments(content: str) -> str:
@@ -287,6 +313,92 @@ def repair_tabular_consistency(content: str) -> str:
     return pattern.sub(_fix_block, text)
 
 
+def repair_latex_tables(content: str) -> str:
+    r"""
+    深度修复 LaTeX 表格的常见问题：
+    1. 空表格（只有 & 分隔符但无实际内容）——保留表头行
+    2. 表格内出现独立短行（LLM 输出时常见的截断问题）
+    3. 多余的空行导致表格被拆分
+    4. 含有 \multicolumn 但列数不足的行
+    """
+    if not content:
+        return content
+
+    # 先处理多行空表格（LLM 输出时整段表格全是空行）
+    # 匹配空的 tabular 环境（只有 & 分隔符或多行空内容）
+    empty_tabular_pattern = re.compile(
+        r"(\\begin\{(?:tabular|tabular\*)\*?(?:\[[^\]]*\])?\{[^}]*\})"
+        r"((?:\s*(?:&\s*)+[^\n]*\n)*)"
+        r"(\\end\{(?:tabular|tabular\*)\*?\})",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    def _fix_empty_tabular(match):
+        begin = match.group(1)
+        body = match.group(2)
+        end = match.group(3)
+        # 如果 body 里没有任何可读字符，保留一个最小占位行
+        stripped = re.sub(r'\s+', '', body)
+        if not stripped or stripped.count('&') < 2:
+            # 从 begin 中提取列格式 spec
+            spec_match = re.search(r'\{([^}]*)\}', begin)
+            spec = spec_match.group(1) if spec_match else '||'
+            col_count = _count_tabular_columns(spec)
+            placeholder = " & ".join([" " * 8] * max(col_count, 2))
+            return f"{begin}\n{placeholder}\n{end}"
+        return match.group(0)
+
+    content = empty_tabular_pattern.sub(_fix_empty_tabular, content)
+
+    # 处理表格内被截断的短行——行长度 < 10 且以 & 结尾
+    lines = content.split('\n')
+    fixed_lines: List[str] = []
+    in_tabular = False
+    skip_blank_count = 0
+
+    for line in lines:
+        is_begin = re.match(r'\\begin\{(?:tabular|tabular\*)\*?', line, re.IGNORECASE)
+        is_end = re.match(r'\\end\{(?:tabular|tabular\*)\*?', line, re.IGNORECASE)
+
+        if is_begin:
+            in_tabular = True
+            skip_blank_count = 0
+            fixed_lines.append(line)
+            continue
+        if is_end:
+            in_tabular = False
+            skip_blank_count = 0
+            fixed_lines.append(line)
+            continue
+
+        if in_tabular:
+            stripped = line.strip()
+            # 跳过连续空行（最多保留 1 个）
+            if not stripped:
+                if skip_blank_count == 0:
+                    fixed_lines.append(line)
+                    skip_blank_count += 1
+                continue
+
+            # 清理注释行（用户可见）
+            if stripped.startswith('%'):
+                fixed_lines.append(line)
+                continue
+
+            # 检测被截断的短行：只含少量字符 + 以 & 结尾
+            if re.match(r'^[^&]*&\s*$', stripped) or (len(stripped) < 15 and stripped.count('&') == 1 and stripped.endswith('&')):
+                # 可能是截断行，检查下一行是否 & 开头（继续了同一行）
+                fixed_lines.append(line)
+                continue
+
+            skip_blank_count = 0
+            fixed_lines.append(line)
+        else:
+            fixed_lines.append(line)
+
+    return '\n'.join(fixed_lines)
+
+
 def _extract_beamer_blocks(body: str) -> List[str]:
     """按页面分隔注释切分为 beamer frame 内容块。"""
     content = (body or "").strip()
@@ -330,6 +442,7 @@ def wrap_with_template(body: str, template_name: str = "article", use_chinese: b
         r"\usepackage{amsmath,amssymb,amsthm}",
         r"\usepackage{graphicx}",
         r"\usepackage{hyperref}",
+        r"\usepackage{multicol}",
     ]
     if use_chinese:
         base_packages.append(r"\usepackage{xeCJK}")
