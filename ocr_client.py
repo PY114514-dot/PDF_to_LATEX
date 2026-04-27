@@ -46,7 +46,7 @@ class OCRClient:
         # 检查是否有可用的 Vision API
         self.has_vision_api = bool(settings.OPENAI_API_KEY or settings.GEMINI_API_KEY)
     
-    def preprocess_image(self, image: Image.Image, enhance: bool = True) -> Image.Image:
+    def preprocess_image(self, image: Image.Image, enhance: bool = True, layout_hint: Optional[str] = None) -> Image.Image:
         """
         图片预处理，提高OCR识别率
         
@@ -77,6 +77,13 @@ class OCRClient:
         
         if not enhance:
             return image
+
+        if layout_hint in {'table', 'code'}:
+            gray_image = image.convert('L')
+            enhancer = ImageEnhance.Contrast(gray_image)
+            enhanced = enhancer.enhance(1.6 if layout_hint == 'table' else 1.4)
+            enhancer = ImageEnhance.Sharpness(enhanced)
+            return enhancer.enhance(1.15 if layout_hint == 'table' else 1.05)
         
         # 使用OpenCV进行高级增强（如果可用）
         if HAS_OPENCV:
@@ -122,6 +129,21 @@ class OCRClient:
         enhanced = enhanced.point(lambda p: 255 if p > threshold else 0)
         
         return enhanced
+
+    def _build_tesseract_config(self, layout_hint: Optional[str] = None) -> str:
+        """为 Tesseract 生成适合不同版式的配置。"""
+        if layout_hint in {'table', 'code'}:
+            return '--psm 6 -c preserve_interword_spaces=1'
+        if layout_hint == 'sparse':
+            return '--psm 11'
+        return '--psm 6'
+
+    def _normalize_ocr_text(self, text: str, layout_hint: Optional[str] = None) -> str:
+        """统一 OCR 输出的换行与空白处理。"""
+        normalized = (text or '').replace('\r\n', '\n').replace('\r', '\n')
+        if layout_hint in {'table', 'code'}:
+            return '\n'.join(line.rstrip() for line in normalized.split('\n')).strip('\n')
+        return '\n'.join(line.strip() for line in normalized.split('\n')).strip()
     
     def detect_content_type(self, image: Image.Image) -> str:
         """
@@ -169,7 +191,8 @@ class OCRClient:
         self,
         image: Image.Image,
         lang: str = 'eng+chi_sim',
-        enhance: bool = True
+        enhance: bool = True,
+        layout_hint: Optional[str] = None
     ) -> Tuple[str, float]:
         """
         使用 Tesseract 进行 OCR 识别
@@ -184,19 +207,20 @@ class OCRClient:
         """
         try:
             # 预处理
-            processed_image = self.preprocess_image(image, enhance=enhance)
+            processed_image = self.preprocess_image(image, enhance=enhance, layout_hint=layout_hint)
+            config = self._build_tesseract_config(layout_hint)
             
             # OCR识别
-            text = pytesseract.image_to_string(processed_image, lang=lang)
+            text = pytesseract.image_to_string(processed_image, lang=lang, config=config)
             
             # 获取置信度
-            data = pytesseract.image_to_data(processed_image, lang=lang, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(processed_image, lang=lang, config=config, output_type=pytesseract.Output.DICT)
             confidences = [int(conf) for conf in data['conf'] if conf != '-1']
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0
             
             quality_score = avg_confidence / 100.0
             
-            return text.strip(), quality_score
+            return self._normalize_ocr_text(text, layout_hint=layout_hint), quality_score
             
         except Exception as e:
             print(f"Tesseract OCR 失败: {str(e)}")
@@ -222,7 +246,8 @@ class OCRClient:
     async def vision_api_ocr(
         self,
         image: Image.Image,
-        prompt: Optional[str] = None
+        prompt: Optional[str] = None,
+        layout_hint: Optional[str] = None
     ) -> Tuple[str, float]:
         """
         使用 Vision API 进行图片识别（GPT-4o 或 Gemini）
@@ -246,7 +271,28 @@ class OCRClient:
             
             # 默认提示词
             if prompt is None:
-                prompt = """你是一个专业的数学文档OCR识别专家。请精确识别图片中的所有内容。
+                if layout_hint == 'table':
+                    prompt = """你是一个表格OCR识别专家。请按单元格顺序识别图片中的内容，并尽量保持每一行对应原表格的一行。
+
+**识别规则**：
+
+1. 保持单元格读取顺序，从左到右、从上到下。
+2. 用换行分隔每一行；同一行的单元格之间用制表符或多个空格分隔。
+3. 不要解释，不要补充额外文字。
+4. 如果表格中有数学表达式，仍需保留标准 LaTeX 形式。
+"""
+                elif layout_hint == 'code':
+                    prompt = """你是一个代码块OCR识别专家。请尽量保留代码中的缩进、空格、换行和符号，不要改写代码。
+
+**识别规则**：
+
+1. 保留每一行的换行。
+2. 保留缩进与空格，不要自动格式化。
+3. 不要解释，不要补充额外文字。
+4. 如果有代码注释或字符串，请原样保留。
+"""
+                else:
+                    prompt = """你是一个专业的数学文档OCR识别专家。请精确识别图片中的所有内容。
 
 **识别规则**：
 
@@ -343,7 +389,7 @@ class OCRClient:
                     # Vision API通常质量较高，给予基础加成
                     quality_score = min(quality_score * 1.05, 1.0)
                 
-                return text, quality_score
+                return self._normalize_ocr_text(text, layout_hint=layout_hint), quality_score
                 
         except Exception as e:
             print(f"Vision API OCR 失败 ({self.vision_model}): {str(e)}")
@@ -357,7 +403,8 @@ class OCRClient:
     async def recognize(
         self,
         image: Image.Image,
-        force_provider: Optional[str] = None
+        force_provider: Optional[str] = None,
+        layout_hint: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         智能识别图片（混合方案）
@@ -396,18 +443,18 @@ class OCRClient:
         
         # 执行识别
         if provider == 'tesseract':
-            text, quality = self.tesseract_ocr(image)
+            text, quality = self.tesseract_ocr(image, layout_hint=layout_hint)
             
             # 如果 Tesseract 质量低，降级到 Vision API
             if quality < settings.IMAGE_QUALITY_THRESHOLD and self.has_vision_api:
                 print(f"Tesseract 质量较低 ({quality:.2f})，切换到 Vision API ({self.vision_model})")
-                text, quality = await self.vision_api_ocr(image)
+                text, quality = await self.vision_api_ocr(image, layout_hint=layout_hint)
                 provider = 'vision'
         else:
             # 直接使用 Vision API
             if not self.has_vision_api:
                 raise ValueError("Vision API 未配置，无法识别图片。请配置 OpenAI 或 Gemini API Key，或安装 Tesseract OCR")
-            text, quality = await self.vision_api_ocr(image)
+            text, quality = await self.vision_api_ocr(image, layout_hint=layout_hint)
             provider = 'vision'
         
         return {

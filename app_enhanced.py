@@ -8,13 +8,17 @@ PDF2LaTeX Web应用 - 增强版
 import os
 import time
 import threading
+import asyncio
+import json
 from pathlib import Path
+from typing import Any, Dict, List
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename as werkzeug_secure_filename
 from pdf2latex_enhanced import PDF2LaTeXEnhanced
 from image2latex_enhanced import Image2LaTeXEnhanced
+from clients import LLMClient
 from config import settings
 from history_manager import history_manager
 from task_manager import async_task_manager
@@ -49,6 +53,12 @@ MAX_BATCH_PDF_FILES = 5
 
 # 存储转换任务的状态
 conversion_tasks = {}
+
+PAPER_AGENT_REQUIRED_INSTRUCTIONS = [
+    "背景设置为学术专家，对论文给出建议。",
+    "确保真实性，回答中的数学公式必须出自原文；若原文没有对应公式，可以明确说明并不提供。",
+    "数学公式的推导必须严格遵循论文中的内容，可以解释但不能更改论文中的证明。"
+]
 
 
 def allowed_file(filename):
@@ -173,6 +183,171 @@ def parse_pages_input(pages_str):
     return sorted(pages)
 
 
+def _extract_algorithm_blocks_from_latex(latex_content: str, max_blocks: int = 6) -> List[str]:
+    """提取 LaTeX 中与算法相关的大段内容，供智能体重点参考。"""
+    text = (latex_content or '').strip()
+    if not text:
+        return []
+
+    blocks: List[str] = []
+
+    # 1) 优先匹配 algorithm / algorithm* 环境
+    env_pattern = re.compile(
+        r"\\begin\{algorithm\*?\}[\s\S]*?\\end\{algorithm\*?\}",
+        re.IGNORECASE
+    )
+    for m in env_pattern.finditer(text):
+        snippet = m.group(0).strip()
+        if snippet:
+            blocks.append(snippet[:2500])
+        if len(blocks) >= max_blocks:
+            return blocks
+
+    # 2) 匹配 algorithmic 环境
+    algic_pattern = re.compile(
+        r"\\begin\{algorithmic\}[\s\S]*?\\end\{algorithmic\}",
+        re.IGNORECASE
+    )
+    for m in algic_pattern.finditer(text):
+        snippet = m.group(0).strip()
+        if snippet and snippet not in blocks:
+            blocks.append(snippet[:2500])
+        if len(blocks) >= max_blocks:
+            return blocks
+
+    # 3) 回退：按段落抓取包含 Algorithm 关键词的长段
+    paragraphs = re.split(r"\n\s*\n", text)
+    for para in paragraphs:
+        if re.search(r"algorithm|algo\.|procedure|pseudo", para, flags=re.IGNORECASE):
+            cleaned = para.strip()
+            if len(cleaned) >= 120:
+                blocks.append(cleaned[:2500])
+        if len(blocks) >= max_blocks:
+            break
+
+    return blocks[:max_blocks]
+
+
+def _build_paper_agent_prompts(source_text: str, total_pages: int, analysis_focus: str, algorithm_blocks: List[str] = None) -> Dict[str, str]:
+    """构建论文智能阅读提示词（包含硬性约束）。"""
+    guardrails = "\n".join([f"{idx}. {item}" for idx, item in enumerate(PAPER_AGENT_REQUIRED_INSTRUCTIONS, start=1)])
+    algorithm_blocks = algorithm_blocks or []
+
+    highlighted_blocks = "\n\n".join([
+        f"[重点算法块 {idx + 1}]\n{block}"
+        for idx, block in enumerate(algorithm_blocks)
+    ]) or "未提供额外 LaTeX 算法块。"
+
+    system_prompt = f"""你是数学与机器学习方向的学术专家，擅长论文精读与方法分析。
+
+你必须严格遵守以下硬性指令：
+{guardrails}
+
+输出要求：
+1. 只基于提供的论文原文内容回答，不得编造。
+2. 当涉及公式或推导时，必须给出对应原文片段证据；若找不到证据，明确写“原文未提供”。
+3. 输出必须是合法 JSON，不要输出任何 JSON 之外的文本。
+4. 若提供了“重点算法块”，你必须优先参考其中的 Algorithm/algorithmic 内容来识别算法流程与伪代码。
+5. 对算法、公式、复杂度、推导的描述必须与原文或重点算法块一致，不得改写证明逻辑。
+"""
+
+    user_prompt = f"""请基于以下论文文本生成结构化分析（页数：{total_pages}，分析重点：{analysis_focus}）。
+
+请输出 JSON，结构必须为：
+{{
+  "summary": "string，200~400字的摘要",
+  "outline": ["string", "..."],
+  "mindmap_markdown": "string，使用 markdown 层级列表表示思维导图",
+  "algorithms": [
+    {{
+      "name": "算法名称",
+      "problem": "要解决的问题",
+      "core_idea": "核心思想",
+      "steps": ["步骤1", "步骤2"],
+      "pseudocode": "可选，伪代码；若原文没有可写空字符串",
+      "complexity": "可选，复杂度；若原文没有可写原文未提供",
+      "formulas": [
+        {{
+          "latex": "必须来自原文的公式（LaTeX）",
+          "meaning": "公式含义说明",
+          "evidence": "原文中支持该公式的片段"
+        }}
+      ],
+      "derivation": "严格按原文推导过程的解释；若原文未给出完整推导，必须明确说明",
+      "paper_advice": "以学术专家身份给出的改进建议"
+    }}
+  ],
+  "limitations": ["string", "..."],
+  "evidence_note": "说明哪些结论有直接证据，哪些地方原文未提供"
+}}
+
+注意：
+- 若论文里不存在某个算法或公式，对应字段可为空数组或“原文未提供”。
+- 禁止臆造任何公式、定理、证明和实验结果。
+- 若“重点算法块”中出现 Algorithm/algorithmic 内容，优先把这些内容映射到 algorithms 字段。
+
+原 LaTeX 中重点算法块（已标记）：
+{highlighted_blocks}
+
+论文原文如下：
+{source_text}
+"""
+
+    return {
+        'system_prompt': system_prompt,
+        'user_prompt': user_prompt
+    }
+
+
+def _parse_paper_agent_json(raw_content: str) -> Dict[str, Any]:
+    """从模型输出中提取 JSON，失败时返回兜底结构。"""
+    content = (raw_content or '').strip()
+    if not content:
+        return {
+            'summary': '',
+            'outline': [],
+            'mindmap_markdown': '',
+            'algorithms': [],
+            'limitations': [],
+            'evidence_note': '',
+            'raw_response': ''
+        }
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find('{')
+        end = content.rfind('}')
+        if start >= 0 and end > start:
+            try:
+                parsed = json.loads(content[start:end + 1])
+            except json.JSONDecodeError:
+                parsed = None
+        else:
+            parsed = None
+
+    if not isinstance(parsed, dict):
+        return {
+            'summary': '',
+            'outline': [],
+            'mindmap_markdown': '',
+            'algorithms': [],
+            'limitations': [],
+            'evidence_note': '',
+            'raw_response': content
+        }
+
+    return {
+        'summary': str(parsed.get('summary', '') or ''),
+        'outline': parsed.get('outline', []) if isinstance(parsed.get('outline', []), list) else [],
+        'mindmap_markdown': str(parsed.get('mindmap_markdown', '') or ''),
+        'algorithms': parsed.get('algorithms', []) if isinstance(parsed.get('algorithms', []), list) else [],
+        'limitations': parsed.get('limitations', []) if isinstance(parsed.get('limitations', []), list) else [],
+        'evidence_note': str(parsed.get('evidence_note', '') or ''),
+        'raw_response': content
+    }
+
+
 def progress_callback(task_id, status, current, total, message, log_type='info', log_message=None, tokens=None):
     """进度回调函数"""
     progress_data = {
@@ -213,7 +388,6 @@ def _save_async_pdf_history(filename, model, translate, pages_str, output_path, 
             'total_pages': result.get('total_pages', 0),
             'processed_pages': result.get('processed_pages', 0),
             'total_tokens': result.get('total_tokens', 0),
-            'estimated_cost': 0,
             'processing_time': result.get('processing_time', 0)
         }
     })
@@ -274,7 +448,6 @@ def _run_async_pdf_task(task_id: str):
                 'total_tokens': result.get('total_tokens', 0),
                 'prompt_tokens': result.get('prompt_tokens', 0),
                 'completion_tokens': result.get('completion_tokens', 0),
-                'estimated_cost': 0,
                 'processing_time': result.get('processing_time', 0)
             }
         }
@@ -379,6 +552,7 @@ def convert_pdf():
         task_id = request.form.get('task_id', '')  # 获取前端传来的task_id
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
+        translation_prompt = request.form.get('translation_prompt', '').strip()
         
         # 解析页码
         pages = None
@@ -407,7 +581,7 @@ def convert_pdf():
         
         # 创建转换器（支持模型选择）
         try:
-            converter = PDF2LaTeXEnhanced(model=model)
+            converter = PDF2LaTeXEnhanced(model=model, translation_prompt=translation_prompt)
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
         
@@ -449,7 +623,6 @@ def convert_pdf():
                 'total_pages': result.get('total_pages', 0),
                 'processed_pages': result.get('processed_pages', 0),
                 'total_tokens': result.get('total_tokens', 0),
-                'estimated_cost': 0,
                 'processing_time': result.get('processing_time', 0)
             }
         })
@@ -474,7 +647,6 @@ def convert_pdf():
                 'total_tokens': result.get('total_tokens', 0),
                 'prompt_tokens': result.get('prompt_tokens', 0),
                 'completion_tokens': result.get('completion_tokens', 0),
-                'estimated_cost': 0,
                 'processing_time': result.get('processing_time', 0)
             }
         }
@@ -576,6 +748,7 @@ def batch_convert_pdf():
         model = request.form.get('model', settings.DEFAULT_MODEL)  # 获取模型参数
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
+        translation_prompt = request.form.get('translation_prompt', '').strip()
         
         # 解析页码
         pages = None
@@ -622,7 +795,7 @@ def batch_convert_pdf():
                 
                 # 创建转换器（支持模型选择）
                 try:
-                    converter = PDF2LaTeXEnhanced(model=model)
+                    converter = PDF2LaTeXEnhanced(model=model, translation_prompt=translation_prompt)
                 except ValueError as e:
                     results.append({
                         'filename': file.filename,
@@ -666,7 +839,6 @@ def batch_convert_pdf():
                         'total_tokens': result.get('total_tokens', 0),
                         'prompt_tokens': result.get('prompt_tokens', 0),
                         'completion_tokens': result.get('completion_tokens', 0),
-                        'estimated_cost': 0,
                         'processing_time': result.get('processing_time', 0)
                     },
                     'success': True
@@ -687,7 +859,6 @@ def batch_convert_pdf():
                         'total_pages': result.get('total_pages', 0),
                         'processed_pages': result.get('processed_pages', 0),
                         'total_tokens': result.get('total_tokens', 0),
-                        'estimated_cost': 0,
                         'processing_time': result.get('processing_time', 0)
                     }
                 })
@@ -711,7 +882,6 @@ def batch_convert_pdf():
             'failed_files': sum(1 for r in results if not r.get('success', False)),
             'total_pages': sum(r.get('stats', {}).get('total_pages', 0) for r in results if r.get('success', False)),
             'total_tokens': sum(r.get('stats', {}).get('total_tokens', 0) for r in results if r.get('success', False)),
-            'total_cost': 0,
             'total_time': sum(r.get('stats', {}).get('processing_time', 0) for r in results if r.get('success', False))
         }
         
@@ -824,7 +994,6 @@ def get_public_config():
     return jsonify({
         'success': True,
         'config': {
-            'usd_to_cny_rate': settings.USD_TO_CNY_RATE,
             'default_model': settings.DEFAULT_MODEL
         }
     })
@@ -990,6 +1159,7 @@ def convert_image():
         add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
+        translation_prompt = request.form.get('translation_prompt', '').strip()
         
         # 调试日志
         print(f"[图片转换] 原始参数: translate_raw='{translate_raw}' (type={type(translate_raw)})")
@@ -1003,6 +1173,7 @@ def convert_image():
         converter = Image2LaTeXEnhanced(
             model_name=model,
             translate=translate,
+            translation_prompt=translation_prompt,
             progress_callback=callback
         )
         
@@ -1063,7 +1234,6 @@ def convert_image():
             'prompt_tokens': usage.get('prompt_tokens', 0),
             'completion_tokens': usage.get('completion_tokens', 0),
             'total_tokens': usage.get('total_tokens', 0),
-            'estimated_cost': 0,
             'processing_time': round(result['elapsed_time'], 2)
         }
         
@@ -1147,6 +1317,7 @@ def convert_images():
         add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
+        translation_prompt = request.form.get('translation_prompt', '').strip()
         
         # 创建进度回调
         def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
@@ -1156,6 +1327,7 @@ def convert_images():
         converter = Image2LaTeXEnhanced(
             model_name=model,
             translate=translate,
+            translation_prompt=translation_prompt,
             progress_callback=callback
         )
         
@@ -1203,7 +1375,6 @@ def convert_images():
                     'prompt_tokens': usage.get('prompt_tokens', 0),
                     'completion_tokens': usage.get('completion_tokens', 0),
                     'total_tokens': usage.get('total_tokens', 0),
-                    'estimated_cost': 0,
                     'processing_time': round(res.get('elapsed_time', 0), 2)
                 }
                 
@@ -1226,7 +1397,6 @@ def convert_images():
                 'successful_files': result.get('successful_images', 0),
                 'total_pages': result.get('successful_images', 0),  # 图片按成功数量计
                 'total_tokens': total_tokens,
-                'total_cost': 0,
                 'total_time': round(total_time, 2)
             }
         }
@@ -1400,6 +1570,176 @@ def merge_outputs():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/paper-agent', methods=['POST'])
+def paper_agent():
+    """PDF 学术阅读智能体：摘要、大纲、思维导图与算法分析。"""
+    filepath = None
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': '没有上传文件'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': '文件名为空'}), 400
+        if not allowed_file(file.filename):
+            return jsonify({'error': '仅支持PDF文件'}), 400
+
+        pages_str = request.form.get('pages', '').strip()
+        model = request.form.get('model', settings.DEFAULT_MODEL)
+        analysis_focus = request.form.get('analysis_focus', 'all').strip() or 'all'
+        latex_content = request.form.get('latex_content', '')
+        task_id = request.form.get('task_id', '').strip() or f"paper_{int(time.time())}"
+
+        def emit_paper_progress(status: str, current: int, total: int, message: str, log_type: str = 'info'):
+            percent = int((current / total) * 100) if total > 0 else 0
+            log_message = f"[PaperAgent] {message}"
+            print(log_message)
+            socketio.emit('progress', {
+                'task_id': task_id,
+                'status': status,
+                'current': current,
+                'total': total,
+                'percent': percent,
+                'message': message,
+                'log_type': log_type,
+                'log_message': log_message
+            }, room=task_id)
+
+        pages = None
+        if pages_str:
+            try:
+                pages = parse_pages_input(pages_str)
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
+
+        timestamp = int(time.time())
+        filename = secure_filename(file.filename)
+        filepath = app.config['UPLOAD_FOLDER'] / f"paper_agent_{timestamp}_{filename}"
+        file.save(filepath)
+
+        emit_paper_progress('preparing', 1, 5, '已上传PDF，准备提取文本...')
+
+        try:
+            converter = PDF2LaTeXEnhanced(model=model)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        def paper_progress_callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
+            msg = log_message or message
+            emit_paper_progress(status, current, total, msg, log_type=log_type)
+
+        converter.set_progress_callback(paper_progress_callback)
+        emit_paper_progress('extracting', 2, 5, '开始提取PDF文本...', 'progress')
+
+        pages_text = converter.extract_text_from_pdf(str(filepath), pages=pages)
+        selected_pages = pages if pages else list(range(len(pages_text)))
+
+        chunks: List[str] = []
+        for page_idx in selected_pages:
+            if 0 <= page_idx < len(pages_text):
+                text = (pages_text[page_idx] or '').strip()
+                if text:
+                    chunks.append(f"[第 {page_idx + 1} 页]\n{text}")
+
+        if not chunks:
+            return jsonify({'error': 'PDF文本提取失败，无法进行学术阅读分析'}), 400
+
+        source_text = "\n\n".join(chunks)
+        emit_paper_progress('processing', 3, 5, '文本提取完成，开始AI学术阅读分析...', 'progress')
+        max_chars = 120000
+        truncated = False
+        if len(source_text) > max_chars:
+            source_text = source_text[:max_chars]
+            truncated = True
+
+        algorithm_blocks = _extract_algorithm_blocks_from_latex(latex_content)
+        if algorithm_blocks:
+            emit_paper_progress('processing', 3, 5, f'检测到 {len(algorithm_blocks)} 段算法块，已注入提示词', 'quality')
+
+        prompts = _build_paper_agent_prompts(
+            source_text=source_text,
+            total_pages=len(selected_pages),
+            analysis_focus=analysis_focus,
+            algorithm_blocks=algorithm_blocks
+        )
+
+        response = asyncio.run(converter.client.chat(
+            messages=[
+                {'role': 'system', 'content': prompts['system_prompt']},
+                {'role': 'user', 'content': prompts['user_prompt']}
+            ],
+            temperature=0.2,
+            max_tokens=5000
+        ))
+
+        usage = response.get('usage', {}) if isinstance(response, dict) else {}
+        parsed = _parse_paper_agent_json(LLMClient.extract_content(response))
+        emit_paper_progress('processing', 4, 5, 'AI分析完成，整理结构化结果...', 'progress')
+
+        # 调试日志：记录AI返回的算法数据
+        print(f"[PaperAgent] AI返回的算法块数量: {len(parsed.get('algorithms', []))}")
+        for idx, algo in enumerate(parsed.get('algorithms', [])[:3]):  # 仅打印前3个
+            print(f"[PaperAgent] 算法 {idx + 1}: {algo.get('name', '未命名')}")
+            if algo.get('formulas'):
+                print(f"  - 公式数量: {len(algo['formulas'])}")
+                for jdx, f in enumerate(algo['formulas'][:2]):
+                    print(f"    公式 {jdx + 1}: {f.get('latex', '无LaTeX')[:100]}")
+
+        result_payload = {
+            'success': True,
+            'task_id': task_id,
+            'mode': 'pdf-academic-agent',
+            'model': model,
+            'analysis_focus': analysis_focus,
+            'pages': pages_str if pages_str else 'all',
+            'total_pages_analyzed': len(selected_pages),
+            'source_text_chars': len(source_text),
+            'source_truncated': truncated,
+            'algorithm_blocks_detected': len(algorithm_blocks),
+            'prompt_guardrails': PAPER_AGENT_REQUIRED_INSTRUCTIONS,
+            'result': {
+                'summary': parsed['summary'],
+                'outline': parsed['outline'],
+                'mindmap_markdown': parsed['mindmap_markdown'],
+                'algorithms': parsed['algorithms'],
+                'limitations': parsed['limitations'],
+                'evidence_note': parsed['evidence_note'],
+                'raw_response': parsed['raw_response']
+            },
+            'stats': {
+                'prompt_tokens': usage.get('prompt_tokens', 0),
+                'completion_tokens': usage.get('completion_tokens', 0),
+                'total_tokens': usage.get('total_tokens', 0)
+            }
+        }
+
+        emit_paper_progress('completed', 5, 5, '学术阅读完成', 'success')
+
+        return jsonify(result_payload)
+    except Exception as e:
+        try:
+            socketio.emit('progress', {
+                'task_id': request.form.get('task_id', '').strip() or 'paper_unknown',
+                'status': 'error',
+                'current': 0,
+                'total': 1,
+                'percent': 0,
+                'message': f'学术阅读失败: {str(e)}',
+                'log_type': 'error',
+                'log_message': f'[PaperAgent] 学术阅读失败: {str(e)}'
+            })
+            print(f"[PaperAgent] 学术阅读失败: {str(e)}")
+        except Exception:
+            pass
+        return jsonify({'error': str(e)}), 500
+    finally:
+        try:
+            if filepath and filepath.exists():
+                os.remove(filepath)
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

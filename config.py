@@ -34,9 +34,6 @@ class Settings:
     
     # 默认模型（应为前后端统一的模型ID）
     DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek-chat")
-
-    # 美元兑人民币汇率（用于成本展示）
-    USD_TO_CNY_RATE: float = float(os.getenv("USD_TO_CNY_RATE", "7.2"))
     
     # 超时设置
     DEFAULT_TIMEOUT: float = float(os.getenv("DEFAULT_TIMEOUT", "600.0"))

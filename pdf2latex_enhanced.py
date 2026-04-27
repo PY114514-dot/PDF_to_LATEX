@@ -7,11 +7,13 @@ PDF2LaTeX 增强版 - 支持进度回调、Token统计和多模型
 import os
 import time
 import asyncio
+import re
 from pathlib import Path
 from typing import Optional, List, Callable
 import PyPDF2
 import pdfplumber
 from dotenv import load_dotenv
+from document_parser import PDFDocumentParser
 from clients import (
     deepseek_chat, deepseek_reasoner, gpt4o, gpt4o_mini, gpt52_with_reasoning,
     glm46_thinking, glm47_thinking, gemini3_pro, doubao, deepseek_math,
@@ -40,21 +42,7 @@ class PDF2LaTeXEnhanced:
         'deepseek-math': deepseek_math
     }
     
-    # 模型价格配置 (per 1M tokens)
-    MODEL_PRICING = {
-        'deepseek-chat': {'input': 1.0, 'output': 2.0},
-        'deepseek-reasoner': {'input': 1.0, 'output': 2.0},
-        'gpt4o': {'input': 2.5, 'output': 10.0},
-        'gpt4o-mini': {'input': 0.15, 'output': 0.6},
-        'gpt52': {'input': 5.0, 'output': 15.0},
-        'glm46': {'input': 1.0, 'output': 1.0},
-        'glm47': {'input': 1.0, 'output': 1.0},
-        'gemini3-pro': {'input': 1.25, 'output': 5.0},
-        'doubao': {'input': 0.8, 'output': 2.0},
-        'deepseek-math': {'input': 1.0, 'output': 2.0}
-    }
-    
-    def __init__(self, model: str = "deepseek-chat"):
+    def __init__(self, model: str = "deepseek-chat", translation_prompt: str = ""):
         """
         初始化PDF2LaTeX转换器
         
@@ -76,6 +64,11 @@ class PDF2LaTeXEnhanced:
         
         self.model_name = model
         self.client = self.MODEL_MAP[model]
+        self.translation_prompt = translation_prompt.strip()
+        self.document_parser = PDFDocumentParser(
+            quality_fn=self._check_text_quality,
+            progress_callback=self._emit_progress,
+        )
         
         # 进度回调
         self.progress_callback = None
@@ -84,33 +77,27 @@ class PDF2LaTeXEnhanced:
         self.total_tokens = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        
-        # 获取价格配置
-        pricing = self.MODEL_PRICING.get(model, {'input': 1.0, 'output': 2.0})
-        self.price_per_million_input = pricing['input']
-        self.price_per_million_output = pricing['output']
     
     def set_progress_callback(self, callback: Callable):
         """设置进度回调函数"""
         self.progress_callback = callback
     
-    def _emit_progress(self, status: str, current: int, total: int, message: str, log_type: str = 'info', log_message: str = None):
+    def _emit_progress(self, status: str, current: int, total: int, message: str, log_type: str = 'info', log_message: Optional[str] = None):
         """发送进度更新"""
         if self.progress_callback:
             # 传递当前的 token 统计信息
             tokens = {
                 'prompt_tokens': self.prompt_tokens,
                 'completion_tokens': self.completion_tokens,
-                'total_tokens': self.total_tokens,
-                'estimated_cost': self._calculate_cost()
+                'total_tokens': self.total_tokens
             }
             self.progress_callback(status, current, total, message, log_type, log_message, tokens)
-    
-    def _calculate_cost(self):
-        """计算估算成本（美元）"""
-        input_cost = (self.prompt_tokens / 1_000_000) * self.price_per_million_input
-        output_cost = (self.completion_tokens / 1_000_000) * self.price_per_million_output
-        return input_cost + output_cost
+
+    def _compose_translation_guidance(self) -> str:
+        """拼接用户自定义翻译要求。"""
+        if not self.translation_prompt:
+            return ""
+        return f"\n\n用户自定义翻译要求：\n{self.translation_prompt}\n\n优先级说明：在不违反公式、符号、变量名和参考文献原文保护规则的前提下，优先满足上述要求。"
     
     def _check_text_quality(self, text: str) -> float:
         """
@@ -138,140 +125,133 @@ class PDF2LaTeXEnhanced:
         
         return max(0.0, min(1.0, quality_score))
 
+    def _clean_table_cell(self, cell: Optional[str]) -> str:
+        """清洗表格单元格文本。"""
+        if cell is None:
+            return "<EMPTY>"
+        cleaned = str(cell).replace("\n", " ").strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned if cleaned else "<EMPTY>"
+
+    def _format_tables_for_prompt(self, tables: List[List[List[Optional[str]]]]) -> str:
+        """将 PDF 抽取的表格转为结构化文本，供 LLM 还原 tabular。"""
+        blocks: List[str] = []
+
+        for t_idx, table in enumerate(tables, start=1):
+            rows = table or []
+            valid_rows = [row for row in rows if isinstance(row, list)]
+            if not valid_rows:
+                continue
+
+            max_cols = max((len(row) for row in valid_rows), default=0)
+            if max_cols == 0:
+                continue
+
+            lines = [f"[TABLE {t_idx}] cols={max_cols}"]
+            for r_idx, row in enumerate(valid_rows, start=1):
+                normalized = [self._clean_table_cell(cell) for cell in row]
+                if len(normalized) < max_cols:
+                    normalized.extend(["<EMPTY>"] * (max_cols - len(normalized)))
+                lines.append(f"ROW {r_idx}: " + " | ".join(normalized[:max_cols]))
+
+            blocks.append("\n".join(lines))
+
+        return "\n\n".join(blocks).strip()
+
+    def _attach_tables_context(self, page_text: str, page_tables_context: str) -> str:
+        """将表格上下文拼接到页面文本末尾。"""
+        text = (page_text or "").strip()
+        if not page_tables_context:
+            return text
+
+        marker = "\n\n[STRUCTURED_TABLE_CONTEXT]\n"
+        if text:
+            return f"{text}{marker}{page_tables_context}"
+        return f"[STRUCTURED_TABLE_CONTEXT]\n{page_tables_context}"
+
+    def _is_pagination_line(self, line: str, page_num: int, total_pages: int) -> bool:
+        """判断一行文本是否是页码/页眉页脚中的分页噪声。"""
+        s = (line or "").strip()
+        if not s:
+            return False
+
+        cur = page_num + 1
+        # 仅由数字构成，如 "5"
+        if re.fullmatch(r"\d{1,4}", s):
+            value = int(s)
+            if value == cur or (total_pages > 0 and value == total_pages):
+                return True
+
+        # 纯分数样式，如 "5/26"
+        frac = re.fullmatch(r"(\d{1,4})\s*/\s*(\d{1,4})", s)
+        if frac:
+            left = int(frac.group(1))
+            right = int(frac.group(2))
+            if left == cur and (total_pages <= 0 or right == total_pages):
+                return True
+
+        # 中英分页写法，如 "Page 5 of 26"、"第5页"、"第 5/26 页"
+        cn_page = re.fullmatch(
+            r"第\s*\d{1,4}(?:\s*/\s*\d{1,4})?\s*页(?:\s*/\s*共?\s*\d{1,4}\s*页)?",
+            s,
+            flags=re.IGNORECASE,
+        )
+        if cn_page:
+            return True
+
+        en_page = re.fullmatch(
+            r"(?:page|p\.)\s*\d{1,4}(?:\s*(?:/|of)\s*\d{1,4})?",
+            s,
+            flags=re.IGNORECASE,
+        )
+        if en_page:
+            return True
+
+        return False
+
+    def _remove_pagination_artifacts(self, text: str, page_num: int, total_pages: int) -> str:
+        """清理页首页尾的分页噪声，避免被翻译成正文。"""
+        raw = (text or "")
+        if not raw.strip():
+            return ""
+
+        lines = raw.splitlines()
+        if not lines:
+            return raw.strip()
+
+        window = min(4, len(lines))
+        keep = [True] * len(lines)
+
+        for i in range(window):
+            if self._is_pagination_line(lines[i], page_num, total_pages):
+                keep[i] = False
+
+        for i in range(len(lines) - window, len(lines)):
+            if i >= 0 and self._is_pagination_line(lines[i], page_num, total_pages):
+                keep[i] = False
+
+        cleaned = "\n".join(lines[i] for i in range(len(lines)) if keep[i]).strip()
+        return cleaned
+
     def extract_text_from_pdf(
         self,
         pdf_path: str,
         pages: Optional[List[int]] = None
     ) -> List[str]:
-        """
-        从PDF提取文本，使用多种方法以获得最佳效果
-        优先级：pdfplumber > PyPDF2
-        
-        Args:
-            pdf_path: PDF文件路径
-            pages: 要提取的页码列表（0-based），None表示提取所有页
-        
-        Returns:
-            提取的文本列表，索引对应页码
-        """
-        pages_text = []
-        
-        try:
-            # 首先尝试使用 pdfplumber（效果更好）
-            print(f"\n[PDF提取] 开始提取文件: {pdf_path}")
-            print("[PDF提取] 方法: pdfplumber (优先)")
-            
-            with pdfplumber.open(pdf_path) as pdf:
-                total_pages = len(pdf.pages)
-                
-                # 确定要提取的页码
-                if pages is None:
-                    pages_to_extract = list(range(total_pages))
-                else:
-                    pages_to_extract = [p for p in pages if 0 <= p < total_pages]
-                
-                # 初始化所有页面为空字符串
-                pages_text = [''] * total_pages
-                
-                self._emit_progress('extracting', 0, len(pages_to_extract), '正在使用增强方法提取PDF文本...', 'info', '📄 开始提取PDF文本 (需要提取 {}/{} 页)'.format(len(pages_to_extract), total_pages))
-                
-                for idx, page_num in enumerate(pages_to_extract):
-                    page = pdf.pages[page_num]
-                    text = page.extract_text()
-                    
-                    if text:
-                        text = text.strip()
-                    else:
-                        text = ""
-                    
-                    # 检查文本质量
-                    quality = self._check_text_quality(text)
-                    print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 长度: {len(text)}, 质量: {quality:.2f}")
-                    
-                    # 发送质量日志
-                    self._emit_progress(
-                        'extracting',
-                        idx,
-                        len(pages_to_extract),
-                        f'提取第 {idx + 1}/{len(pages_to_extract)} 页',
-                        'quality',
-                        f'第 {page_num + 1} 页: 文本长度 {len(text)}, 质量 {quality:.0%}'
-                    )
-                    
-                    # 如果质量太低，尝试使用 PyPDF2 备用方法
-                    if quality < 0.5 and len(text) < 50:
-                        print(f"[PDF提取] 第 {page_num + 1} 页质量低，尝试备用方法...")
-                        try:
-                            with open(pdf_path, 'rb') as file:
-                                pdf_reader = PyPDF2.PdfReader(file)
-                                if page_num < len(pdf_reader.pages):
-                                    backup_text = pdf_reader.pages[page_num].extract_text()
-                                    backup_quality = self._check_text_quality(backup_text)
-                                    
-                                    if backup_quality > quality:
-                                        text = backup_text
-                                        print(f"[PDF提取] 备用方法更好，质量: {backup_quality:.2f}")
-                        except Exception as e:
-                            print(f"[PDF提取] 备用方法失败: {str(e)}")
-                    
-                    pages_text[page_num] = text
-                    
-                    self._emit_progress(
-                        'extracting',
-                        idx + 1,
-                        len(pages_to_extract),
-                        f'已提取 {idx + 1}/{len(pages_to_extract)} 页 (质量: {quality:.0%})',
-                        'success',
-                        f'✓ 第 {page_num + 1} 页提取完成 (质量: {quality:.0%})'
-                    )
-                
-                print(f"[PDF提取] 完成！共提取 {len(pages_to_extract)}/{total_pages} 页")
-                    
-        except Exception as e:
-            # 如果 pdfplumber 失败，降级到 PyPDF2
-            print(f"[PDF提取] pdfplumber 失败: {str(e)}")
-            print("[PDF提取] 降级到 PyPDF2...")
-            
-            try:
-                with open(pdf_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
-                    total_pages = len(pdf_reader.pages)
-                    
-                    # 确定要提取的页码
-                    if pages is None:
-                        pages_to_extract = list(range(total_pages))
-                    else:
-                        pages_to_extract = [p for p in pages if 0 <= p < total_pages]
-                    
-                    # 初始化所有页面为空字符串
-                    pages_text = [''] * total_pages
-                    
-                    self._emit_progress('extracting', 0, len(pages_to_extract), '正在使用基础方法提取PDF文本...', 'info', '📄 使用基础方法提取PDF文本 (需要提取 {}/{} 页)'.format(len(pages_to_extract), total_pages))
-                    
-                    for idx, page_num in enumerate(pages_to_extract):
-                        page = pdf_reader.pages[page_num]
-                        text = page.extract_text()
-                        pages_text[page_num] = text
-                        
-                        quality = self._check_text_quality(text)
-                        print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 长度: {len(text)}, 质量: {quality:.2f}")
-                        
-                        self._emit_progress(
-                            'extracting',
-                            idx + 1,
-                            len(pages_to_extract),
-                            f'已提取 {idx + 1}/{len(pages_to_extract)} 页',
-                            'success',
-                            f'✓ 第 {page_num + 1} 页提取完成 (质量: {quality:.0%})'
-                        )
-                        
-            except Exception as e2:
-                raise Exception(f"所有PDF提取方法均失败: PyPDF2={str(e2)}, pdfplumber={str(e)}")
-        
-        return pages_text
+        """从 PDF 提取文本，统一委托给 document_parser。"""
+        return self.document_parser.extract_text_from_pdf(pdf_path, pages)
     
-    def translate_text(self, text: str, page_num: int, total_pages: int) -> str:
+    def translate_text(
+        self,
+        text: str,
+        page_num: int,
+        total_pages: int,
+        display_page_num: Optional[int] = None,
+        display_total_pages: Optional[int] = None,
+    ) -> str:
         """翻译文本"""
+        display_page_num = page_num if display_page_num is None else display_page_num
+        display_total_pages = total_pages if display_total_pages is None else display_total_pages
         main_text, refs_text = split_references_section(text)
         if not main_text.strip():
             # 整页为参考文献时保持原文，避免错误翻译作者名/刊名等。
@@ -279,26 +259,28 @@ class PDF2LaTeXEnhanced:
 
         system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
 
-要求：
-1. 保持学术性和专业性
-2. 数学公式、符号、变量名保持原样
-3. 专业术语使用准确的中文翻译
-4. 保持原文段落结构
-5. 翻译流畅自然
-6. 只输出翻译后的文本"""
+    要求：
+    1. 保持学术性和专业性
+    2. 数学公式、符号、变量名保持原样
+    3. 专业术语使用准确的中文翻译
+    4. 保持原文段落结构
+    5. 翻译流畅自然
+    6. 参考文献（References/Bibliography/参考文献）条目不得翻译作者名、论文名、期刊名、会议名
+    7. 只输出翻译后的文本"""
+        system_prompt += self._compose_translation_guidance()
 
-        user_prompt = f"""请将以下英文学术文本翻译成中文（第 {page_num + 1}/{total_pages} 页）：
+        user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
 
-    {main_text}
+        {main_text}
 
-请直接输出翻译后的中文文本。"""
+    请直接输出翻译后的中文文本。"""
 
         try:
             self._emit_progress(
                 'translating',
                 page_num,
                 total_pages,
-                f'正在翻译第 {page_num + 1}/{total_pages} 页...'
+                f'正在翻译第 {display_page_num + 1}/{display_total_pages} 页...'
             )
             
             # 使用异步客户端
@@ -327,34 +309,45 @@ class PDF2LaTeXEnhanced:
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
 
-    async def translate_text_async(self, text: str, page_num: int, total_pages: int) -> str:
+    async def translate_text_async(
+        self,
+        text: str,
+        page_num: int,
+        total_pages: int,
+        display_page_num: Optional[int] = None,
+        display_total_pages: Optional[int] = None,
+    ) -> str:
         """异步翻译文本"""
+        display_page_num = page_num if display_page_num is None else display_page_num
+        display_total_pages = total_pages if display_total_pages is None else display_total_pages
         main_text, refs_text = split_references_section(text)
         if not main_text.strip():
             return text.strip()
 
         system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
 
-要求：
-1. 保持学术性和专业性
-2. 数学公式、符号、变量名保持原样
-3. 专业术语使用准确的中文翻译
-4. 保持原文段落结构
-5. 翻译流畅自然
-6. 只输出翻译后的文本"""
+    要求：
+    1. 保持学术性和专业性
+    2. 数学公式、符号、变量名保持原样
+    3. 专业术语使用准确的中文翻译
+    4. 保持原文段落结构
+    5. 翻译流畅自然
+    6. 参考文献（References/Bibliography/参考文献）条目不得翻译作者名、论文名、期刊名、会议名
+    7. 只输出翻译后的文本"""
+        system_prompt += self._compose_translation_guidance()
 
-        user_prompt = f"""请将以下英文学术文本翻译成中文（第 {page_num + 1}/{total_pages} 页）：
+        user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
 
-    {main_text}
+        {main_text}
 
-请直接输出翻译后的中文文本。"""
+    请直接输出翻译后的中文文本。"""
 
         try:
             self._emit_progress(
                 'translating',
                 page_num,
                 total_pages,
-                f'正在翻译第 {page_num + 1}/{total_pages} 页...'
+                f'正在翻译第 {display_page_num + 1}/{display_total_pages} 页...'
             )
 
             response = await self.client.chat(
@@ -412,11 +405,22 @@ class PDF2LaTeXEnhanced:
 
         return LLMClient.extract_content(response).strip()
 
-    def convert_text_to_latex(self, text: str, page_num: int, total_pages: int, translate: bool = False, quality_mode: str = 'standard') -> str:
+    def convert_text_to_latex(
+        self,
+        text: str,
+        page_num: int,
+        total_pages: int,
+        translate: bool = False,
+        quality_mode: str = 'standard',
+        display_page_num: Optional[int] = None,
+        display_total_pages: Optional[int] = None,
+    ) -> str:
         """转换文本为LaTeX"""
+        display_page_num = page_num if display_page_num is None else display_page_num
+        display_total_pages = total_pages if display_total_pages is None else display_total_pages
         # 检查文本质量
         quality = self._check_text_quality(text)
-        print(f"[转换] 第 {page_num + 1} 页文本质量: {quality:.2f}, 长度: {len(text)}")
+        print(f"[转换] 第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
         
         # 如果文本为空或质量太低，提示用户
         if not text.strip():
@@ -424,10 +428,16 @@ class PDF2LaTeXEnhanced:
             return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
         
         if quality < 0.3:
-            print(f"[转换] 警告: 第 {page_num + 1} 页文本质量较低 ({quality:.2f})，可能包含乱码")
+            print(f"[转换] 警告: 第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
         
         if translate:
-            text = self.translate_text(text, page_num, total_pages)
+            text = self.translate_text(
+                text,
+                page_num,
+                total_pages,
+                display_page_num=display_page_num,
+                display_total_pages=display_total_pages,
+            )
         
         system_prompt = """你是一个专业的LaTeX转换助手。将文本转换为规范的LaTeX格式。
 
@@ -438,20 +448,26 @@ class PDF2LaTeXEnhanced:
 4. **不要输出\\documentclass, \\begin{document}, \\end{document}等文档结构**
 5. **不要输出\\usepackage等导言区命令**
     6. **不要输出\\begin{theorem}/\\begin{lemma}/\\begin{proof}等需额外宏包或定理环境的结构，改为普通段落或使用\\textbf{}做标题**
-    7. 只输出正文内容的LaTeX代码"""
+    7. 若输入中存在 [STRUCTURED_TABLE_CONTEXT] 或 [TABLE n] 片段，必须优先还原为完整表格环境（建议 tabular）
+    8. 每个表格行列数必须一致；缺失单元格用 -- 占位，禁止省略列
+    9. 暂不处理图片内容；遇到 Figure/Fig./图像描述可保留为普通文本，禁止臆造 figure 环境
+    10. 参考文献部分（References/Bibliography/参考文献）必须保持原文语言，不得翻译作者名、标题、刊名
+    11. 只输出正文内容的LaTeX代码"""
 
-        user_prompt = f"""请将以下文本转换为LaTeX格式（第 {page_num + 1}/{total_pages} 页）：
+        user_prompt = f"""请将以下文本转换为LaTeX格式（第 {display_page_num + 1}/{display_total_pages} 页）：
 
 {text}
 
-    只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。"""
+    只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。
+
+    特别要求：如果看到 [STRUCTURED_TABLE_CONTEXT]，请据此还原完整表格，确保每行列数一致。"""
 
         try:
             self._emit_progress(
                 'converting',
                 page_num,
                 total_pages,
-                f'正在转换第 {page_num + 1}/{total_pages} 页为LaTeX...'
+                f'正在转换第 {display_page_num + 1}/{display_total_pages} 页为LaTeX...'
             )
             
             # 使用异步客户端
@@ -487,20 +503,37 @@ class PDF2LaTeXEnhanced:
         except Exception as e:
             raise Exception(f"转换失败: {str(e)}")
 
-    async def convert_text_to_latex_async(self, text: str, page_num: int, total_pages: int, translate: bool = False, quality_mode: str = 'standard') -> str:
+    async def convert_text_to_latex_async(
+        self,
+        text: str,
+        page_num: int,
+        total_pages: int,
+        translate: bool = False,
+        quality_mode: str = 'standard',
+        display_page_num: Optional[int] = None,
+        display_total_pages: Optional[int] = None,
+    ) -> str:
         """异步转换文本为LaTeX"""
+        display_page_num = page_num if display_page_num is None else display_page_num
+        display_total_pages = total_pages if display_total_pages is None else display_total_pages
         quality = self._check_text_quality(text)
-        print(f"[转换] 第 {page_num + 1} 页文本质量: {quality:.2f}, 长度: {len(text)}")
+        print(f"[转换] 第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
 
         if not text.strip():
             print(f"[转换] 警告: 第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
             return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
 
         if quality < 0.3:
-            print(f"[转换] 警告: 第 {page_num + 1} 页文本质量较低 ({quality:.2f})，可能包含乱码")
+            print(f"[转换] 警告: 第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
 
         if translate:
-            text = await self.translate_text_async(text, page_num, total_pages)
+            text = await self.translate_text_async(
+                text,
+                page_num,
+                total_pages,
+                display_page_num=display_page_num,
+                display_total_pages=display_total_pages,
+            )
 
         system_prompt = """你是一个专业的LaTeX转换助手。将文本转换为规范的LaTeX格式。
 
@@ -511,20 +544,26 @@ class PDF2LaTeXEnhanced:
 4. **不要输出\\documentclass, \\begin{document}, \\end{document}等文档结构**
 5. **不要输出\\usepackage等导言区命令**
 6. **不要输出\\begin{theorem}/\\begin{lemma}/\\begin{proof}等需额外宏包或定理环境的结构，改为普通段落或使用\\textbf{}做标题**
-7. 只输出正文内容的LaTeX代码"""
+7. 若输入中存在 [STRUCTURED_TABLE_CONTEXT] 或 [TABLE n] 片段，必须优先还原为完整表格环境（建议 tabular）
+8. 每个表格行列数必须一致；缺失单元格用 -- 占位，禁止省略列
+9. 暂不处理图片内容；遇到 Figure/Fig./图像描述可保留为普通文本，禁止臆造 figure 环境
+10. 参考文献部分（References/Bibliography/参考文献）必须保持原文语言，不得翻译作者名、标题、刊名
+11. 只输出正文内容的LaTeX代码"""
 
-        user_prompt = f"""请将以下文本转换为LaTeX格式（第 {page_num + 1}/{total_pages} 页）：
+        user_prompt = f"""请将以下文本转换为LaTeX格式（第 {display_page_num + 1}/{display_total_pages} 页）：
 
 {text}
 
-只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。"""
+只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。
+
+特别要求：如果看到 [STRUCTURED_TABLE_CONTEXT]，请据此还原完整表格，确保每行列数一致。"""
 
         try:
             self._emit_progress(
                 'converting',
                 page_num,
                 total_pages,
-                f'正在转换第 {page_num + 1}/{total_pages} 页为LaTeX...'
+                f'正在转换第 {display_page_num + 1}/{display_total_pages} 页为LaTeX...'
             )
 
             response = await self.client.chat(
@@ -599,7 +638,9 @@ class PDF2LaTeXEnhanced:
         if output_path is None:
             pdf_file = Path(pdf_path)
             suffix = "_cn" if translate else ""
-            output_path = pdf_file.parent / f"{pdf_file.stem}{suffix}.tex"
+            output_path = str(pdf_file.parent / f"{pdf_file.stem}{suffix}.tex")
+        else:
+            output_path = str(output_path)
         
         # 先获取PDF总页数
         try:
@@ -626,6 +667,7 @@ class PDF2LaTeXEnhanced:
         
         # 构建LaTeX正文
         latex_content = []
+        failed_pages = []
         
         mode_desc = "翻译并转换" if translate else "转换"
         processed_pages = 0
@@ -652,7 +694,9 @@ class PDF2LaTeXEnhanced:
                     page_num,
                     len(pages_text),
                     translate=translate,
-                    quality_mode=quality_mode
+                    quality_mode=quality_mode,
+                    display_page_num=idx,
+                    display_total_pages=total_to_process,
                 )
 
                 self._emit_progress(
@@ -665,11 +709,21 @@ class PDF2LaTeXEnhanced:
                 )
                 return page_num, latex_page, True
             except Exception as e:
-                print(f"警告: 第 {page_num + 1} 页{mode_desc}失败: {str(e)}")
+                err_text = str(e)
+                print(f"警告: 第 {page_num + 1} 页{mode_desc}失败: {err_text}")
+                failed_pages.append((page_num + 1, err_text))
                 return page_num, None, False
 
         async def process_all_pages():
-            tasks = [process_page(idx, page_num) for idx, page_num in enumerate(pages)]
+            # 控制并发，避免同时发起过多LLM请求导致连接失败。
+            max_concurrency = 2
+            semaphore = asyncio.Semaphore(max_concurrency)
+
+            async def _run_with_limit(idx: int, page_num: int):
+                async with semaphore:
+                    return await process_page(idx, page_num)
+
+            tasks = [_run_with_limit(idx, page_num) for idx, page_num in enumerate(pages)]
             return await asyncio.gather(*tasks)
 
         results = asyncio.run(process_all_pages())
@@ -689,6 +743,15 @@ class PDF2LaTeXEnhanced:
         
         source_text = "\n\n".join([pages_text[p] for p in pages if pages_text[p].strip()]).strip()
         final_content = "\n".join(latex_content)
+
+        if total_to_process > 0 and processed_pages == 0:
+            # 全部页面失败时直接抛错，避免返回“成功但0页”。
+            if failed_pages:
+                sample_errors = "; ".join(
+                    [f"第{page_no}页: {msg}" for page_no, msg in failed_pages[:3]]
+                )
+                raise Exception(f"所有页面{mode_desc}失败。示例错误: {sample_errors}")
+            raise Exception(f"所有页面{mode_desc}失败")
 
         if add_document_wrapper:
             final_content = wrap_with_template(
@@ -718,10 +781,13 @@ class PDF2LaTeXEnhanced:
             'output_path': str(output_path),
             'total_pages': len(pages_text),
             'processed_pages': processed_pages,
+            'failed_pages': [
+                {'page': page_no, 'error': err}
+                for page_no, err in failed_pages
+            ],
             'total_tokens': self.total_tokens,
             'prompt_tokens': self.prompt_tokens,
             'completion_tokens': self.completion_tokens,
-            'estimated_cost': self._calculate_cost(),
             'processing_time': round(processing_time, 2),
             'source_text': source_text
         }

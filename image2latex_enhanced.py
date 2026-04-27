@@ -23,6 +23,7 @@ class Image2LaTeXEnhanced:
         self,
         model_name: str = "deepseek-chat",
         translate: bool = False,
+        translation_prompt: str = "",
         progress_callback: Optional[Callable] = None
     ):
         """
@@ -35,6 +36,7 @@ class Image2LaTeXEnhanced:
         """
         self.model_name = model_name
         self.translate = translate
+        self.translation_prompt = translation_prompt.strip()
         self.progress_callback = progress_callback
         
         # 初始化LLM客户端
@@ -48,6 +50,12 @@ class Image2LaTeXEnhanced:
             'total_tokens': 0,
             'total_cost': 0.0
         }
+
+    def _compose_translation_guidance(self) -> str:
+        """拼接用户自定义翻译要求。"""
+        if not self.translation_prompt:
+            return ""
+        return f"\n\n用户自定义翻译要求：\n{self.translation_prompt}\n\n优先级说明：在不违反数学公式、符号、变量名和参考文献原文保护规则的前提下，优先满足上述要求。"
     
     def _init_llm_client(self) -> LLMClient:
         """初始化LLM客户端"""
@@ -229,11 +237,13 @@ class Image2LaTeXEnhanced:
 2. 数学表达式不要翻译（如 "bipartite graph" 翻译为 "二分图"，但保留 G = (U, V, E)）
 3. 使用准确的学术术语（如 "matrix" → "矩阵"，"determinant" → "行列式"）
 4. 保持原文的段落结构和格式
-5. 如果已经是中文，直接输出原文
+5. 参考文献条目（References/Bibliography/参考文献）中作者名、题名、刊名保持原文
+6. 如果已经是中文，直接输出原文
 
 示例：
 输入：Given a bipartite graph G = (U, V, E), its biadjacency matrix is defined as B(G).
 输出：给定一个二分图 G = (U, V, E)，其双邻接矩阵定义为 B(G)。"""
+            translate_prompt += self._compose_translation_guidance()
             
             try:
                 response = await self.llm_client.chat(
@@ -314,7 +324,8 @@ class Image2LaTeXEnhanced:
 2. 数学公式使用LaTeX数学环境
 3. 行内公式用 $...$，独立公式用 $$...$$
 4. 保持原有的结构和排版
-5. 不要添加任何解释，只输出LaTeX代码"""
+5. 参考文献条目（References/Bibliography/参考文献）保持原文语言，不要翻译作者名、标题、刊名
+6. 不要添加任何解释，只输出LaTeX代码"""
         
         # 构建消息
         messages = [

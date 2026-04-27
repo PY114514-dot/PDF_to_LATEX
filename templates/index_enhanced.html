@@ -130,6 +130,14 @@
                     </div>
 
                     <div class="option-group">
+                        <label for="translationPromptInput">
+                            <span>用户提示词</span>
+                            <span class="hint">（术语替换、翻译风格或保留规则）</span>
+                        </label>
+                        <textarea id="translationPromptInput" class="text-input" rows="4" placeholder="例如：将 NMF 统一翻译为非负矩阵分解；全文保持正式学术风格；参考文献作者名不翻译。"></textarea>
+                    </div>
+
+                    <div class="option-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="asyncOption">
                             <span>异步任务模式（可恢复）</span>
@@ -192,9 +200,28 @@
                 <div class="progress-content">
                     <div class="spinner"></div>
                     <p class="progress-text" id="progressText">准备开始...</p>
-                    <div class="progress-bar">
-                        <div class="progress-bar-fill" id="progressBarFill"></div>
+
+                    <div class="stage-progress-group">
+                        <div class="stage-progress-item" id="translateProgressItem">
+                            <div class="stage-progress-header">
+                                <span>翻译进度</span>
+                                <span id="translateProgressLabel">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-bar-fill" id="translateProgressFill"></div>
+                            </div>
+                        </div>
+                        <div class="stage-progress-item" id="convertProgressItem">
+                            <div class="stage-progress-header">
+                                <span>转换进度</span>
+                                <span id="convertProgressLabel">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-bar-fill" id="convertProgressFill"></div>
+                            </div>
+                        </div>
                     </div>
+
                     <p class="progress-detail" id="progressDetail">0 / 0</p>
                     
                     <!-- Token 统计实时显示 -->
@@ -278,7 +305,7 @@
                             <polyline points="7 10 12 15 17 10"></polyline>
                             <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
-                        下载 .tex 文件
+                        下载编辑版 .tex
                     </button>
                     <button class="btn-secondary" onclick="copyToClipboard(event)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -292,32 +319,59 @@
                             <circle cx="12" cy="12" r="10"></circle>
                             <polygon points="10 8 16 12 10 16 10 8"></polygon>
                         </svg>
-                        在线渲染
+                        在线编辑
+                    </button>
+                    <button class="btn-secondary" id="paperAgentBtn" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                            <path d="M20 22V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5v15"></path>
+                            <path d="M8 7h8M8 11h8M8 15h5"></path>
+                        </svg>
+                        AI学术阅读（仅PDF）
                     </button>
                 </div>
 
-                <div class="compare-editor" id="compareEditor">
-                    <div class="compare-editor-header">
-                        <h4>双栏对照编辑器</h4>
+                <div class="paper-agent-section" id="paperAgentSection" style="display: none;">
+                    <div class="paper-agent-header">
+                        <h4>数学论文智能体输出</h4>
+                        <p id="paperAgentMeta">等待分析</p>
                     </div>
-                    <div class="compare-editor-grid">
-                        <div class="compare-col">
-                            <label for="sourceTextArea">原文 / OCR 文本</label>
-                            <textarea id="sourceTextArea" readonly></textarea>
+                    <div class="paper-agent-loading" id="paperAgentLoading" style="display: none;">正在调用学术智能体分析PDF内容...</div>
+                    <div class="paper-agent-content" id="paperAgentContent" style="display: none;">
+                        <div class="paper-block">
+                            <h5>摘要</h5>
+                            <p id="paperSummary"></p>
                         </div>
-                        <div class="compare-col">
-                            <label for="latexEditorArea">LaTeX 可编辑区</label>
-                            <textarea id="latexEditorArea"></textarea>
+                        <div class="paper-block">
+                            <h5>大纲</h5>
+                            <ul id="paperOutline"></ul>
+                        </div>
+                        <div class="paper-block">
+                            <h5>思维导图（Markdown）</h5>
+                            <pre id="paperMindmap"></pre>
+                        </div>
+                        <div class="paper-block">
+                            <h5>算法解析</h5>
+                            <div id="paperAlgorithms"></div>
+                        </div>
+                        <div class="paper-block">
+                            <h5>局限性</h5>
+                            <ul id="paperLimitations"></ul>
+                        </div>
+                        <div class="paper-block">
+                            <h5>证据说明</h5>
+                            <p id="paperEvidence"></p>
                         </div>
                     </div>
                 </div>
 
-                <!-- 美化的代码预览 -->
-                <div class="code-preview">
+                <!-- LaTeX 在线编辑器 -->
+                <div class="code-preview code-workspace" id="latexWorkspace">
                     <div class="code-header">
-                        <span>LaTeX 代码预览</span>
+                        <span>LaTeX 代码编辑</span>
                         <div class="code-header-right">
                             <span class="code-lines" id="codeLines">0 行</span>
+                            <span class="code-hint">输入即同步到右侧预览</span>
                             <button class="icon-btn" onclick="toggleFullscreen(event)" title="全屏">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
@@ -325,7 +379,16 @@
                             </button>
                         </div>
                     </div>
-                    <pre class="language-latex"><code class="language-latex" id="codeContent"></code></pre>
+                    <div class="code-workspace-body">
+                        <div class="code-editor-pane">
+                            <div class="pane-label">源码</div>
+                            <textarea id="latexEditor" class="latex-editor" spellcheck="false" placeholder="在这里直接编辑 LaTeX 代码"></textarea>
+                        </div>
+                        <div class="code-preview-pane">
+                            <div class="pane-label">实时预览</div>
+                            <iframe id="latexRenderFrame" class="latex-render-frame" src="/render?embedded=1" title="LaTeX 实时预览"></iframe>
+                        </div>
+                    </div>
                 </div>
             </div>
 

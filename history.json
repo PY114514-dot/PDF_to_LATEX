@@ -1,5 +1,237 @@
 [
   {
+    "filename": "23---The-Permanent-Function--PERMAN-_1978_Combinatorial-Algorithms.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "1,2",
+    "output_file": "outputs\\23---The-Permanent-Function--PERMAN-_1978_Combinatorial-Algorithms.tex",
+    "stats": {
+      "total_pages": 9,
+      "processed_pages": 2,
+      "total_tokens": 2764,
+      "processing_time": 17.99
+    },
+    "timestamp": "2026-04-27T18:21:13.019800"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "all",
+    "output_file": "outputs\\dlpu22_cn_5.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 26,
+      "total_tokens": 79485,
+      "processing_time": 299.7
+    },
+    "timestamp": "2026-04-27T17:33:14.217905"
+  },
+  {
+    "filename": "dlpu22_dual.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "3,4,5,6",
+    "output_file": "outputs\\dlpu22_dual_cn.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 4,
+      "total_tokens": 17746,
+      "processing_time": 59.05
+    },
+    "timestamp": "2026-04-27T14:40:11.320849"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "3,4,5,6",
+    "output_file": "outputs\\dlpu22.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 4,
+      "total_tokens": 8410,
+      "processing_time": 28.52
+    },
+    "timestamp": "2026-04-27T13:35:58.092793"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "3,4,5,6,7,8",
+    "output_file": "outputs\\dlpu22_cn_4.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 6,
+      "total_tokens": 21817,
+      "processing_time": 73.29
+    },
+    "timestamp": "2026-04-27T13:25:51.199431"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "3,4,5,6",
+    "output_file": "outputs\\dlpu22_cn_3.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 4,
+      "total_tokens": 14984,
+      "estimated_cost": 0,
+      "processing_time": 54.27
+    },
+    "timestamp": "2026-04-25T16:22:23.512268"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "3,4,5,6",
+    "output_file": "outputs\\dlpu22_cn_2.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 0,
+      "total_tokens": 0,
+      "estimated_cost": 0,
+      "processing_time": 51.82
+    },
+    "timestamp": "2026-04-25T16:05:24.826549"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "all",
+    "output_file": "outputs\\dlpu22_cn.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 26,
+      "total_tokens": 113328,
+      "estimated_cost": 0,
+      "processing_time": 69.33
+    },
+    "timestamp": "2026-04-25T15:29:25.270710"
+  },
+  {
+    "filename": "44565.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "all",
+    "output_file": "outputs\\44565_cn.tex",
+    "stats": {
+      "total_pages": 4,
+      "processed_pages": 4,
+      "total_tokens": 28812,
+      "estimated_cost": 0,
+      "processing_time": 65.01
+    },
+    "timestamp": "2026-04-24T09:26:35.151765"
+  },
+  {
+    "filename": "Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "all",
+    "output_file": "outputs\\Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash_2.tex",
+    "stats": {
+      "total_pages": 5,
+      "processed_pages": 5,
+      "total_tokens": 28678,
+      "estimated_cost": 0,
+      "processing_time": 77.93
+    },
+    "timestamp": "2026-04-08T10:01:33.787923"
+  },
+  {
+    "filename": "Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "all",
+    "output_file": "outputs\\Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.tex",
+    "stats": {
+      "total_pages": 5,
+      "processed_pages": 5,
+      "total_tokens": 28989,
+      "estimated_cost": 0,
+      "processing_time": 74.0
+    },
+    "timestamp": "2026-04-07T22:56:50.814474"
+  },
+  {
+    "filename": "2603.29715v1.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "all",
+    "output_file": "outputs\\2603.29715v1_cn_3.tex",
+    "stats": {
+      "total_pages": 24,
+      "processed_pages": 24,
+      "total_tokens": 101085,
+      "estimated_cost": 0,
+      "processing_time": 72.02
+    },
+    "timestamp": "2026-04-03T18:54:44.208409"
+  },
+  {
+    "filename": "2603.29715v1.pdf",
+    "model": "doubao",
+    "translated": true,
+    "pages": "all",
+    "output_file": "outputs\\2603.29715v1_cn_2.tex",
+    "stats": {
+      "total_pages": 24,
+      "processed_pages": 9,
+      "total_tokens": 25351,
+      "estimated_cost": 0,
+      "processing_time": 42.87
+    },
+    "timestamp": "2026-04-02T13:22:02.454835"
+  },
+  {
+    "filename": "2603.29715v1.pdf",
+    "model": "doubao",
+    "translated": true,
+    "pages": "all",
+    "output_file": "outputs\\2603.29715v1_cn.tex",
+    "stats": {
+      "total_pages": 24,
+      "processed_pages": 0,
+      "total_tokens": 0,
+      "estimated_cost": 0,
+      "processing_time": 8.97
+    },
+    "timestamp": "2026-04-02T11:06:45.200891"
+  },
+  {
+    "timestamp": 1774972412,
+    "filename": "screenshot_1774972400776.png",
+    "model": "deepseek-chat",
+    "ocr_provider": "tesseract",
+    "ocr_quality": 0.6880345572354212,
+    "content_type": "text",
+    "translate": true,
+    "output_file": "screenshot_1774972400776.tex",
+    "tokens": 5409,
+    "elapsed_time": 118.20459342002869
+  },
+  {
+    "filename": "lin2007.pdf",
+    "model": "deepseek-chat",
+    "translated": false,
+    "pages": "3,4,5",
+    "output_file": "outputs\\lin2007.tex",
+    "stats": {
+      "total_pages": 20,
+      "processed_pages": 3,
+      "total_tokens": 4847,
+      "estimated_cost": 0,
+      "processing_time": 27.18
+    },
+    "timestamp": "2026-03-31T23:42:03.987766"
+  },
+  {
     "filename": "1774347683_nmf_0_cn.pdf",
     "model": "deepseek-chat",
     "translated": false,
@@ -58,245 +290,5 @@
       "processing_time": 88.81
     },
     "timestamp": "2026-03-29T13:46:26.285410"
-  },
-  {
-    "filename": "lin2007.pdf",
-    "model": "doubao",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774763021_lin2007_cn.tex",
-    "stats": {
-      "total_pages": 24,
-      "processed_pages": 0,
-      "total_tokens": 0,
-      "estimated_cost": 0.0,
-      "processing_time": 15.86
-    },
-    "timestamp": "2026-03-29T13:43:57.808861"
-  },
-  {
-    "filename": "44565.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "1,2",
-    "output_file": "outputs\\1774496977_2_44565_cn.tex",
-    "batch": true,
-    "batch_id": "batch_1774496977",
-    "stats": {
-      "total_pages": 4,
-      "processed_pages": 2,
-      "total_tokens": 15075,
-      "estimated_cost": 0.022327,
-      "processing_time": 163.0
-    },
-    "timestamp": "2026-03-26T11:55:04.237036"
-  },
-  {
-    "filename": "2303.17992v2.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "1,2",
-    "output_file": "outputs\\1774496977_1_2303.17992v2_cn.tex",
-    "batch": true,
-    "batch_id": "batch_1774496977",
-    "stats": {
-      "total_pages": 19,
-      "processed_pages": 2,
-      "total_tokens": 7265,
-      "estimated_cost": 0.010664,
-      "processing_time": 62.86
-    },
-    "timestamp": "2026-03-26T11:52:21.210417"
-  },
-  {
-    "filename": "1-s2.0-S0925231214000952-main.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "1,2",
-    "output_file": "outputs\\1774496977_0_1-s2.0-S0925231214000952-main_cn.tex",
-    "batch": true,
-    "batch_id": "batch_1774496977",
-    "stats": {
-      "total_pages": 8,
-      "processed_pages": 2,
-      "total_tokens": 10856,
-      "estimated_cost": 0.015818,
-      "processing_time": 100.9
-    },
-    "timestamp": "2026-03-26T11:51:18.327986"
-  },
-  {
-    "filename": "multconv.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "1,2",
-    "output_file": "outputs\\1774496624_multconv_cn.tex",
-    "stats": {
-      "total_pages": 15,
-      "processed_pages": 2,
-      "total_tokens": 4874,
-      "estimated_cost": 0.007057,
-      "processing_time": 45.66
-    },
-    "timestamp": "2026-03-26T11:44:30.590120"
-  },
-  {
-    "filename": "2303.17992v2.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "1,2",
-    "output_file": "outputs\\1774496609_2303.17992v2_cn.tex",
-    "stats": {
-      "total_pages": 19,
-      "processed_pages": 2,
-      "total_tokens": 7272,
-      "estimated_cost": 0.010653,
-      "processing_time": 57.63
-    },
-    "timestamp": "2026-03-26T11:44:27.505009"
-  },
-  {
-    "filename": "Sietsema 等 - 2024 - Stratified Non-Negative Tensor Factorization_dual_智谱4Flash.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774492460_Sietsema 等 - 2024 - Stratified Non-Negative Tensor Factorization_dual_智谱4Flash_cn.tex",
-    "stats": {
-      "total_pages": 5,
-      "processed_pages": 5,
-      "total_tokens": 59754,
-      "estimated_cost": 0.084243,
-      "processing_time": 208.07
-    },
-    "timestamp": "2026-03-26T10:37:48.339281"
-  },
-  {
-    "filename": "1-s2.0-S0925231214000952-main.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "1",
-    "output_file": "outputs\\1774416630_1-s2.0-S0925231214000952-main_cn.tex",
-    "stats": {
-      "total_pages": 8,
-      "processed_pages": 1,
-      "total_tokens": 5982,
-      "estimated_cost": 0.008645,
-      "processing_time": 82.9
-    },
-    "timestamp": "2026-03-25T13:31:53.389723"
-  },
-  {
-    "filename": "nmf_0.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774347683_nmf_0_cn.tex",
-    "stats": {
-      "total_pages": 15,
-      "processed_pages": 15,
-      "total_tokens": 15647,
-      "estimated_cost": 0.021478,
-      "processing_time": 35.22
-    },
-    "timestamp": "2026-03-24T18:21:59.070814"
-  },
-  {
-    "filename": "Multiplicative_Update_for_Projective_Nonnegative_Matrix_Factorization_with_Bregman_Divergence_dual_智谱4Flash.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774345316_Multiplicative_Update_for_Projective_Nonnegative_Matrix_Factorization_with_Bregman_Divergence_dual_智谱4Flash_cn.tex",
-    "stats": {
-      "total_pages": 5,
-      "processed_pages": 0,
-      "total_tokens": 14329,
-      "estimated_cost": 0.017779,
-      "processing_time": 154.31
-    },
-    "timestamp": "2026-03-24T17:44:31.263324"
-  },
-  {
-    "filename": "Multiplicative_Update_for_Projective_Nonnegative_Matrix_Factorization_with_Bregman_Divergence.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774345239_Multiplicative_Update_for_Projective_Nonnegative_Matrix_Factorization_with_Bregman_Divergence_cn.tex",
-    "stats": {
-      "total_pages": 5,
-      "processed_pages": 0,
-      "total_tokens": 0,
-      "estimated_cost": 0.0,
-      "processing_time": 61.22
-    },
-    "timestamp": "2026-03-24T17:41:40.800485"
-  },
-  {
-    "filename": "multconv.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774344414_multconv_cn.tex",
-    "stats": {
-      "total_pages": 15,
-      "processed_pages": 15,
-      "total_tokens": 44103,
-      "estimated_cost": 0.065289,
-      "processing_time": 69.89
-    },
-    "timestamp": "2026-03-24T17:28:04.174081"
-  },
-  {
-    "filename": "Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash.pdf",
-    "model": "deepseek-chat",
-    "translated": true,
-    "pages": "all",
-    "output_file": "outputs\\1774057125_Chapman 等 - 2023 - Stratified-NMF for Heterogeneous Data_dual_智谱4Flash_cn.tex",
-    "stats": {
-      "total_pages": 5,
-      "processed_pages": 5,
-      "total_tokens": 39896,
-      "estimated_cost": 0.054875,
-      "processing_time": 122.94
-    },
-    "timestamp": "2026-03-21T09:40:48.844085"
-  },
-  {
-    "filename": "Integral_Cramer.pdf",
-    "model": "deepseek-chat",
-    "translated": false,
-    "pages": "1,2,3,4",
-    "output_file": "outputs\\1770371108_Integral_Cramer.tex",
-    "stats": {
-      "total_pages": 14,
-      "processed_pages": 4,
-      "total_tokens": 6202,
-      "estimated_cost": 0.009206,
-      "processing_time": 35.32
-    },
-    "timestamp": "2026-02-06T17:45:43.439678"
-  },
-  {
-    "timestamp": 1770370688,
-    "filename": "screenshot_1770370685408.png",
-    "model": "deepseek-chat",
-    "ocr_provider": "vision",
-    "ocr_quality": 0.9974999999999999,
-    "content_type": "mixed",
-    "translate": false,
-    "output_file": "1770370688_screenshot_1770370685408.tex",
-    "tokens": 253,
-    "elapsed_time": 17.641737699508667
-  },
-  {
-    "timestamp": 1770369925,
-    "filename": "screenshot_1770369921304.png",
-    "model": "deepseek-chat",
-    "ocr_provider": "tesseract",
-    "ocr_quality": 0.6871974522292993,
-    "content_type": "text",
-    "translate": false,
-    "output_file": "1770369925_screenshot_1770369921304.tex",
-    "tokens": 691,
-    "elapsed_time": 23.79373812675476
   }
 ]

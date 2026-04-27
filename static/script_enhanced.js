@@ -5,12 +5,17 @@ let selectedFiles = [];  // 批量文件
 let selectedImages = [];  // 图片文件
 let downloadUrl = null;
 let latexContent = null;
+let latexFilename = '';
 let socket = null;
 let currentTaskId = null;
 let activeAsyncTask = null;
 let isBatchMode = false;  // 是否批量模式
 let isImageMode = false;  // 是否图片模式
+let lastAnalyzedPdfFile = null;
+let paperAgentTaskId = null;
 let currentPhaseRank = 0;
+let translatePhaseProgress = 0;
+let convertPhaseProgress = 0;
 let historyCurrentPage = 1;
 const HISTORY_PAGE_SIZE = 10;
 const HISTORY_MAX_RECORDS = 20;
@@ -68,10 +73,15 @@ const resultSection = document.getElementById('resultSection');
 const errorSection = document.getElementById('errorSection');
 const convertBtn = document.getElementById('convertBtn');
 const progressText = document.getElementById('progressText');
-const progressBarFill = document.getElementById('progressBarFill');
+const translateProgressFill = document.getElementById('translateProgressFill');
+const convertProgressFill = document.getElementById('convertProgressFill');
+const translateProgressLabel = document.getElementById('translateProgressLabel');
+const convertProgressLabel = document.getElementById('convertProgressLabel');
+const translateProgressItem = document.getElementById('translateProgressItem');
 const progressDetail = document.getElementById('progressDetail');
 const tokenStats = document.getElementById('tokenStats');
-const codeContent = document.getElementById('codeContent');
+const latexEditor = document.getElementById('latexEditor');
+const latexRenderFrame = document.getElementById('latexRenderFrame');
 const codeLines = document.getElementById('codeLines');
 const downloadBtn = document.getElementById('downloadBtn');
 const errorMessage = document.getElementById('errorMessage');
@@ -85,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupBatchFileInput();
     setupPasteImage();
     setupConvertButton();
+    setupPaperAgentButton();
+    setupResultEditor();
     setupLatexSidebar();
     setupHistoryPagination();
     initWebSocket();
@@ -133,7 +145,85 @@ async function loadPublicConfig() {
         const data = await response.json();
         // 兼容保留：当前前端不再使用成本换算。
     } catch (error) {
-        console.warn('读取公开配置失败，使用默认汇率:', error.message);
+        console.warn('读取公开配置失败，使用默认配置:', error.message);
+    }
+}
+
+function getCurrentLatexContent() {
+    if (latexEditor && typeof latexEditor.value === 'string') {
+        return latexEditor.value;
+    }
+    return latexContent || '';
+}
+
+function updateLatexEditorPreview(content = '') {
+    if (!latexRenderFrame || !latexRenderFrame.contentWindow) {
+        return;
+    }
+    latexRenderFrame.contentWindow.postMessage({
+        type: 'latex-preview-update',
+        content,
+        filename: latexFilename || ''
+    }, window.location.origin);
+}
+
+function updateLatexEditorStats(content = '') {
+    if (codeLines) {
+        const lines = content ? content.split('\n').length : 0;
+        codeLines.textContent = `${lines} 行`;
+    }
+}
+
+function downloadCurrentLatex() {
+    const content = getCurrentLatexContent();
+    if (!content) {
+        showToast('没有可下载的LaTeX内容', 'error');
+        return;
+    }
+
+    const fileName = (latexFilename || 'edited_output.tex').replace(/\.(tex|latex)$/i, '') + '.tex';
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function setupResultEditor() {
+    if (!latexEditor || !latexRenderFrame) {
+        return;
+    }
+
+    let renderTimer = null;
+    const pushPreview = () => {
+        const content = getCurrentLatexContent();
+        latexContent = content;
+        updateLatexEditorStats(content);
+        window.requestAnimationFrame(() => updateLatexEditorPreview(content));
+    };
+
+    latexEditor.addEventListener('input', () => {
+        latexContent = latexEditor.value;
+        updateLatexEditorStats(latexEditor.value);
+        clearTimeout(renderTimer);
+        renderTimer = setTimeout(pushPreview, 120);
+        safeStorage.setItem('latexContent', latexEditor.value);
+        safeStorage.setItem('latexFilename', latexFilename || '');
+    });
+
+    latexRenderFrame.addEventListener('load', () => {
+        pushPreview();
+    });
+
+    const savedContent = safeStorage.getItem('latexContent');
+    if (savedContent && !latexContent) {
+        latexEditor.value = savedContent;
+        latexContent = savedContent;
+        updateLatexEditorStats(savedContent);
     }
 }
 
@@ -343,6 +433,12 @@ function initWebSocket() {
     });
     
     socket.on('progress', (data) => {
+        // 论文智能阅读进度单独处理，避免走常规转换展示逻辑。
+        if (paperAgentTaskId && data.task_id === paperAgentTaskId) {
+            updatePaperAgentRealtime(data);
+            return;
+        }
+
         updateProgress(data);
         
         // 如果转换完成，停止进度条并显示结果
@@ -455,6 +551,56 @@ function getDefaultLogType(status) {
     return typeMap[status] || 'info';
 }
 
+function resetPhaseProgress(enableTranslate = false) {
+    translatePhaseProgress = 0;
+    convertPhaseProgress = 0;
+
+    if (translateProgressFill) {
+        translateProgressFill.style.width = '0%';
+    }
+    if (convertProgressFill) {
+        convertProgressFill.style.width = '0%';
+    }
+
+    if (translateProgressLabel) {
+        translateProgressLabel.textContent = enableTranslate ? '0%' : '未启用';
+    }
+    if (convertProgressLabel) {
+        convertProgressLabel.textContent = '0%';
+    }
+
+    if (translateProgressItem) {
+        translateProgressItem.style.opacity = enableTranslate ? '1' : '0.6';
+    }
+}
+
+function updateStageBar(stage, percent) {
+    const safePercent = Math.max(0, Math.min(100, Math.round(percent || 0)));
+
+    if (stage === 'translating') {
+        translatePhaseProgress = Math.max(translatePhaseProgress, safePercent);
+        if (translateProgressFill) {
+            translateProgressFill.style.transition = 'width 0.3s ease';
+            translateProgressFill.style.width = `${translatePhaseProgress}%`;
+        }
+        if (translateProgressLabel) {
+            translateProgressLabel.textContent = `${translatePhaseProgress}%`;
+        }
+        return;
+    }
+
+    if (stage === 'converting') {
+        convertPhaseProgress = Math.max(convertPhaseProgress, safePercent);
+        if (convertProgressFill) {
+            convertProgressFill.style.transition = 'width 0.3s ease';
+            convertProgressFill.style.width = `${convertPhaseProgress}%`;
+        }
+        if (convertProgressLabel) {
+            convertProgressLabel.textContent = `${convertPhaseProgress}%`;
+        }
+    }
+}
+
 function clearTerminalLog() {
     const terminalBody = document.getElementById('terminalBody');
     terminalBody.innerHTML = '<div class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-text">日志已清空</span></div>';
@@ -492,10 +638,30 @@ function updateProgress(data) {
         const logType = data.log_type || getDefaultLogType(data.status);
         addTerminalLog(logType, logMessage);
     }
+
+    // 百分比优先：前端统一以 percent 展示，避免显示“第 x/y 页正在转换”。
+    const computedPercent = (() => {
+        if (typeof data.percent === 'number') {
+            return Math.max(0, Math.min(100, Math.round(data.percent)));
+        }
+        if (typeof data.current === 'number' && typeof data.total === 'number' && data.total > 0) {
+            return Math.max(0, Math.min(100, Math.round((data.current / data.total) * 100)));
+        }
+        if (data.status === 'completed') {
+            return 100;
+        }
+        return 0;
+    })();
     
-    // 平滑动画更新进度条
-    progressBarFill.style.transition = 'width 0.3s ease';
-    progressBarFill.style.width = `${Math.min(data.percent || 0, 100)}%`;
+    // 分阶段更新进度条：翻译 / 转换
+    if (data.status === 'translating') {
+        updateStageBar('translating', computedPercent);
+    } else if (data.status === 'converting') {
+        updateStageBar('converting', computedPercent);
+    } else if (data.status === 'completed') {
+        updateStageBar('translating', 100);
+        updateStageBar('converting', 100);
+    }
     
     // 根据状态显示不同的消息前缀
     let message = data.message || '';
@@ -525,59 +691,38 @@ function updateProgress(data) {
             break;
         case 'completed':
             label = '已完成';
-            progressBarFill.style.width = '100%';
             break;
         default:
             label = '进度';
     }
-    
-    // 更新文本（如果消息中不含状态前缀，则补充）
-    if (!message.match(/^(准备中|上传中|提取中|翻译中|转换中|处理中|已完成|进度)/)) {
-        progressText.textContent = `${label} · ${message}`;
-    } else {
-        progressText.textContent = message;
-    }
-    
-    // 更新详细信息 - 显示页码/图片进度
-    if (data.status === 'uploading') {
-        // 上传时显示百分比
-        progressDetail.textContent = `${data.percent || 0}%`;
-    } else if (data.status === 'converting' || data.status === 'translating') {
-        // 转换/翻译时显示页码/图片进度
-        if (data.current !== undefined && data.total !== undefined) {
-            // 如果是图片模式，显示"第 x/y 张"，否则显示"第 x/y 页"
-            const unit = isImageMode ? '张' : '页';
-            progressDetail.textContent = `第 ${data.current}/${data.total} ${unit}`;
-            progressDetail.style.fontSize = '1.1rem';
-            progressDetail.style.fontWeight = '600';
-            progressDetail.style.color = 'var(--primary-color)';
-        } else {
-            progressDetail.textContent = '处理中...';
-        }
+
+    // 主文案固定为阶段 + 百分比
+    progressText.textContent = `${label} · ${computedPercent}%`;
+
+    // 详细文案不再显示具体页码
+    let detailText = '';
+    if (data.status === 'completed') {
+        detailText = '处理完成';
+    } else if (data.status === 'uploading') {
+        detailText = '文件上传中';
     } else if (data.status === 'extracting') {
-        // 提取时显示页码
-        if (data.current !== undefined && data.total !== undefined) {
-            progressDetail.textContent = `${data.current} / ${data.total} 页`;
-        } else {
-            progressDetail.textContent = '提取中...';
-        }
-    } else if (data.status === 'completed') {
-        // 完成时显示完成标记
-        if (data.total !== undefined) {
-            const unit = isImageMode ? '张图片' : '页';
-            progressDetail.textContent = `已完成 ${data.total} ${unit}`;
-        } else {
-            progressDetail.textContent = '已完成';
-        }
-        progressDetail.style.color = 'var(--success-color)';
+        detailText = '正文提取中';
+    } else if (data.status === 'translating') {
+        detailText = '翻译处理中';
+    } else if (data.status === 'converting') {
+        detailText = 'LaTeX 转换中';
+    } else if (data.status === 'processing') {
+        detailText = '任务处理中';
+    } else if (data.status === 'preparing') {
+        detailText = '任务准备中';
     } else {
-        // 其他情况显示当前/总数
-        if (data.current !== undefined && data.total !== undefined) {
-            progressDetail.textContent = `${data.current} / ${data.total}`;
-        } else {
-            progressDetail.textContent = '处理中...';
-        }
+        detailText = '处理中';
     }
+
+    progressDetail.textContent = detailText;
+    progressDetail.style.fontSize = '';
+    progressDetail.style.fontWeight = '';
+    progressDetail.style.color = data.status === 'completed' ? 'var(--success-color)' : 'var(--text-secondary)';
 }
 
 // 设置拖拽功能
@@ -672,7 +817,10 @@ async function handleFileSelect(file) {
 
     selectedFile = file;
     selectedFiles = [];
+    selectedImages = [];
+    isImageMode = false;
     isBatchMode = false;
+    lastAnalyzedPdfFile = file;
     
     const dropText = dropZone.querySelector('.drop-text');
     dropText.innerHTML = `已选择: <strong>${file.name}</strong> <span style="color: #888;">(正在检测页数...)</span>`;
@@ -705,7 +853,8 @@ function collectCommonOptions() {
     return {
         model: document.getElementById('modelSelect').value,
         template: document.getElementById('templateSelect')?.value || 'article',
-        quality_mode: document.getElementById('qualityModeSelect')?.value || 'standard'
+        quality_mode: document.getElementById('qualityModeSelect')?.value || 'standard',
+        translation_prompt: document.getElementById('translationPromptInput')?.value?.trim() || ''
     };
 }
 
@@ -813,6 +962,7 @@ async function startSingleConversion() {
     const taskId = `task_${timestamp}`;
     currentTaskId = taskId;
     currentPhaseRank = 0;
+    resetPhaseProgress(translate);
     if (socket) {
         socket.emit('join_task', { task_id: taskId });
     }
@@ -833,6 +983,10 @@ async function startSingleConversion() {
     });
 
     try {
+        if (!isImageMode && selectedFile) {
+            lastAnalyzedPdfFile = selectedFile;
+        }
+
         // 解析页码输入
         let pages = '';
         if (pagesInput) {
@@ -971,6 +1125,7 @@ async function startBatchConversion() {
     }
     addTerminalLog('info', `开始批量转换 ${selectedFiles.length} 个文件... (任务ID: ${batchTaskId})`);
     currentPhaseRank = 0;
+    resetPhaseProgress(translate);
 
     updateProgress({
         percent: 0,
@@ -1095,24 +1250,20 @@ function showResult(result) {
 
     downloadUrl = result.download_url;
     latexContent = result.content;
-    const sourceText = result.source_text || result.ocr_result?.text || '';
+    latexFilename = result.filename || result.output_filename || 'converted.tex';
+    safeStorage.setItem('latexContent', latexContent || '');
+    safeStorage.setItem('latexFilename', latexFilename || '');
+    resetPaperAgentPanel();
+    updatePaperAgentButtonState();
 
-    const sourceTextArea = document.getElementById('sourceTextArea');
-    const latexEditorArea = document.getElementById('latexEditorArea');
-    if (sourceTextArea) sourceTextArea.value = sourceText;
-    if (latexEditorArea) latexEditorArea.value = result.content || '';
-
-    // 使用 Prism.js 高亮显示代码
-    codeContent.textContent = result.content;
-    if (window.Prism) {
-        Prism.highlightElement(codeContent);
+    if (latexEditor) {
+        latexEditor.value = result.content || '';
     }
-    
-    // 统计行数
-    const lines = result.content.split('\n').length;
-    codeLines.textContent = `${lines} 行`;
 
-    // 显示统计信息（使用人民币）
+    updateLatexEditorStats(result.content || '');
+    updateLatexEditorPreview(result.content || '');
+
+    // 显示统计信息
     if (result.stats) {
         // 处理页数显示 - 如果是图片则显示"1 张"，否则显示"x / y"
         const pagesText = isImageMode 
@@ -1145,9 +1296,7 @@ function showResult(result) {
     }
 
     // 设置下载按钮
-    downloadBtn.onclick = () => {
-        window.location.href = downloadUrl;
-    };
+    downloadBtn.onclick = downloadCurrentLatex;
 
     // 刷新历史记录
     loadHistory();
@@ -1155,32 +1304,298 @@ function showResult(result) {
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function renderLatexFromEditor() {
-    const latexEditorArea = document.getElementById('latexEditorArea');
-    const content = latexEditorArea?.value || '';
-    if (!content.trim()) {
-        showToast('右栏没有可渲染的内容', 'error');
-        return;
-    }
-    renderLatex(content);
+function setupPaperAgentButton() {
+    const btn = document.getElementById('paperAgentBtn');
+    if (!btn) return;
+    btn.addEventListener('click', runPaperAgent);
+    updatePaperAgentButtonState();
 }
 
-function downloadEditedLatex() {
-    const latexEditorArea = document.getElementById('latexEditorArea');
-    const content = latexEditorArea?.value || '';
-    if (!content.trim()) {
-        showToast('右栏没有可下载的内容', 'error');
+function updatePaperAgentButtonState() {
+    const btn = document.getElementById('paperAgentBtn');
+    if (!btn) return;
+    const canRun = !isImageMode && !isBatchMode;
+    btn.disabled = !canRun;
+    btn.title = canRun ? '基于当前PDF调用学术智能体分析' : '仅支持单个PDF转换结果';
+}
+
+function resetPaperAgentPanel() {
+    const section = document.getElementById('paperAgentSection');
+    const loading = document.getElementById('paperAgentLoading');
+    const content = document.getElementById('paperAgentContent');
+    const meta = document.getElementById('paperAgentMeta');
+    if (section) section.style.display = 'none';
+    if (loading) loading.style.display = 'none';
+    if (content) content.style.display = 'none';
+    if (meta) meta.textContent = '等待分析';
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderPaperAgentResult(payload) {
+    // 调试日志
+    console.log('[PaperAgent] 接收到AI分析结果 payload:', {
+        algorithms: payload.result?.algorithms?.length || 0,
+        outline: payload.result?.outline?.length || 0,
+        summary: (payload.result?.summary || '').substring(0, 100)
+    });
+    if (payload.result?.algorithms?.length) {
+        payload.result.algorithms.slice(0, 2).forEach((algo, idx) => {
+            console.log(`[PaperAgent] 算法 ${idx + 1}:`, {
+                name: algo.name,
+                formulas: algo.formulas?.length || 0,
+                hasDerivation: !!algo.derivation,
+                derivation: (algo.derivation || '').substring(0, 100)
+            });
+        });
+    }
+    
+    const section = document.getElementById('paperAgentSection');
+    const loading = document.getElementById('paperAgentLoading');
+    const content = document.getElementById('paperAgentContent');
+    const meta = document.getElementById('paperAgentMeta');
+    const summary = document.getElementById('paperSummary');
+    const outline = document.getElementById('paperOutline');
+    const mindmap = document.getElementById('paperMindmap');
+    const algorithms = document.getElementById('paperAlgorithms');
+    const limitations = document.getElementById('paperLimitations');
+    const evidence = document.getElementById('paperEvidence');
+
+    if (!section || !loading || !content || !meta || !summary || !outline || !mindmap || !algorithms || !limitations || !evidence) {
         return;
     }
-    const blob = new Blob([content], { type: 'application/x-tex;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `edited_${Date.now()}.tex`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    section.style.display = 'block';
+
+    const stats = payload.stats || {};
+    meta.textContent = `模型: ${payload.model} | 页码: ${payload.pages} | Tokens: ${(stats.total_tokens || 0).toLocaleString()}`;
+    summary.textContent = payload.result?.summary || '未返回摘要';
+
+    // 大纲：使用 textContent 保持原始文本，便于 KaTeX 渲染公式
+    const outlineItems = Array.isArray(payload.result?.outline) ? payload.result.outline : [];
+    outline.innerHTML = '';
+    if (outlineItems.length) {
+        outlineItems.forEach((item) => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            outline.appendChild(li);
+        });
+    } else {
+        const li = document.createElement('li');
+        li.textContent = '未返回大纲';
+        outline.appendChild(li);
+    }
+
+    // 思维导图：使用 textContent 保持 Markdown 格式
+    mindmap.textContent = payload.result?.mindmap_markdown || '未返回思维导图';
+
+    // 算法块：核心修复 - 不对可能包含 LaTeX 的字段进行 HTML 转义
+    const algoItems = Array.isArray(payload.result?.algorithms) ? payload.result.algorithms : [];
+    algorithms.innerHTML = '';
+    
+    if (algoItems.length) {
+        algoItems.forEach((algo, idx) => {
+            const card = document.createElement('div');
+            card.className = 'paper-algo-card';
+            
+            // 标题
+            const title = document.createElement('h6');
+            title.textContent = `算法 ${idx + 1}: ${algo.name || '未命名算法'}`;
+            card.appendChild(title);
+            
+            // 问题
+            const problemP = document.createElement('p');
+            problemP.innerHTML = '<strong>问题：</strong>';
+            const problemSpan = document.createElement('span');
+            problemSpan.textContent = algo.problem || '原文未提供';
+            problemP.appendChild(problemSpan);
+            card.appendChild(problemP);
+            
+            // 核心思想
+            const coreP = document.createElement('p');
+            coreP.innerHTML = '<strong>核心思想：</strong>';
+            const coreSpan = document.createElement('span');
+            coreSpan.textContent = algo.core_idea || '原文未提供';
+            coreP.appendChild(coreSpan);
+            card.appendChild(coreP);
+            
+            // 步骤
+            if (Array.isArray(algo.steps) && algo.steps.length) {
+                const ol = document.createElement('ol');
+                algo.steps.forEach((step) => {
+                    const li = document.createElement('li');
+                    li.textContent = step;
+                    ol.appendChild(li);
+                });
+                card.appendChild(ol);
+            } else {
+                const stepsP = document.createElement('p');
+                stepsP.textContent = '步骤：原文未提供';
+                card.appendChild(stepsP);
+            }
+            
+            // 推导说明
+            const derivP = document.createElement('p');
+            derivP.innerHTML = '<strong>推导说明：</strong>';
+            const derivSpan = document.createElement('span');
+            derivSpan.textContent = algo.derivation || '原文未提供';
+            derivP.appendChild(derivSpan);
+            card.appendChild(derivP);
+            
+            // 学术建议
+            const adviceP = document.createElement('p');
+            adviceP.innerHTML = '<strong>学术建议：</strong>';
+            const adviceSpan = document.createElement('span');
+            adviceSpan.textContent = algo.paper_advice || '原文未提供';
+            adviceP.appendChild(adviceSpan);
+            card.appendChild(adviceP);
+            
+            // 公式列表（优先直接 KaTeX 渲染，避免缺少分隔符时无法显示）
+            const ul = document.createElement('ul');
+            if (Array.isArray(algo.formulas) && algo.formulas.length) {
+                algo.formulas.forEach((f) => {
+                    const li = document.createElement('li');
+                    const formula = document.createElement('div');
+                    formula.className = 'paper-formula-block';
+                    renderFormulaDirect(f.latex || '公式', formula);
+                    const meaning = document.createElement('span');
+                    meaning.textContent = `：${f.meaning || ''}`;
+                    const evidence = document.createElement('br');
+                    const evidenceSpan = document.createElement('span');
+                    evidenceSpan.textContent = `证据：${normalizeMathText(f.evidence || '原文未提供')}`;
+                    li.appendChild(formula);
+                    li.appendChild(meaning);
+                    li.appendChild(evidence);
+                    li.appendChild(evidenceSpan);
+                    ul.appendChild(li);
+                });
+            } else {
+                const li = document.createElement('li');
+                li.textContent = '原文未提供可验证公式';
+                ul.appendChild(li);
+            }
+            card.appendChild(ul);
+            algorithms.appendChild(card);
+        });
+    } else {
+        const p = document.createElement('p');
+        p.textContent = '未识别到算法内容';
+        algorithms.appendChild(p);
+    }
+
+    // 局限性：使用 textContent 保留原始文本
+    const limitationsItems = Array.isArray(payload.result?.limitations) ? payload.result.limitations : [];
+    limitations.innerHTML = '';
+    if (limitationsItems.length) {
+        limitationsItems.forEach((item) => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            limitations.appendChild(li);
+        });
+    } else {
+        const li = document.createElement('li');
+        li.textContent = '未返回局限性';
+        limitations.appendChild(li);
+    }
+
+    evidence.textContent = payload.result?.evidence_note || '未返回证据说明';
+    
+    // 最后渲染所有容器中的数学公式
+    renderMathInContainer(outline);
+    renderMathInContainer(mindmap);
+    renderMathInContainer(algorithms);
+    renderMathInContainer(limitations);
+    renderMathInContainer(evidence);
+}
+
+function renderMathInContainer(container) {
+    if (!container || typeof renderMathInElement !== 'function') {
+        return;
+    }
+    try {
+        renderMathInElement(container, {
+            delimiters: [
+                { left: '$$', right: '$$', display: true },
+                { left: '\\[', right: '\\]', display: true },
+                { left: '$', right: '$', display: false },
+                { left: '\\(', right: '\\)', display: false }
+            ],
+            throwOnError: false
+        });
+    } catch (error) {
+        console.warn('数学公式渲染失败:', error.message);
+    }
+}
+
+async function runPaperAgent() {
+    if (isImageMode || isBatchMode) {
+        showToast('仅支持单个PDF文件的学术阅读分析', 'error');
+        return;
+    }
+
+    const pdfFile = selectedFile || lastAnalyzedPdfFile;
+    if (!pdfFile || !pdfFile.name.toLowerCase().endsWith('.pdf')) {
+        showToast('未找到可用于分析的PDF，请先完成单个PDF转换', 'error');
+        return;
+    }
+
+    const section = document.getElementById('paperAgentSection');
+    const loading = document.getElementById('paperAgentLoading');
+    const content = document.getElementById('paperAgentContent');
+    const meta = document.getElementById('paperAgentMeta');
+    if (!section || !loading || !content || !meta) return;
+
+    section.style.display = 'block';
+    loading.style.display = 'block';
+    content.style.display = 'none';
+    meta.textContent = '正在调用学术智能体...';
+
+    try {
+        paperAgentTaskId = `paper_${Date.now()}`;
+        if (socket) {
+            socket.emit('join_task', { task_id: paperAgentTaskId });
+        }
+
+        const formData = new FormData();
+        const options = collectCommonOptions();
+        const pages = document.getElementById('pagesInput')?.value?.trim() || '';
+        formData.append('file', pdfFile);
+        formData.append('model', options.model || 'deepseek-chat');
+        formData.append('analysis_focus', 'summary_outline_mindmap_algorithms');
+        formData.append('task_id', paperAgentTaskId);
+        if (pages) {
+            formData.append('pages', parsePageInput(pages));
+        }
+
+        const response = await fetch('/api/paper-agent', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '学术分析失败');
+        }
+
+        renderPaperAgentResult(data);
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        showToast('学术智能体分析完成', 'success');
+        paperAgentTaskId = null;
+    } catch (error) {
+        loading.style.display = 'none';
+        content.style.display = 'none';
+        meta.textContent = `分析失败: ${error.message}`;
+        showToast(`学术分析失败: ${error.message}`, 'error');
+        paperAgentTaskId = null;
+    }
 }
 
 // 显示错误
@@ -1195,7 +1610,8 @@ function showError(message) {
 
 // 复制到剪贴板（增强版，支持多种方式）
 function copyToClipboard(event) {
-    if (!latexContent) {
+    const content = getCurrentLatexContent();
+    if (!content) {
         showCopyMessage('没有可复制的内容', false);
         return;
     }
@@ -1205,7 +1621,7 @@ function copyToClipboard(event) {
 
     // 方法1: 使用现代 Clipboard API
     if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(latexContent)
+        navigator.clipboard.writeText(content)
             .then(() => {
                 showCopyMessage('已复制到剪贴板', true, btn, originalHTML);
             })
@@ -1225,7 +1641,7 @@ function fallbackCopyMethod(btn, originalHTML) {
     try {
         // 创建临时 textarea
         const textarea = document.createElement('textarea');
-        textarea.value = latexContent;
+        textarea.value = getCurrentLatexContent();
         textarea.style.position = 'fixed';
         textarea.style.top = '0';
         textarea.style.left = '0';
@@ -1333,7 +1749,7 @@ function showToast(message, type = 'info') {
 
 // 全屏切换
 function toggleFullscreen(event) {
-    const codePreview = document.querySelector('.code-preview');
+    const codePreview = document.querySelector('#latexWorkspace') || document.querySelector('.code-preview');
     codePreview.classList.toggle('fullscreen');
     
     const btn = event?.target?.closest ? event.target.closest('button') : null;
@@ -1439,6 +1855,8 @@ function showBatchResult(result) {
     loadHistory();
 
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    resetPaperAgentPanel();
+    updatePaperAgentButtonState();
 }
 
 // 下载批量结果
@@ -1578,6 +1996,9 @@ function resetApp() {
     latexContent = null;
     currentTaskId = null;
     isBatchMode = false;
+    isImageMode = false;
+    selectedImages = [];
+    lastAnalyzedPdfFile = null;
 
     const dropText = dropZone.querySelector('.drop-text');
     dropText.innerHTML = '拖拽文件到这里';
@@ -1602,6 +2023,8 @@ function resetApp() {
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
     tokenStats.style.display = 'none';
+    resetPaperAgentPanel();
+    updatePaperAgentButtonState();
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1642,7 +2065,7 @@ function renderLatex(content = null) {
         return;
     }
 
-    openRenderPreview(contentToRender, safeStorage.getItem('latexFilename') || '');
+    openRenderPreview(contentToRender, latexFilename || safeStorage.getItem('latexFilename') || '');
 }
 
 // 为批量结果渲染特定文件
@@ -2313,6 +2736,7 @@ async function startImageConversion() {
     const timestamp = Date.now();
     currentTaskId = `task_${timestamp}`;
     currentPhaseRank = 0;
+    resetPhaseProgress(document.getElementById('translateOption').checked);
     if (socket) {
         socket.emit('join_task', { task_id: currentTaskId });
     }
@@ -2428,4 +2852,77 @@ async function startBatchImageConversion() {
         console.error('批量转换失败:', error);
         showError(error.message);
     }
+}
+
+function updatePaperAgentRealtime(data) {
+    const loading = document.getElementById('paperAgentLoading');
+    const meta = document.getElementById('paperAgentMeta');
+    const section = document.getElementById('paperAgentSection');
+    if (!loading || !meta || !section) return;
+
+    section.style.display = 'block';
+    loading.style.display = 'block';
+    const percent = data.percent ?? 0;
+    const msg = data.message || '处理中...';
+    loading.textContent = `${msg} (${percent}%)`;
+    meta.textContent = `实时进度: ${data.status || 'processing'} | ${data.current || 0}/${data.total || 0}`;
+
+    if (data.status === 'error') {
+        addTerminalLog('error', data.log_message || data.message || '学术阅读失败');
+    } else {
+        addTerminalLog(data.log_type || 'info', data.log_message || data.message || '学术阅读处理中');
+    }
+}
+
+function normalizeMathText(text) {
+    let s = String(text || '');
+    // 常见 OCR 噪声修正
+    s = s.replace(/\(cid:88\)/g, '\\sum');
+    s = s.replace(/\(cid:8722\)/g, '-');
+    s = s.replace(/\(cid:215\)/g, '\\times');
+    // 清理多余空白
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+}
+
+function looksLikeMathExpression(text) {
+    const s = String(text || '');
+    return /\\[a-zA-Z]+|\^|_|\{|\}|=|\+|\-|\*|\/|∑|←|→/.test(s);
+}
+
+function ensureMathDelimiters(text) {
+    const raw = normalizeMathText(text);
+    if (!raw) return raw;
+    if (/\$\$[\s\S]*\$\$|\$[^$]+\$|\\\[[\s\S]*\\\]|\\\([\s\S]*\\\)/.test(raw)) {
+        return raw;
+    }
+    if (looksLikeMathExpression(raw)) {
+        return `$$${raw}$$`;
+    }
+    return raw;
+}
+
+function renderFormulaDirect(rawFormula, targetEl) {
+    if (!targetEl) return;
+    const normalized = normalizeMathText(rawFormula || '');
+    if (!normalized) {
+        targetEl.textContent = '公式';
+        return;
+    }
+
+    // 优先直接 KaTeX 渲染（不依赖 $ 分隔符）
+    if (typeof katex !== 'undefined' && typeof katex.render === 'function') {
+        try {
+            katex.render(normalized, targetEl, {
+                displayMode: true,
+                throwOnError: false
+            });
+            return;
+        } catch (error) {
+            // 失败则回退到 auto-render
+        }
+    }
+
+    targetEl.textContent = ensureMathDelimiters(normalized);
+    renderMathInContainer(targetEl);
 }
