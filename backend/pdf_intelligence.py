@@ -217,6 +217,44 @@ class PDFIntelligence:
         # 如果检测失败，返回所有页面
         return suggested if suggested else list(range(1, analysis['total_pages'] + 1))
 
+    def get_adaptive_quality_mode(self, pdf_path: str) -> str:
+        """
+        根据PDF内容自适应选择质量模式
+
+        Returns:
+            'high': 高质量模式，使用refinement步骤
+            'standard': 标准模式
+            'fast': 快速模式，跳过一些处理
+        """
+        analysis = self.analyze_pdf(pdf_path)
+        stats = analysis['stats']
+
+        # 大部分页面质量高 -> 标准模式
+        high_quality_ratio = (stats['text_pages'] + stats['table_pages']) / max(1, stats['text_pages'] + stats['table_pages'] + stats['low_quality_pages'])
+
+        if stats['low_quality_pages'] > analysis['total_pages'] * 0.4:
+            return 'fast'  # 质量差，使用快速模式避免浪费时间
+
+        if stats['table_pages'] > analysis['total_pages'] * 0.3 or stats['mixed_pages'] > analysis['total_pages'] * 0.2:
+            return 'high'  # 复杂页面多，使用高质量模式
+
+        return 'standard'
+
+    def get_page_quality_threshold(self, pdf_path: str) -> float:
+        """
+        获取页面质量阈值，用于判断是否需要OCR回退
+
+        Returns:
+            0.0-1.0 之间的质量阈值
+        """
+        analysis = self.analyze_pdf(pdf_path)
+        stats = analysis['stats']
+
+        if stats['low_quality_pages'] > analysis['total_pages'] * 0.5:
+            return 0.15  # 大部分页面质量差，降低阈值
+
+        return 0.3  # 标准阈值
+
     def get_model_recommendation(self, pdf_path: str) -> str:
         """获取模型推荐"""
         analysis = self.analyze_pdf(pdf_path)
