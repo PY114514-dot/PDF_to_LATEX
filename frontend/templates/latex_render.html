@@ -11,6 +11,29 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" media="none" onload="if(media!='all')media='all'">
     
     <style>
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f0fdfa;
+            --bg-tertiary: #ccfbf1;
+            --text-primary: #134e4a;
+            --text-secondary: #0f766e;
+            --text-tertiary: #6b7280;
+            --border-color: #99f6e4;
+            --border-light: #e6fffa;
+            --hover-bg: #f0fdfa;
+            --accent-bg: #0d9488;
+            --accent-hover: #0f766e;
+            --accent-light: #14b8a6;
+            --radius: 8px;
+            --radius-sm: 6px;
+            --radius-lg: 12px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+            --transition-fast: 150ms ease-out;
+            --transition-normal: 200ms ease-out;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -18,25 +41,33 @@
         }
 
         body {
-            font-family: 'Noto Sans SC', 'Segoe UI', sans-serif;
-            background: #f7f7f8;
+            font-family: 'Atkinson Hyperlegible', 'Noto Sans SC', 'Segoe UI', sans-serif;
+            background: var(--bg-secondary);
             min-height: 100vh;
-            color: #1f2937;
+            color: var(--text-primary);
         }
 
         .header {
-            background: #ffffff;
-            color: #111827;
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
             padding: 1.5rem 2rem;
-            border-bottom: 1px solid #e5e7eb;
+            border-bottom: 1px solid var(--border-color);
             position: sticky;
             top: 0;
             z-index: 100;
         }
 
         .header h1 {
+            font-family: 'Crimson Pro', Georgia, serif;
             font-size: 1.5rem;
+            font-weight: 600;
             margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
         }
 
         .header-controls {
@@ -47,34 +78,53 @@
         }
 
         .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 0.375rem;
-            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            min-width: 44px;
+            padding: 0.5rem 1.25rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-sm);
+            background: var(--hover-bg);
+            border-color: var(--accent-light);
+            color: var(--accent-hover);
         }
 
         .btn-primary {
-            background: #111827;
-            color: #ffffff;
+            background: var(--accent-bg);
+            color: white;
+            border-color: var(--accent-bg);
         }
 
         .btn-primary:hover {
-            background: #1f2937;
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+            opacity: 1;
         }
 
         .btn-secondary {
-            background: #ffffff;
-            color: #374151;
-            border: 1px solid #d1d5db;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
         }
 
         .btn-secondary:hover {
-            background: #f9fafb;
+            background: var(--hover-bg);
+            color: var(--accent-hover);
         }
 
         .container {
@@ -91,24 +141,25 @@
         }
 
         .panel {
-            background: white;
-            border-radius: 0.75rem;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 6px 24px rgba(15, 23, 42, 0.06);
+            background: var(--bg-primary);
+            border-radius: var(--radius);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
             overflow: hidden;
             display: flex;
             flex-direction: column;
         }
 
         .panel-header {
-            background: #f7f7f8;
+            background: var(--bg-secondary);
             padding: 1rem 1.5rem;
-            border-bottom: 1px solid #e5e7eb;
-            font-weight: 600;
-            font-size: 1.125rem;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 500;
+            font-size: 1rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            color: var(--text-primary);
         }
 
         .source-editor {
@@ -119,9 +170,9 @@
             line-height: 1.6;
             border: none;
             resize: none;
-            background: #ffffff;
-            color: #111827;
-            border-top: 1px solid #f3f4f6;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border-top: 1px solid var(--border-color);
         }
 
         .source-editor:focus {
@@ -132,7 +183,7 @@
             flex: 1;
             padding: 2rem;
             overflow-y: auto;
-            background: #ffffff;
+            background: var(--bg-primary);
         }
 
         .preview-area::-webkit-scrollbar {
@@ -140,29 +191,29 @@
         }
 
         .preview-area::-webkit-scrollbar-track {
-            background: #e2e8f0;
+            background: var(--bg-tertiary);
         }
 
         .preview-area::-webkit-scrollbar-thumb {
-            background: #94a3b8;
+            background: var(--text-tertiary, #94a3b8);
             border-radius: 4px;
         }
 
         .preview-area::-webkit-scrollbar-thumb:hover {
-            background: #64748b;
+            background: var(--text-secondary);
         }
 
         /* LaTeX 渲染样式 */
         .rendered-content {
             max-width: 800px;
             line-height: 1.8;
-            color: #333;
+            color: var(--text-primary);
         }
 
         .rendered-content h1 {
             font-size: 2rem;
             font-weight: 700;
-            color: #111827;
+            color: var(--text-primary);
             margin: 2rem 0 1.5rem;
             line-height: 1.3;
         }
@@ -170,8 +221,8 @@
         .rendered-content h2 {
             font-size: 1.5rem;
             font-weight: 700;
-            color: #1f2937;
-            border-bottom: 2px solid #d1d5db;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
             padding-bottom: 0.5rem;
             margin: 2rem 0 1rem;
             line-height: 1.3;
@@ -180,7 +231,7 @@
         .rendered-content h3 {
             font-size: 1.25rem;
             font-weight: 700;
-            color: #374151;
+            color: var(--text-secondary);
             margin: 1.5rem 0 0.75rem;
             line-height: 1.3;
         }
@@ -188,7 +239,7 @@
         .rendered-content h4 {
             font-size: 1.1rem;
             font-weight: 700;
-            color: #4b5563;
+            color: var(--text-secondary);
             margin: 1rem 0 0.5rem;
             line-height: 1.3;
         }
@@ -197,9 +248,9 @@
         .preview-area div[style*="text-align: center"] {
             font-size: 1.75rem;
             font-weight: 700;
-            color: #111827;
+            color: var(--text-primary);
             padding: 1.5rem 0;
-            border-bottom: 3px solid #d1d5db;
+            border-bottom: 3px solid var(--border-color);
             margin-bottom: 2rem;
             line-height: 1.4;
         }
@@ -266,14 +317,14 @@
         .loading {
             text-align: center;
             padding: 3rem;
-            color: #666;
+            color: var(--text-secondary);
         }
 
         .spinner {
             width: 40px;
             height: 40px;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #111827;
+            border: 3px solid var(--bg-tertiary);
+            border-top: 3px solid var(--accent-bg);
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin: 0 auto 1rem;
@@ -296,12 +347,12 @@
 
         .stats-bar {
             padding: 0.75rem 1.5rem;
-            background: #f8f9fa;
-            border-top: 1px solid #e9ecef;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
             display: flex;
             gap: 2rem;
             font-size: 0.875rem;
-            color: #666;
+            color: var(--text-secondary);
         }
 
         .stat-item {
@@ -321,29 +372,33 @@
         }
 
         .embed-tool-btn {
-            width: 42px;
-            height: 42px;
-            border: 1px solid #d1d5db;
-            border-radius: 12px;
-            background: #ffffff;
-            color: #374151;
+            width: 44px;
+            height: 44px;
+            min-width: 44px;
+            min-height: 44px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            background: var(--bg-primary);
+            color: var(--text-secondary);
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 3px 12px rgba(15, 23, 42, 0.12);
-            transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+            box-shadow: var(--shadow-md);
+            transition: all var(--transition-fast);
         }
 
         .embed-tool-btn:hover {
-            transform: translateY(-1px);
-            background: #f9fafb;
-            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.16);
+            transform: translateY(-2px);
+            background: var(--hover-bg);
+            color: var(--accent-bg);
+            border-color: var(--accent-light);
+            box-shadow: var(--shadow-lg);
         }
 
         .embed-tool-btn svg {
-            width: 18px;
-            height: 18px;
+            width: 20px;
+            height: 20px;
             stroke-width: 2;
         }
 
@@ -422,14 +477,11 @@
 <body>
     <div class="header">
         <h1>LaTeX 渲染预览</h1>
-        <p style="opacity: 0.9;">实时预览LaTeX文档效果</p>
-        
+        <p>实时预览LaTeX文档效果</p>
+
         <div class="header-controls">
-            <button class="btn btn-primary" onclick="renderLatex()">
-                重新渲染
-            </button>
-            <button class="btn btn-secondary" onclick="downloadPDF()">
-                下载PDF
+            <button class="btn btn-secondary" onclick="copySource()">
+                复制代码
             </button>
             <button class="btn btn-secondary" onclick="window.close()">
                 关闭
@@ -443,9 +495,6 @@
             <div class="panel source-panel">
                 <div class="panel-header">
                     <span>LaTeX 源代码</span>
-                    <button class="btn btn-secondary" style="padding: 0.25rem 0.75rem; font-size: 0.875rem;" onclick="copySource()">
-                        复制
-                    </button>
                 </div>
                 <textarea class="source-editor" id="latexSource"></textarea>
                 <div class="stats-bar">
@@ -464,9 +513,6 @@
             <div class="panel preview-panel">
                 <div class="panel-header">
                     <span>渲染预览</span>
-                    <button class="btn btn-secondary" style="padding: 0.25rem 0.75rem; font-size: 0.875rem;" onclick="toggleFullscreen()">
-                        全屏
-                    </button>
                 </div>
                 <div class="preview-area" id="previewArea">
                     <div class="loading">
@@ -483,13 +529,6 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
                 <polyline points="21 3 21 9 15 9"></polyline>
-            </svg>
-        </button>
-        <button class="embed-tool-btn" onclick="downloadPDF()" title="下载PDF" aria-label="下载PDF">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
         </button>
         <button class="embed-tool-btn" onclick="openStandalone()" title="弹出窗口" aria-label="弹出窗口">
@@ -517,7 +556,7 @@
                 script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js';
                 script1.crossOrigin = 'anonymous';
                 document.head.appendChild(script1);
-                
+
                 script1.onload = () => {
                     const script2 = document.createElement('script');
                     script2.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js';
@@ -694,18 +733,32 @@
                     }
                     
                     // 使用KaTeX渲染数学公式
-                    renderMathInElement(previewArea, {
-                        delimiters: [
-                            {left: '$$', right: '$$', display: true},
-                            {left: '$', right: '$', display: false},
-                            {left: '\\[', right: '\\]', display: true},
-                            {left: '\\(', right: '\\)', display: false}
-                        ],
-                        throwOnError: false,
-                        errorColor: '#cc0000',
-                        strict: false,
-                        trust: false
-                    });
+                    try {
+                        renderMathInElement(previewArea, {
+                            delimiters: [
+                                {left: '$$', right: '$$', display: true},
+                                {left: '$', right: '$', display: false},
+                                {left: '\\[', right: '\\]', display: true},
+                                {left: '\\(', right: '\\)', display: false}
+                            ],
+                            throwOnError: false,
+                            errorColor: '#cc0000',
+                            strict: false,
+                            trust: false
+                        });
+                        console.log('[render] KaTeX渲染成功');
+
+                        // 检查是否有渲染失败的公式（会显示为 .katex-error）
+                        const errors = previewArea.querySelectorAll('.katex-error');
+                        if (errors.length > 0) {
+                            console.log(`[render] 有 ${errors.length} 个公式渲染失败`);
+                            errors.forEach((el, i) => {
+                                console.log(`[render] 失败公式 ${i+1}:`, el.textContent.substring(0, 100));
+                            });
+                        }
+                    } catch (e) {
+                        console.error('[render] KaTeX渲染失败:', e.message);
+                    }
                     
                 } catch (error) {
                     console.error('渲染错误:', error);
@@ -731,13 +784,60 @@
                 mathBlocks[mathIndex] = match;
                 return `__MATH_${mathIndex++}__`;
             });
-            
+
             // 保护inline math $...$
             content = content.replace(/\$([^\$\n]+?)\$/g, (match) => {
                 mathBlocks[mathIndex] = match;
                 return `__MATH_${mathIndex++}__`;
             });
-            
+
+            // 将 equation/align/gather 环境转换为 \[...\] 格式供 KaTeX 渲染
+            const eqCount = (content.match(/\\begin\{equation\*?\}/g) || []).length;
+            const alignCount = (content.match(/\\begin\{align\*?\}/g) || []).length;
+            const gatherCount = (content.match(/\\begin\{gather\*?\}/g) || []).length;
+
+            // 将 \tag{xxx} 转换为可渲染的文本格式（在 equation 环境内）
+            // \tag{1.15} -> \qquad (1.15)
+            const tagCountBefore = (content.match(/\\tag\{/g) || []).length;
+            content = content.replace(/\\tag\{([^}]+)\}/g, '\\qquad ($1)');
+            const tagCountAfter = (content.match(/\\tag\{/g) || []).length;
+            console.log(`[render] \\tag转换: 转换前=${tagCountBefore}, 转换后=${tagCountAfter}`);
+
+            // 调试：检查 equation 环境是否在内容中
+            const hasEquation = content.includes('\\begin{equation}');
+            const hasEquationStar = content.includes('\\begin{equation*}');
+            console.log(`[render] 转换前检查: hasEquation=${hasEquation}, hasEquationStar=${hasEquationStar}`);
+
+            content = content.replace(/\\begin\{equation\*?\}([\s\S]*?)\\end\{equation\*?\}/g, (match, body) => {
+                console.log(`[render] 转换 equation: body前20字符="${body.substring(0, 20)}"`);
+                return `\\[${body}\\]`;
+            });
+            content = content.replace(/\\begin\{align\*?\}([\s\S]*?)\\end\{align\*?\}/g, (match, body) => {
+                return `\\[${body}\\]`;
+            });
+            content = content.replace(/\\begin\{gather\*?\}([\s\S]*?)\\end\{gather\*?\}/g, (match, body) => {
+                return `\\[${body}\\]`;
+            });
+            console.log(`[render] 环境转换: equation=${eqCount}, align=${alignCount}, gather=${gatherCount}`);
+
+            // 修复：equation环境中\tag在公式内容前面的情况
+            // 例如：\[\qquad (1.15)\n\partial_t ...\] -> \[\partial_t ...\qquad (1.15)\]
+            // 注意：允许 \qquad (...) 和公式内容之间有换行
+            const tagBeforeFix = (content.match(/\\\[\\qquad\s*\(\s*\d+/g) || []).length;
+            content = content.replace(/\\\[\\qquad\s*\(\s*(\d+(?:\.\d+)?)\s*\)[\r\n\s]*([\s\S]*?)\\\]/g, (match, tagNum, formulaContent) => {
+                return `\\[${formulaContent}\\qquad (${tagNum})\\]`;
+            });
+            const tagAfterFix = (content.match(/\\\[\\qquad\s*\(\s*\d+/g) || []).length;
+            if (tagBeforeFix > 0) {
+                console.log(`[render] 标签位置修复: 处理前=${tagBeforeFix}, 处理后=${tagAfterFix}`);
+            }
+
+            // 调试：检查转换后是否还有未转换的 equation
+            const stillHasEquation = content.includes('\\begin{equation}');
+            if (stillHasEquation) {
+                console.log(`[render] 警告: 转换后仍有 equation 环境！`);
+            }
+
             // 移除文档类和导言区
             content = content.replace(/\\documentclass(\[[^\]]*\])?\{[^}]+\}/g, '');
             content = content.replace(/\\usepackage(\[[^\]]*\])?\{[^}]+\}/g, '');
@@ -839,26 +939,84 @@
             
             // 清理注释
             content = content.replace(/(?:^|[^\\])%.*$/gm, '');
-            
+
             // 恢复数学公式
             for (let i = 0; i < mathBlocks.length; i++) {
                 content = content.replace(`__MATH_${i}__`, mathBlocks[i]);
             }
 
+            // 修复数学公式兼容性问题（在恢复数学公式之后处理）
+            // 1. hat 符号兼容性：KaTeX 更支持 \widehat 而不是 \hat
+            content = content.replace(/\\hat\{([^}]+)\}/g, '\\widehat{$1}');
+            // 2. 将残留的 \tag 转换为可渲染文本
+            content = content.replace(/\\tag\{([^}]+)\}/g, '\\qquad ($1)');
+            // 修复公式前面的 equation 引用标签（如 \qquad (1.13) 在 \[ 或 \( 前面），移到后面
+            // 匹配 \qquad (xxx) 后面跟着 \[ 或 \( 的情况，交换位置（允许换行）
+            content = content.replace(/\\qquad\s*\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\[([\s\S]*?)\\\]/g, '\\[$2\\qquad ($1)]');
+            content = content.replace(/\\qquad\s*\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\(([\s\S]*?)\\\)/g, '\\($2\\qquad ($1)\\)');
+            // 匹配裸 (xxx) 后面跟着 \[ 或 \( 的情况（允许换行）
+            content = content.replace(/\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\[([\s\S]*?)\\\]/g, '\\[$2\\qquad ($1)]');
+            content = content.replace(/\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\(([\s\S]*?)\\\)/g, '\\($2\\qquad ($1)\\)');
+            // 4. 修复其他常见兼容性问题
+            content = content.replace(/\\underset\{([^}]*)\}\{([^}]*)\}/g, '$2_{$1}');
+            content = content.replace(/\\xrightarrow\{([^}]*)\}/g, '\\rightarrow^{$1}');
+            // 5. 修复 \widehat{phi} 这种单个字符被 \widehat 包裹的情况
+            content = content.replace(/\\widehat\{([a-zA-Z])\}/g, '\\hat{$1}');
+            // 6. 移除单独一行的 \tag（已在上方转换过，这里只是安全检查）
+            content = content.replace(/^\s*\\tag\{[^}]*\}\s*$/gm, '');
+
             // 转换段落（数学公式已恢复）
-            // 1. 先按空行分割段落
-            // 2. 每个普通段落内部，把单换行转成 <br>（避免 PDF/OCR 行内换行被 innerHTML 当空格）
+            // 1. 按空行分割段落
+            // 2. 将只有 \qquad (xxx) 或 (xxx) 的段落合并到前一个以 \[ 或 \( 开头或结尾的段落
+            // 3. 如果段落内同时有标签和公式（同一段落内），将标签移到公式后面
             const paragraphs = content.split(/\n\s*\n/);
-            content = paragraphs.map(para => {
-                para = para.trim();
-                if (!para || para.startsWith('<') || para.includes('$$') || para.includes('$') || para.match(/^\\begin|^\\end/)) {
-                    return para;
+            console.log(`[render] 段落数量: ${paragraphs.length}`);
+            const merged = [];
+            for (let i = 0; i < paragraphs.length; i++) {
+                let para = paragraphs[i].trim();
+                if (!para) continue;
+
+                // 检查是否是只有 \qquad (xxx) 或 (xxx) 的行（公式引用标签）
+                const isSoloRef = /^\s*\\qquad\s*\(.*\)\s*$/.test(para) || /^\s*\\qquad\s*\(\d+(?:\.\d+)?\)\s*$/.test(para)
+                    || /^\s*\(\d+(?:\.\d+)?\)\s*$/.test(para);
+                if (isSoloRef) {
+                    console.log(`[render] 发现单独标签段落: "${para.substring(0, 50)}"`);
                 }
-                // 段落内单换行（不是空行）转为 <br>，保留视觉换行
-                const lines = para.split(/\n/);
-                const joined = lines.map(l => l.trim()).join('<br>');
-                return `<p>${joined}</p>`;
-            }).join('\n\n');
+
+                if (isSoloRef && merged.length > 0) {
+                    const prev = merged[merged.length - 1];
+                    // 如果前一段以 \[ 或 \( 结尾（或包含 display math），将这个引用合并进去
+                    if (/\\\[\s*$/.test(prev) || /\\\(\s*$/.test(prev) || prev.includes('\\[') || prev.includes('\\(')) {
+                        merged[merged.length - 1] = prev + ' ' + para;
+                        console.log(`[render] 合并标签到: "${prev.substring(0, 50)}"`);
+                        continue;
+                    }
+                }
+
+                // 正常段落处理：检查段落内是否有标签在公式前面的情况
+                if (!para.startsWith('<') && !para.includes('$$') && !para.includes('$') && !para.includes('\\[') && !para.includes('\\(') && !para.match(/^\\begin|^\\end/)) {
+                    // 这个段落不包含公式，直接处理
+                    const lines = para.split(/\n/);
+                    const joined = lines.map(l => l.trim()).join('<br>');
+                    merged.push(`<p>${joined}</p>`);
+                } else {
+                    // 段落包含公式或特殊内容
+                    // 检查是否以 \qquad (xxx) 或 (xxx) 开头，后面跟着 \( 或 \[
+                    // 匹配模式：开头是标签，后面跟着 \( 或 \[
+                    const labelBeforeMath = para.match(/^(\s*\\qquad\s*\((\d+(?:\.\d+)?)\))\s*(\\\(|\\\[)/);
+                    if (labelBeforeMath) {
+                        const fullMatch = labelBeforeMath[0];
+                        const labelNum = labelBeforeMath[2];
+                        const mathDelim = labelBeforeMath[3];
+                        const rest = para.substring(fullMatch.length);
+                        // 将标签移到公式后面：\( ... \) -> \( ... \) \qquad (xxx)
+                        para = mathDelim + rest + ' \\qquad (' + labelNum + ')';
+                        console.log(`[render] 交换标签: "${labelNum}" 移到公式后面`);
+                    }
+                    merged.push(para);
+                }
+            }
+            content = merged.join('\n\n');
 
             return content;
         }
@@ -878,10 +1036,6 @@
             }
         }
         
-        function downloadPDF() {
-            alert('PDF导出功能需要服务器端支持。\n\n建议使用以下方式:\n1. 复制LaTeX代码到Overleaf\n2. 使用本地LaTeX编译器');
-        }
-
         function openStandalone() {
             const payload = {
                 latexContent: sourceEditor.value || '',

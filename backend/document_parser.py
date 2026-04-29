@@ -9,6 +9,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+
+def _safe_re_sub(pattern: str, replacement: str, text: str) -> str:
+    """
+    安全地执行 re.sub，捕获无效正则表达式错误。
+    如果正则表达式编译失败，返回原文不变。
+    """
+    try:
+        compiled = re.compile(pattern)
+        return compiled.sub(replacement, text)
+    except re.error:
+        # 如果正则表达式无效，返回原文
+        return text
+
 import PyPDF2
 import pdfplumber
 from PIL import Image
@@ -79,6 +92,67 @@ class PDFDocumentParser:
         cleaned = [line.strip() for line in lines]
         return '\n'.join(cleaned).strip()
 
+    def _fix_math_extraction(self, text: str) -> str:
+        """
+        修复 PDF 文本提取时丢失的数学符号。
+
+        PDF 文本层对矩阵转置的上标 T 处理很差：
+        - W^T (上标) → W.T, W T, W•T
+        - A^T B → A.T B, A T B
+        - X_i^T → X_i.T, X_i T
+
+        这个修复在将文本送给 AI 之前应用，确保 AI 能正确理解数学表达式。
+        """
+        if not text:
+            return text
+
+        try:
+            # 模式1: W.T, A.T, X_i.T → W^{T}, A^{T}, X_i^{T}
+            text = re.sub(
+                r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\.([T])',
+                r'\1^{\mathsf{T}}',
+                text
+            )
+
+            # 模式2: W T, A T (空格表示的转置，在数学上下文中)
+            # 只匹配 T 后面不是字母的情况
+            text = re.sub(
+                r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\s+([T])(?![a-zA-Z{])',
+                r'\1^{\mathsf{T}}',
+                text
+            )
+
+            # 模式3: 修复类似 W.t 的情况（小写 t 有时也表示转置）
+            text = re.sub(
+                r'([A-Z])\.t\b',
+                r'\1^{\mathsf{T}}',
+                text
+            )
+
+            # 模式4: 修复 ^2, ^3 等上标数字缺失大括号
+            text = re.sub(
+                r'(\w)\^(\d+)(?![}a-zA-Z])',
+                r'\1^{\2}',
+                text
+            )
+
+            # 模式5: W\top → W^{\top} (有时 PDF 或 OCR 会产生这个)
+            text = re.sub(
+                r'(\w)\s*\\top\b',
+                r'\1^{\\top}',
+                text
+            )
+
+            # 模式6: 保留 \tag{xxx} 命令，转换为可渲染格式（在公式后面显示编号）
+            # \tag{1.15} -> \qquad (1.15)
+            text = re.sub(r'\\tag\{([^}]*)\}', r'\\qquad (\\1)', text)
+        except re.error as e:
+            # 如果正则表达式错误（如 bad escape），返回原文
+            print(f"[WARNING] _fix_math_extraction failed: {e}")
+            return text
+
+        return text
+
     def _cleanup_pagination(self, text: str, page_num: int, total_pages: int) -> str:
         raw = text or ''
         if not raw.strip():
@@ -132,7 +206,23 @@ class PDFDocumentParser:
             s,
             flags=re.IGNORECASE,
         )
-        return bool(en_page)
+        if en_page:
+            return True
+
+        # 删除运行标题模式（如 "1. 不可压缩欧拉方程" 或 "Chapter 1 Introduction"）
+        # 这些通常在页面的顶部或底部，作为章节导航
+        # 关键：只匹配单独出现的简短标题，不匹配包含句子内容的行
+        running_header_patterns = [
+            r'^\d{1,2}\.\s*[一-鿿]{2,10}$',           # 数字. 中文标题 (如 "1. 不可压缩欧拉方程")，后面不能有更多内容
+            r'^第\s*\d+\s*章\s*[一-鿿]{2,10}$',       # 第X章 + 简短标题
+            r'^[一-鿿]{2,8}\s+\d+\.\d+(?:\s+[一-鿿]+)?$',  # 简短中文词 + 数字.数字 (如 "欧拉方程 1.3")
+            r'^\s*\d+\s+\d+\.\s*[一-鿿]',  # 页码 + 空格 + 章节号 + 标题 (如 "6    1. 不可压缩欧拉方程")
+        ]
+        for pattern in running_header_patterns:
+            if re.match(pattern, s, re.IGNORECASE):
+                return True
+
+        return False
 
     def _clean_table_cell(self, cell: Optional[str]) -> str:
         if cell is None:
@@ -570,6 +660,9 @@ class PDFDocumentParser:
 
                     extracted_text = self._cleanup_pagination(extracted_text, page_num, total_pages)
                     extracted_text = self._normalize_text(extracted_text)
+
+                    # 修复 PDF 提取时丢失的数学符号
+                    extracted_text = self._fix_math_extraction(extracted_text)
 
                     if not extracted_text.strip():
                         try:

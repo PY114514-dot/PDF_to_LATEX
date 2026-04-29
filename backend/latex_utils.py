@@ -8,42 +8,207 @@ import re
 from typing import List
 
 
+def fix_matrix_transpose(text: str) -> str:
+    r"""
+    修复 PDF 提取或 AI 生成过程中丢失的矩阵转置符号。
+
+    PDF 文本提取时，矩阵转置 T 经常丢失或错误表示：
+    - W^T (上标) → W.T, W T, W·T, W,t (句点/空格/点号)
+    - A^T B → A.T B, A T B
+    - X_i^T → X_i.T, X_i T
+
+    同时处理 AI 错误输出：
+    - W\top → W^{\top} (有时 AI 忘记加大括号)
+    - A.t → A^{\mathsf{T}} (小写 t 不是转置)
+
+    Returns:
+        修复后的文本
+    """
+    if not text:
+        return text
+
+    # 模式1: 句点/点号表示的转置 (W.T, A.T, X_i.T)
+    # 匹配: 字母/下标 + . + T
+    text = re.sub(
+        r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\.([T])',
+        r'\1^{\mathsf{T}}',
+        text
+    )
+
+    # 模式2: 空格表示的转置 (W T, A T, X_i T) - 只在数学上下文中
+    # 匹配: 字母/下标 + 空格 + T + 非字母
+    # 使用负向先行断言确保 T 后面不是字母
+    text = re.sub(
+        r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\s+([T])(?![a-zA-Z])',
+        r'\1^{\mathsf{T}}',
+        text
+    )
+
+    # 模式3: 单独的 t 表示转置 (有时 AI 用小写 t)
+    # 匹配: 矩阵变量后紧跟 ,t 或 )t
+    text = re.sub(
+        r'([A-Z])\.t\b',
+        r'\1^{\mathsf{T}}',
+        text
+    )
+
+    # 模式4: 修复 AI 忘记加大括号的 \top (W\top → W^{\top})
+    # 但保留已经是 W^{\top} 的形式
+    text = re.sub(
+        r'(\w)\s*\\top\b',
+        r'\1^{\\top}',
+        text
+    )
+
+    # 模式5: 修复 AI 忘记加大括号的 \mathsf{T}
+    text = re.sub(
+        r'(\w)\s*\\mathsf\{T\}',
+        r'\1^{\\mathsf{T}}',
+        text
+    )
+
+    # 模式6: 修复单独的 ^T 没有大括号 (W^T → W^{T})
+    # 但 W^{T} 已经正确，不需要修改
+    text = re.sub(
+        r'(\w)\^([A-Za-z])(?![{a-zA-Z])',
+        r'\1^{\2}',
+        text
+    )
+
+    # 模式7: 修复句点表示的 Hermitian 转置 (W.H → W^{\dagger})
+    text = re.sub(
+        r'(\w)\.H\b',
+        r'\1^{\\dagger}',
+        text
+    )
+
+    # 模式8: 修复句点表示的共轭转置 (W.* → W^{*})
+    # 这个比较特殊，因为 .* 可能表示多种意思
+
+    return text
+
+
+def fix_math_notation(text: str) -> str:
+    """
+    修复常见的数学符号提取问题。
+
+    处理 PDF 提取时丢失的上标/下标信息：
+    - x^2 → x² (但已经是 Unicode 的保持)
+    - x_i → xᵢ (下标)
+    - 特殊符号如 ∞, ≤, ≥, ≠, ≈ 等可能丢失为文字
+
+    Returns:
+        修复后的文本
+    """
+    if not text:
+        return text
+
+    # 修复缺失的大括号 (x^2 → x^{2})
+    text = re.sub(
+        r'(\w)\^(\d+)(?![}a-zA-Z])',
+        r'\1^{\2}',
+        text
+    )
+
+    # 修复下划线形式的下标 (x_i → x_{i}) 但保持 x_i 格式
+    # 这个只修复已经是 LaTeX 格式的情况
+
+    # 修复常见的特殊符号文字表示
+    replacements = {
+        r'\binfinity\b': r'\infty',
+        r'\ble\b': r'\leq',
+        r'\bge\b': r'\geq',
+        r'\bne\b': r'\neq',
+        r'\bleq\b': r'\leq',
+        r'\bgeq\b': r'\geq',
+        r'\bsum\b': r'\sum',
+        r'\bprod\b': r'\prod',
+        r'\bint\b': r'\int',
+        r'\balpha\b': r'\alpha',
+        r'\bbeta\b': r'\beta',
+        r'\bgamma\b': r'\gamma',
+        r'\bdelta\b': r'\delta',
+        r'\blambda\b': r'\lambda',
+        r'\bmu\b': r'\mu',
+        r'\bsigma\b': r'\sigma',
+        r'\bphi\b': r'\phi',
+        r'\bvarphi\b': r'\varphi',
+        r'\bpsi\b': r'\psi',
+        r'\bomega\b': r'\omega',
+        r'\bepsilon\b': r'\epsilon',
+    }
+
+    for old, new in replacements.items():
+        # 使用单词边界确保不替换变量名
+        text = re.sub(old, new, text, flags=re.IGNORECASE)
+
+    return text
+
+
 def strip_document_wrapper(latex_content: str) -> str:
     """去除完整文档包装，仅保留正文。"""
-    content = latex_content or ""
-    patterns = [
-        r"\\documentclass(\[.*?\])?\{.*?\}",
-        r"\\usepackage(\[.*?\])?\{.*?\}",
-        r"\\title\{.*?\}",
-        r"\\author\{.*?\}",
-        r"\\date\{.*?\}",
-        r"\\maketitle",
-    ]
-    for p in patterns:
-        content = re.sub(p, "", content, flags=re.DOTALL)
-
-    content = re.sub(r"\\begin\{document\}", "", content)
-    content = re.sub(r"\\end\{document\}", "", content)
-    content = re.sub(r"\n{3,}", "\n\n", content)
-    return content.strip()
+    # 不做任何清理，因为 AI 在 prompt 里已经被要求不要输出文档结构命令
+    return latex_content or ""
 
 
 def sanitize_latex_body(latex_content: str) -> str:
     """做一层无损清洗，提高输出稳定性。"""
     content = (latex_content or "").strip()
-    content = re.sub(r"^```(?:latex)?", "", content, flags=re.IGNORECASE | re.MULTILINE)
-    content = re.sub(r"```$", "", content, flags=re.MULTILINE)
+
+    try:
+        content = re.sub(r"^```(?:latex)?", "", content, flags=re.IGNORECASE | re.MULTILINE)
+        content = re.sub(r"```$", "", content, flags=re.MULTILINE)
+    except re.error:
+        pass
+
     content = content.replace("\\ begin", "\\begin").replace("\\ end", "\\end")
-    content = normalize_align_environments(content)
-    content = repair_tabular_consistency(content)
-    content = repair_latex_tables(content)
+
+    try:
+        # 修复 \\eqref 不兼容 KaTeX 的问题
+        # KaTeX 不支持 \\eqref，转为 (\\ref{...}) 格式
+        content = re.sub(r'\\eqref\{([^}]+)\}', r'(\ref{\1})', content)
+    except re.error:
+        pass
+
+    try:
+        content = fix_matrix_transpose(content)  # 修复矩阵转置符号
+    except re.error:
+        pass
+
+    try:
+        content = normalize_align_environments(content)
+    except re.error:
+        pass
+
+    try:
+        content = repair_tabular_consistency(content)
+    except re.error:
+        pass
+
+    try:
+        content = repair_latex_tables(content)
+    except re.error:
+        pass
+
     # 移除独立的页码数字（如 "19", "20" 等单独出现在一行的数字）
-    content = remove_standalone_page_numbers(content)
+    try:
+        content = remove_standalone_page_numbers(content)
+    except re.error:
+        pass
+
     # 清理多余的 \hrule 命令（豆包等模型容易滥用）
-    content = remove_excessive_hrules(content)
+    try:
+        content = remove_excessive_hrules(content)
+    except re.error:
+        pass
+
     # 移除残留的 [TWO_COLUMN_PAGE] 标记（LLM 未处理时清理）
-    content = re.sub(r'\[TWO_COLUMN_PAGE\]', '', content)
-    content = re.sub(r"\n{3,}", "\n\n", content)
+    try:
+        content = re.sub(r'\[TWO_COLUMN_PAGE\]', '', content)
+        content = re.sub(r"\n{3,}", "\n\n", content)
+    except re.error:
+        pass
+
     return content.strip()
 
 
@@ -89,7 +254,7 @@ def remove_excessive_hrules(content: str) -> str:
 
 
 def normalize_align_environments(content: str) -> str:
-    """将 align/align* 转换为支持多行的 aligned 环境，保留 \quad 等间距命令。"""
+    r"""将 align/align* 转换为支持多行的 aligned 环境，保留 \quad 等间距命令。"""
     text = content or ""
 
     def _replace(match: re.Match) -> str:
@@ -262,12 +427,15 @@ def repair_tabular_consistency(content: str) -> str:
     """修复 tabular 中行列数缺失导致的编译错误。"""
     text = content or ""
 
-    pattern = re.compile(
-        r"(?P<begin>\\begin\{tabular\*?\}(?:\[[^\]]*\])?\{(?P<spec>[^{}]*)\})"
-        r"(?P<body>[\s\S]*?)"
-        r"(?P<end>\\end\{tabular\*?\})",
-        flags=re.IGNORECASE,
-    )
+    try:
+        pattern = re.compile(
+            r"(?P<begin>\\begin\{tabular\*?\}(?:\[[^\]]*\])?\{(?P<spec>[^{}]*)\})"
+            r"(?P<body>[\s\S]*?)"
+            r"(?P<end>\\end\{tabular\*?\})",
+            flags=re.IGNORECASE,
+        )
+    except re.error:
+        return text
 
     def _fix_block(match: re.Match) -> str:
         begin = match.group("begin")

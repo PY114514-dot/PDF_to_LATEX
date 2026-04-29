@@ -20,14 +20,18 @@ from pdf2latex_enhanced import PDF2LaTeXEnhanced
 from image2latex_enhanced import Image2LaTeXEnhanced
 from clients import LLMClient
 from config import settings
-from history_manager import history_manager
+from history_manager import history_manager, preference_learner
 from task_manager import async_task_manager
 from latex_utils import merge_tex_contents
+from latex_syntax import check_latex_syntax, fix_latex_syntax, validate_latex, score_latex_quality
+from error_handler import DetailedErrorCollector, create_error_context
+from knowledge_graph import analyze_paper_structure, get_core_theorems
+from bilingual_reader import create_bilingual_view
 import re
 import unicodedata
 
 app = Flask(__name__, template_folder='../frontend/templates', static_folder='../frontend/static')
-app.config['SECRET_KEY'] = 'pdf2latex-secret-key'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'pdf2latex-secret-key')
 CORS(app)
 socketio = SocketIO(
     app, 
@@ -38,8 +42,11 @@ socketio = SocketIO(
 )
 
 # 配置
-UPLOAD_FOLDER = Path('uploads')
-OUTPUT_FOLDER = Path('outputs')
+# 使用绝对路径，确保无论从哪里启动都能正确找到文件
+_BACKEND_DIR = Path(__file__).parent.resolve()
+_PROJECT_ROOT = _BACKEND_DIR.parent
+UPLOAD_FOLDER = _PROJECT_ROOT / 'uploads'
+OUTPUT_FOLDER = _PROJECT_ROOT / 'outputs'
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 OUTPUT_FOLDER.mkdir(exist_ok=True)
 
@@ -144,13 +151,22 @@ def build_output_filename(source_filename: str, translate: bool = False, index: 
     return candidate
 
 
-def parse_pages_input(pages_str):
+def parse_pages_input(pages_str, max_pages: int = None):
     """
     解析页码输入，支持格式: 1,3,5 或 1-3,5,7-9。
     返回 0-based 且去重排序后的页码列表。
+
+    Args:
+        pages_str: 页码字符串
+        max_pages: 最大页数限制。当传入实际PDF总页数时，可以精确限制；
+                   为 None 时使用硬限制 5000（防止 DoS）
     """
+    HARD_LIMIT = 5000  # 防止 DoS 的硬限制
+
     if not pages_str or not pages_str.strip():
         return None
+
+    effective_limit = max_pages if max_pages is not None else HARD_LIMIT
 
     pages = set()
     parts = [part.strip() for part in pages_str.split(',') if part.strip()]
@@ -168,6 +184,8 @@ def parse_pages_input(pages_str):
                 raise ValueError(f"页码必须大于0: {part}")
             if start > end:
                 raise ValueError(f"页码范围起始不能大于结束: {part}")
+            if end - start + 1 > effective_limit:
+                raise ValueError(f"页码范围过大: 最多 {effective_limit} 页")
 
             for page in range(start, end + 1):
                 pages.add(page - 1)
@@ -178,6 +196,8 @@ def parse_pages_input(pages_str):
             page = int(part)
             if page <= 0:
                 raise ValueError(f"页码必须大于0: {part}")
+            if page > effective_limit:
+                raise ValueError(f"页码超出范围: 最多 {effective_limit} 页")
             pages.add(page - 1)
 
     return sorted(pages)
@@ -226,6 +246,101 @@ def _extract_algorithm_blocks_from_latex(latex_content: str, max_blocks: int = 6
             break
 
     return blocks[:max_blocks]
+
+
+def _latex_to_text(latex_content: str, max_chars: int = 120000) -> tuple[str, bool]:
+    """将 LaTeX 内容转换为可读的纯文本，供学术智能体分析。"""
+    text = latex_content or ''
+    if not text:
+        return '', False
+
+    # 移除注释
+    text = re.sub(r'%[^\n]*', '', text)
+
+    # 移除文档结构和导言区命令
+    text = re.sub(r'\\documentclass(\[[^\]]*\])?\{[^}]+\}', '', text)
+    text = re.sub(r'\\usepackage(\[[^\]]*\])?\{[^}]+\}', '', text)
+    text = re.sub(r'\\begin\{document\}', '', text)
+    text = re.sub(r'\\end\{document\}', '', text)
+    text = re.sub(r'\\title\{[^}]*\}', '', text)
+    text = re.sub(r'\\author\{[^}]*\}', '', text)
+    text = re.sub(r'\\date\{[^}]*\}', '', text)
+    text = re.sub(r'\\maketitle', '', text)
+    text = re.sub(r'\\centering', '', text)
+    text = re.sub(r'\\newpage', '\n\n', text)
+    text = re.sub(r'\\pagebreak', '\n\n', text)
+
+    # 将 equation 等数学环境转为文本描述
+    text = re.sub(r'\\begin\{equation\*?\}([\s\S]*?)\\end\{equation\*?\}',
+                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
+    text = re.sub(r'\\begin\{align\*?\}([\s\S]*?)\\end\{align\*?\}',
+                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
+    text = re.sub(r'\\begin\{gather\*?\}([\s\S]*?)\\end\{gather\*?\}',
+                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
+    text = re.sub(r'\$\$([\s\S]*?)\$\$',
+                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
+    text = re.sub(r'\$([^$]+)\$', r'\1', text)
+    text = re.sub(r'\\\[([\s\S]*?)\\\\]', r'\1', text)
+    text = re.sub(r'\\\(([\s\S]*?)\\\)', r'\1', text)
+
+    # 移除表格（保留 caption）
+    text = re.sub(r'\\begin\{table\*?\}([\s\S]*?)\\end\{table\*?\}',
+                  lambda m: re.sub(r'\\caption\{([^}]*)\}', r'表: \1', m.group(0)), text)
+    text = re.sub(r'\\begin\{tabular\*?\}\{[^}]*\}([\s\S]*?)\\end\{tabular\*?\}', '', text)
+
+    # 将 itemize/enumerate 转换为列表符号
+    text = re.sub(r'\\begin\{itemize\}', '', text)
+    text = re.sub(r'\\end\{itemize\}', '\n', text)
+    text = re.sub(r'\\begin\{enumerate\}', '', text)
+    text = re.sub(r'\\end\{enumerate\}', '\n', text)
+    text = re.sub(r'\\item\s+', '• ', text)
+
+    # 转换章节标题
+    text = re.sub(r'\\section\{([^}]+)\}', r'\n\n=== \1 ===\n\n', text)
+    text = re.sub(r'\\subsection\{([^}]+)\}', r'\n\n== \1 ==\n\n', text)
+    text = re.sub(r'\\subsubsection\{([^}]+)\}', r'\n\n= \1 =\n\n', text)
+
+    # 移除图片引用
+    text = re.sub(r'\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}', '', text)
+    text = re.sub(r'\\includegraphics(\[[^\]]*\])?\{[^}]*\}', '', text)
+
+    # 移除字体和样式命令
+    text = re.sub(r'\\textbf\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\textit\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\emph\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathrm\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathbf\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathsf\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\texttt\{([^}]*)\}', r'\1', text)
+
+    # 移除其他常用命令
+    text = re.sub(r'\\label\{[^}]*\}', '', text)
+    text = re.sub(r'\\ref\{[^}]*\}', '', text)
+    text = re.sub(r'\\cite\{[^}]*\}', '', text)
+    text = re.sub(r'\\footnote\{[^}]*\}', '', text)
+    text = re.sub(r'\\thanks\{[^}]*\}', '', text)
+    text = re.sub(r'\\hspace\*?\{[^}]*\}', ' ', text)
+    text = re.sub(r'\\vspace\*?\{[^}]*\}', '\n', text)
+    text = re.sub(r'\\newline', '\n', text)
+    text = re.sub(r'\\quad', ' ', text)
+    text = re.sub(r'\\qquad', '  ', text)
+    text = re.sub(r'\\hfill', '', text)
+    text = re.sub(r'\\dotfill', '', text)
+
+    # 移除 LaTeX 命令符号（保留大括号内的内容）
+    text = re.sub(r'\\[a-zA-Z]+\s*', '', text)
+    text = re.sub(r'\\\\\s*', '\n', text)
+
+    # 清理多余空白
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = text.strip()
+
+    truncated = len(text) > max_chars
+    if truncated:
+        text = text[:max_chars]
+
+    return text, truncated
 
 
 def _build_paper_agent_prompts(source_text: str, total_pages: int, analysis_focus: str, algorithm_blocks: List[str] = None) -> Dict[str, str]:
@@ -495,6 +610,12 @@ def index():
 def render_page():
     """LaTeX渲染页面"""
     return render_template('latex_render.html')
+
+
+@app.route('/paper-agent-view')
+def paper_agent_view_page():
+    """学术智能体分析结果页面"""
+    return render_template('paper_agent_view.html')
 
 
 @socketio.on('connect')
@@ -1577,19 +1698,27 @@ def paper_agent():
     """PDF 学术阅读智能体：摘要、大纲、思维导图与算法分析。"""
     filepath = None
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': '没有上传文件'}), 400
+        latex_only_mode = False
+        source_filename = 'latex'
 
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': '文件名为空'}), 400
-        if not allowed_file(file.filename):
-            return jsonify({'error': '仅支持PDF文件'}), 400
+        # 支持纯 LaTeX 模式（不需要上传 PDF）
+        if 'file' in request.files and request.files['file'].filename:
+            file = request.files['file']
+            if not allowed_file(file.filename):
+                return jsonify({'error': '仅支持PDF文件'}), 400
+            source_filename = file.filename
+        elif 'latex_content' in request.form:
+            latex_content = request.form.get('latex_content', '').strip()
+            if not latex_content:
+                return jsonify({'error': '没有提供 LaTeX 内容'}), 400
+            latex_only_mode = True
+        else:
+            return jsonify({'error': '请提供 PDF 文件或 LaTeX 内容'}), 400
 
         pages_str = request.form.get('pages', '').strip()
         model = request.form.get('model', settings.DEFAULT_MODEL)
         analysis_focus = request.form.get('analysis_focus', 'all').strip() or 'all'
-        latex_content = request.form.get('latex_content', '')
+        latex_content = request.form.get('latex_content', '') if not latex_only_mode else request.form.get('latex_content', '').strip()
         task_id = request.form.get('task_id', '').strip() or f"paper_{int(time.time())}"
 
         def emit_paper_progress(status: str, current: int, total: int, message: str, log_type: str = 'info'):
@@ -1614,13 +1743,6 @@ def paper_agent():
             except ValueError as e:
                 return jsonify({'error': str(e)}), 400
 
-        timestamp = int(time.time())
-        filename = secure_filename(file.filename)
-        filepath = app.config['UPLOAD_FOLDER'] / f"paper_agent_{timestamp}_{filename}"
-        file.save(filepath)
-
-        emit_paper_progress('preparing', 1, 5, '已上传PDF，准备提取文本...')
-
         try:
             converter = PDF2LaTeXEnhanced(model=model)
         except ValueError as e:
@@ -1631,48 +1753,73 @@ def paper_agent():
             emit_paper_progress(status, current, total, msg, log_type=log_type)
 
         converter.set_progress_callback(paper_progress_callback)
-        emit_paper_progress('extracting', 2, 5, '开始提取PDF文本...', 'progress')
 
-        pages_text = converter.extract_text_from_pdf(str(filepath), pages=pages)
-        selected_pages = pages if pages else list(range(len(pages_text)))
+        if latex_only_mode:
+            # 纯 LaTeX 模式：直接转换 LaTeX 为文本
+            emit_paper_progress('preparing', 1, 5, '准备分析 LaTeX 内容...')
+            source_text, truncated = _latex_to_text(latex_content)
+            if not source_text:
+                return jsonify({'error': 'LaTeX 内容为空或解析失败'}), 400
+            algorithm_blocks = _extract_algorithm_blocks_from_latex(latex_content)
+            total_pages = 1
+            if algorithm_blocks:
+                emit_paper_progress('processing', 2, 5, f'检测到 {len(algorithm_blocks)} 段算法块，已注入提示词', 'quality')
+            emit_paper_progress('processing', 3, 5, 'LaTeX 解析完成，开始AI学术阅读分析...', 'progress')
+        else:
+            # PDF 模式：上传 PDF 并提取文本
+            timestamp = int(time.time())
+            filename = secure_filename(file.filename)
+            filepath = app.config['UPLOAD_FOLDER'] / f"paper_agent_{timestamp}_{filename}"
+            file.save(filepath)
 
-        chunks: List[str] = []
-        for page_idx in selected_pages:
-            if 0 <= page_idx < len(pages_text):
-                text = (pages_text[page_idx] or '').strip()
-                if text:
-                    chunks.append(f"[第 {page_idx + 1} 页]\n{text}")
+            emit_paper_progress('preparing', 1, 5, '已上传PDF，准备提取文本...')
 
-        if not chunks:
-            return jsonify({'error': 'PDF文本提取失败，无法进行学术阅读分析'}), 400
+            converter.set_progress_callback(paper_progress_callback)
+            emit_paper_progress('extracting', 2, 5, '开始提取PDF文本...', 'progress')
 
-        source_text = "\n\n".join(chunks)
-        emit_paper_progress('processing', 3, 5, '文本提取完成，开始AI学术阅读分析...', 'progress')
-        max_chars = 120000
-        truncated = False
-        if len(source_text) > max_chars:
-            source_text = source_text[:max_chars]
-            truncated = True
+            pages_text = converter.extract_text_from_pdf(str(filepath), pages=pages)
+            selected_pages = pages if pages else list(range(len(pages_text)))
 
-        algorithm_blocks = _extract_algorithm_blocks_from_latex(latex_content)
-        if algorithm_blocks:
-            emit_paper_progress('processing', 3, 5, f'检测到 {len(algorithm_blocks)} 段算法块，已注入提示词', 'quality')
+            chunks: List[str] = []
+            for page_idx in selected_pages:
+                if 0 <= page_idx < len(pages_text):
+                    text = (pages_text[page_idx] or '').strip()
+                    if text:
+                        chunks.append(f"[第 {page_idx + 1} 页]\n{text}")
+
+            if not chunks:
+                return jsonify({'error': 'PDF文本提取失败，无法进行学术阅读分析'}), 400
+
+            source_text = "\n\n".join(chunks)
+            emit_paper_progress('processing', 3, 5, '文本提取完成，开始AI学术阅读分析...', 'progress')
+            max_chars = 120000
+            truncated = False
+            if len(source_text) > max_chars:
+                source_text = source_text[:max_chars]
+                truncated = True
+
+            algorithm_blocks = _extract_algorithm_blocks_from_latex(latex_content)
+            if algorithm_blocks:
+                emit_paper_progress('processing', 3, 5, f'检测到 {len(algorithm_blocks)} 段算法块，已注入提示词', 'quality')
+            total_pages = len(selected_pages)
 
         prompts = _build_paper_agent_prompts(
             source_text=source_text,
-            total_pages=len(selected_pages),
+            total_pages=total_pages,
             analysis_focus=analysis_focus,
             algorithm_blocks=algorithm_blocks
         )
 
-        response = asyncio.run(converter.client.chat(
-            messages=[
-                {'role': 'system', 'content': prompts['system_prompt']},
-                {'role': 'user', 'content': prompts['user_prompt']}
-            ],
-            temperature=0.2,
-            max_tokens=5000
-        ))
+        response = asyncio.run(
+            converter.client.chat(
+                messages=[
+                    {'role': 'system', 'content': prompts['system_prompt']},
+                    {'role': 'user', 'content': prompts['user_prompt']}
+                ],
+                temperature=0.2,
+                max_tokens=5000
+            )
+        )
 
         usage = response.get('usage', {}) if isinstance(response, dict) else {}
         parsed = _parse_paper_agent_json(LLMClient.extract_content(response))
@@ -1690,11 +1837,12 @@ def paper_agent():
         result_payload = {
             'success': True,
             'task_id': task_id,
-            'mode': 'pdf-academic-agent',
+            'mode': 'latex-academic-agent' if latex_only_mode else 'pdf-academic-agent',
+            'source_filename': source_filename,
             'model': model,
             'analysis_focus': analysis_focus,
             'pages': pages_str if pages_str else 'all',
-            'total_pages_analyzed': len(selected_pages),
+            'total_pages_analyzed': total_pages,
             'source_text_chars': len(source_text),
             'source_truncated': truncated,
             'algorithm_blocks_detected': len(algorithm_blocks),
@@ -1740,6 +1888,386 @@ def paper_agent():
                 os.remove(filepath)
         except Exception:
             pass
+
+
+# ==================== LaTeX 语法检查与纠错 API ====================
+
+@app.route('/api/latex/check', methods=['POST'])
+def check_latex_syntax_api():
+    """检查 LaTeX 语法错误"""
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        errors = check_latex_syntax(latex_content)
+
+        return jsonify({
+            'success': True,
+            'error_count': len(errors),
+            'errors': [
+                {
+                    'type': e.error_type,
+                    'message': e.message,
+                    'line': e.line,
+                    'position': e.position,
+                    'severity': e.severity,
+                    'original': e.original,
+                    'suggestion': e.suggestion
+                }
+                for e in errors
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/latex/fix', methods=['POST'])
+def fix_latex_syntax_api():
+    """自动修复 LaTeX 语法错误"""
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        fixed_content, remaining_errors = fix_latex_syntax(latex_content)
+
+        return jsonify({
+            'success': True,
+            'original_errors': len(check_latex_syntax(latex_content)),
+            'remaining_errors': len(remaining_errors),
+            'fixed_content': fixed_content,
+            'errors': [
+                {
+                    'type': e.error_type,
+                    'message': e.message,
+                    'line': e.line,
+                    'severity': e.severity
+                }
+                for e in remaining_errors
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/latex/validate', methods=['POST'])
+def validate_latex_api():
+    """验证 LaTeX 并返回详细报告"""
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        report = validate_latex(latex_content)
+
+        return jsonify({
+            'success': True,
+            'valid': report['valid'],
+            'errors_count': report['errors_count'],
+            'warnings_count': report['warnings_count'],
+            'fix_suggestions': report['fix_suggestions']
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 用户偏好管理 API ====================
+
+@app.route('/api/preferences', methods=['GET'])
+def get_preferences():
+    """获取用户偏好设置"""
+    try:
+        prefs = preference_learner.get_all_preferences()
+        return jsonify({
+            'success': True,
+            'preferences': prefs
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preferences', methods=['POST'])
+def update_preferences():
+    """更新用户偏好设置"""
+    try:
+        data = request.get_json(silent=True) or {}
+
+        for key, value in data.items():
+            preference_learner.update_preference(key, value)
+
+        return jsonify({
+            'success': True,
+            'message': '偏好已更新'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preferences/terminology', methods=['GET'])
+def get_terminology():
+    """获取术语映射"""
+    try:
+        terminology = preference_learner.preferences.terminology
+        return jsonify({
+            'success': True,
+            'terminology': terminology
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preferences/terminology', methods=['POST'])
+def add_terminology():
+    """添加术语映射"""
+    try:
+        data = request.get_json(silent=True) or {}
+        source = data.get('source', '').strip()
+        target = data.get('target', '').strip()
+
+        if not source or not target:
+            return jsonify({'error': '请提供 source 和 target 术语'}), 400
+
+        preference_learner.learn_terminology(source, target)
+
+        return jsonify({
+            'success': True,
+            'message': f'术语映射已添加: {source} -> {target}'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preferences/terminology/<path:source>', methods=['DELETE'])
+def delete_terminology(source):
+    """删除术语映射"""
+    try:
+        source = source.strip().lower()
+        if source in preference_learner.preferences.terminology:
+            del preference_learner.preferences.terminology[source]
+            preference_learner._save_preferences()
+            return jsonify({'success': True, 'message': f'已删除术语映射: {source}'})
+
+        return jsonify({'error': '术语映射不存在'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preferences/reset', methods=['POST'])
+def reset_preferences():
+    """重置所有偏好设置"""
+    try:
+        preference_learner.reset_preferences()
+        return jsonify({'success': True, 'message': '偏好已重置'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preferences/learn', methods=['POST'])
+def learn_from_history():
+    """从历史记录学习用户偏好"""
+    try:
+        data = request.get_json(silent=True) or {}
+        record_index = data.get('record_index')
+
+        if record_index is not None:
+            # 从指定历史记录学习
+            record = history_manager.get_record(int(record_index))
+            if record:
+                preference_learner.learn_from_record(record)
+                return jsonify({'success': True, 'message': '已从历史记录学习偏好'})
+
+        # 从所有历史记录学习
+        for record in history_manager.get_history(limit=20):
+            preference_learner.learn_from_record(record)
+
+        return jsonify({'success': True, 'message': '已从所有历史记录学习偏好'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 转换错误详情 API ====================
+
+@app.route('/api/convert/detail-error', methods=['POST'])
+def get_conversion_error_detail():
+    """获取转换错误的详细报告（按页分类）"""
+    try:
+        data = request.get_json(silent=True) or {}
+        errors = data.get('errors', [])
+
+        collector = DetailedErrorCollector()
+
+        for err in errors:
+            collector.add_error(
+                page_num=err.get('page', 0),
+                error_type=err.get('type', 'unknown'),
+                message=err.get('message', ''),
+                recoverable=err.get('recoverable', True),
+                retry_count=err.get('retry_count', 0)
+            )
+
+        summary = collector.get_summary()
+        summary['formatted'] = collector.format_for_user()
+
+        return jsonify({
+            'success': True,
+            'detail': summary
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 论文结构知识图谱 API ====================
+
+@app.route('/api/paper/knowledge-graph', methods=['POST'])
+def get_knowledge_graph():
+    """
+    分析论文结构，构建知识图谱
+    返回定理、引理及其依赖关系，用于可视化
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        graph_data = analyze_paper_structure(latex_content)
+
+        return jsonify({
+            'success': True,
+            'graph': graph_data,
+            'core_theorems': get_core_theorems(latex_content, top_n=5)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/paper/core-theorems', methods=['POST'])
+def get_paper_core_theorems():
+    """获取论文的核心定理（被引用最多的）"""
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+        top_n = data.get('top_n', 5)
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        theorems = get_core_theorems(latex_content, top_n=top_n)
+
+        return jsonify({
+            'success': True,
+            'core_theorems': theorems
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 渐进式双语对照阅读 API ====================
+
+@app.route('/api/bilingual/view', methods=['POST'])
+def get_bilingual_view():
+    """
+    创建双语对照视图
+    将原文和译文按段落对齐，支持 hover 显示原文
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        original_content = data.get('original', '')
+        translated_content = data.get('translated', '')
+
+        if not original_content:
+            return jsonify({'error': '请提供原文内容'}), 400
+
+        if not translated_content:
+            # 如果没有提供译文，返回原文分段（用于单语阅读）
+            translated_content = original_content
+
+        result = create_bilingual_view(original_content, translated_content)
+
+        return jsonify({
+            'success': True,
+            'view': result
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 转换质量评分 API ====================
+
+@app.route('/api/latex/quality', methods=['POST'])
+def get_latex_quality_score():
+    """
+    评估 LaTeX 转换质量
+    返回 0-100 分及具体问题点
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        quality_report = score_latex_quality(latex_content)
+
+        return jsonify({
+            'success': True,
+            'quality': quality_report
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/latex/quality-full', methods=['POST'])
+def get_latex_quality_full():
+    """
+    综合评估：质量评分 + 语法检查 + 问题修复建议
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        # 质量评分
+        quality = score_latex_quality(latex_content)
+
+        # 语法检查
+        syntax_errors = check_latex_syntax(latex_content)
+
+        # 自动修复
+        fixed_content, remaining_errors = fix_latex_syntax(latex_content)
+
+        return jsonify({
+            'success': True,
+            'quality': quality,
+            'syntax_check': {
+                'error_count': len(syntax_errors),
+                'errors': [
+                    {
+                        'type': e.error_type,
+                        'message': e.message,
+                        'line': e.line,
+                        'severity': e.severity
+                    }
+                    for e in syntax_errors
+                ]
+            },
+            'auto_fix': {
+                'remaining_errors': len(remaining_errors),
+                'fixed_content': fixed_content
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

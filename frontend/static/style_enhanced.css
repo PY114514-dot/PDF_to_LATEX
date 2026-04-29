@@ -1,21 +1,45 @@
-/* PDF2LaTeX - ChatGPT Style Minimal Black & White Theme */
+/* PDF2LaTeX - Academic Tool Design System */
+/* 基于 UI/UX Pro Max 设计指南优化 */
+
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Crimson+Pro:wght@400;500;600;700&display=swap');
 
 :root {
+    /* 主色调 - Teal 系列 (学术专业感) */
     --bg-primary: #ffffff;
-    --bg-secondary: #f7f7f8;
-    --bg-tertiary: #ececf0;
-    --text-primary: #1a1a1a;
-    --text-secondary: #6e6e6e;
-    --text-tertiary: #999999;
-    --border-color: #e5e5e5;
-    --border-light: #f0f0f0;
-    --hover-bg: #f5f5f5;
-    --accent-bg: #10a37f;
-    --accent-hover: #0d906e;
+    --bg-secondary: #f0fdfa;
+    --bg-tertiary: #ccfbf1;
+    --text-primary: #134e4a;
+    --text-secondary: #0f766e;
+    --text-tertiary: #6b7280;
+    --border-color: #99f6e4;
+    --border-light: #e6fffa;
+    --hover-bg: #f0fdfa;
+
+    /* 强调色 - 橙色 CTA */
+    --accent-bg: #0d9488;
+    --accent-hover: #0f766e;
+    --accent-light: #14b8a6;
+    --cta-color: #f97316;
+    --cta-hover: #ea580c;
+
+    /* 状态色 */
+    --success-color: #22c55e;
+    --error-color: #ef4444;
+    --warning-color: #f59e0b;
+
+    /* 布局 */
     --radius: 8px;
-    --radius-sm: 4px;
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --radius-sm: 6px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+
+    /* 过渡 */
+    --transition-fast: 150ms ease-out;
+    --transition-normal: 200ms ease-out;
+    --transition-slow: 300ms ease-out;
 }
 
 * {
@@ -24,12 +48,47 @@
     box-sizing: border-box;
 }
 
+/* Focus states for accessibility */
+:focus-visible {
+    outline: 2px solid var(--accent-bg);
+    outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid var(--accent-bg);
+    outline-offset: 2px;
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
-    line-height: 1.5;
+    font-family: 'Atkinson Hyperlegible', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    line-height: 1.6;
     color: var(--text-primary);
     background: var(--bg-secondary);
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Crimson Pro', Georgia, serif;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
 }
 
 /* Container */
@@ -42,23 +101,24 @@ body {
 /* Header */
 .header {
     text-align: center;
-    padding: 40px 20px;
-    background: var(--bg-primary);
+    padding: 48px 20px;
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 24px;
 }
 
 .header h1 {
-    font-size: 28px;
-    font-weight: 600;
+    font-size: 32px;
+    font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.5px;
+    margin-bottom: 8px;
 }
 
 .subtitle {
-    font-size: 14px;
+    font-size: 15px;
     color: var(--text-secondary);
-    margin-top: 8px;
+    margin-top: 4px;
 }
 
 /* Main Content */
@@ -76,49 +136,51 @@ body {
 
 .drop-zone {
     border: 2px dashed var(--border-color);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     margin: 24px;
     padding: 60px 40px;
     text-align: center;
-    transition: all 0.2s ease;
+    transition: all var(--transition-normal);
     background: var(--bg-secondary);
 }
 
 .drop-zone:hover {
-    border-color: var(--text-secondary);
-    background: var(--bg-tertiary);
+    border-color: var(--accent-light);
+    background: var(--hover-bg);
+    transform: scale(1.005);
 }
 
 .drop-zone.dragover {
-    border-color: var(--text-primary);
+    border-color: var(--accent-bg);
     background: var(--bg-tertiary);
     transform: scale(1.01);
+    border-style: solid;
 }
 
 .drop-zone-content {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
 }
 
 .upload-icon {
-    width: 48px;
-    height: 48px;
-    stroke: var(--text-secondary);
+    width: 56px;
+    height: 56px;
+    stroke: var(--accent-bg);
     stroke-width: 1.5;
 }
 
 .drop-text {
-    font-size: 16px;
-    font-weight: 500;
+    font-size: 17px;
+    font-weight: 600;
     color: var(--text-primary);
 }
 
 .drop-text-subtitle {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text-secondary);
-    margin-top: -4px;
+    margin-top: -6px;
 }
 
 .drop-text-or {
@@ -129,7 +191,7 @@ body {
 /* Buttons */
 .button-group {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     flex-wrap: wrap;
     justify-content: center;
     margin-top: 8px;
@@ -138,48 +200,59 @@ body {
 .browse-btn, .browse-btn-secondary, .browse-btn-image {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 20px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all var(--transition-fast);
     background: var(--bg-primary);
     color: var(--text-primary);
 }
 
 .browse-btn:hover, .browse-btn-secondary:hover, .browse-btn-image:hover {
     background: var(--hover-bg);
-    border-color: var(--text-secondary);
+    border-color: var(--accent-light);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .browse-btn {
-    background: var(--text-primary);
-    color: var(--bg-primary);
-    border-color: var(--text-primary);
+    background: var(--accent-bg);
+    color: white;
+    border-color: var(--accent-bg);
 }
 
 .browse-btn:hover {
-    background: #333;
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+}
+
+.browse-btn-secondary:hover, .browse-btn-image:hover {
+    color: var(--accent-bg);
 }
 
 .browse-btn svg, .browse-btn-secondary svg, .browse-btn-image svg {
-    width: 18px;
-    height: 18px;
-    stroke-width: 1.5;
+    width: 16px;
+    height: 16px;
+    stroke-width: 2;
+    flex-shrink: 0;
 }
 
 .file-hint {
     font-size: 12px;
     color: var(--text-tertiary);
-    margin-top: 8px;
+    margin-top: 10px;
 }
 
 .paste-hint {
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--accent-hover);
     background: var(--bg-tertiary);
     padding: 8px 12px;
     border-radius: var(--radius-sm);
@@ -295,67 +368,78 @@ body {
 .checkbox-label {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     cursor: pointer;
     font-size: 14px;
     color: var(--text-primary);
 }
 
 .checkbox-label input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    min-height: 18px;
     cursor: pointer;
+    accent-color: var(--accent-bg);
 }
 
 .text-input, .select-input {
     width: 100%;
-    padding: 10px 12px;
+    padding: 12px 14px;
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     font-size: 14px;
     font-family: inherit;
     color: var(--text-primary);
     background: var(--bg-primary);
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .text-input:focus, .select-input:focus {
     outline: none;
-    border-color: var(--text-secondary);
-    box-shadow: 0 0 0 3px rgba(0,0,0,0.05);
+    border-color: var(--accent-light);
+    box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.1);
 }
 
 .select-input {
     cursor: pointer;
     appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 36px;
+    background-position: right 14px center;
+    padding-right: 40px;
 }
 
 textarea.text-input {
     resize: vertical;
-    min-height: 80px;
+    min-height: 100px;
 }
 
 /* Convert Button */
 .convert-btn {
     width: 100%;
-    padding: 12px;
-    background: var(--text-primary);
+    padding: 14px 20px;
+    min-height: 52px;
+    background: linear-gradient(135deg, var(--accent-bg) 0%, var(--accent-light) 100%);
     color: white;
     border: none;
     border-radius: var(--radius);
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s;
-    margin-top: 8px;
+    transition: all var(--transition-normal);
+    margin-top: 12px;
+    box-shadow: var(--shadow-sm);
 }
 
 .convert-btn:hover {
-    background: #333;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    background: linear-gradient(135deg, var(--accent-hover) 0%, var(--accent-bg) 100%);
+}
+
+.convert-btn:active {
+    transform: translateY(0);
 }
 
 /* Progress Section */
@@ -370,10 +454,10 @@ textarea.text-input {
 }
 
 .spinner {
-    width: 32px;
-    height: 32px;
-    border: 2px solid var(--border-color);
-    border-top-color: var(--text-primary);
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--accent-bg);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin: 0 auto 20px;
@@ -399,31 +483,32 @@ textarea.text-input {
 
 .stage-progress-item {
     background: var(--bg-secondary);
-    border-radius: var(--radius-sm);
-    padding: 12px;
+    border-radius: var(--radius);
+    padding: 14px 16px;
 }
 
 .stage-progress-header {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: 13px;
+    font-weight: 500;
     color: var(--text-secondary);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .progress-bar {
     width: 100%;
-    height: 6px;
-    background: var(--border-color);
-    border-radius: 3px;
+    height: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
     overflow: hidden;
 }
 
 .progress-bar-fill {
     height: 100%;
-    background: var(--text-primary);
+    background: linear-gradient(90deg, var(--accent-bg), var(--accent-light));
     transition: width 0.3s ease;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 
 .progress-detail {
@@ -615,7 +700,7 @@ textarea.text-input {
 /* Result Actions */
 .result-actions {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     flex-wrap: wrap;
     margin-bottom: 20px;
 }
@@ -624,46 +709,58 @@ textarea.text-input {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 10px 16px;
+    gap: 8px;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 20px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all var(--transition-fast);
     background: var(--bg-primary);
     color: var(--text-primary);
 }
 
 .btn-primary:hover, .btn-secondary:hover, .btn-accent:hover {
-    background: var(--hover-bg);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .btn-primary {
-    background: var(--text-primary);
-    color: white;
-    border-color: var(--text-primary);
-}
-
-.btn-primary:hover {
-    background: #333;
-}
-
-.btn-accent {
     background: var(--accent-bg);
     color: white;
     border-color: var(--accent-bg);
 }
 
-.btn-accent:hover {
+.btn-primary:hover {
     background: var(--accent-hover);
+    border-color: var(--accent-hover);
+}
+
+.btn-secondary:hover {
+    background: var(--hover-bg);
+    border-color: var(--accent-light);
+    color: var(--accent-hover);
+}
+
+.btn-accent {
+    background: var(--cta-color);
+    color: white;
+    border-color: var(--cta-color);
+}
+
+.btn-accent:hover {
+    background: var(--cta-hover);
+    border-color: var(--cta-hover);
 }
 
 .btn-primary svg, .btn-secondary svg, .btn-accent svg {
     width: 16px;
     height: 16px;
     stroke-width: 2;
+    flex-shrink: 0;
 }
 
 /* Code Preview / LaTeX Editor */
@@ -697,27 +794,31 @@ textarea.text-input {
 }
 
 .icon-btn {
-    width: 28px;
-    height: 28px;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text-secondary);
-    transition: all 0.15s;
+    transition: all var(--transition-fast);
 }
 
 .icon-btn:hover {
     background: var(--hover-bg);
-    color: var(--text-primary);
+    color: var(--accent-bg);
+    border-color: var(--accent-light);
+    transform: translateY(-1px);
 }
 
 .icon-btn svg {
-    width: 14px;
-    height: 14px;
+    width: 18px;
+    height: 18px;
 }
 
 .code-workspace-body {
@@ -865,6 +966,7 @@ textarea.text-input {
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-word;
+    border-left: 3px solid var(--accent-color, #6366f1);
 }
 
 .paper-algo-card {
@@ -972,17 +1074,19 @@ textarea.text-input {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px;
+    padding: 14px 16px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
     border-radius: var(--radius);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all var(--transition-fast);
 }
 
 .history-item:hover {
-    border-color: var(--border-color);
+    border-color: var(--accent-light);
     background: var(--hover-bg);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .history-icon {
@@ -1027,39 +1131,48 @@ textarea.text-input {
 }
 
 .history-action-btn {
-    padding: 6px 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    min-width: 36px;
+    padding: 6px 14px;
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-size: 12px;
+    border-radius: var(--radius);
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     background: var(--bg-primary);
     color: var(--text-primary);
-    transition: all 0.15s;
+    transition: all var(--transition-fast);
 }
 
 .history-action-btn:hover {
     background: var(--hover-bg);
+    border-color: var(--accent-light);
+    color: var(--accent-hover);
 }
 
 .history-action-btn.primary {
-    background: var(--text-primary);
+    background: var(--accent-bg);
     color: white;
-    border-color: var(--text-primary);
+    border-color: var(--accent-bg);
 }
 
 .history-action-btn.primary:hover {
-    background: #333;
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
 }
 
 .history-action-btn.danger {
-    color: #dc2626;
+    color: var(--error-color);
     border-color: #fecaca;
     background: #fef2f2;
 }
 
 .history-action-btn.danger:hover {
     background: #fee2e2;
+    border-color: var(--error-color);
 }
 
 .history-empty {
@@ -1284,8 +1397,8 @@ textarea.text-input {
 /* Toast */
 .toast {
     position: fixed;
-    bottom: 24px;
-    right: 24px;
+    top: 20px;
+    right: 20px;
     padding: 12px 16px;
     background: var(--text-primary);
     color: white;
@@ -1294,7 +1407,35 @@ textarea.text-input {
     font-weight: 500;
     box-shadow: var(--shadow-md);
     z-index: 10000;
-    animation: slideUp 0.3s ease;
+    animation: slideIn 0.3s ease;
+    max-width: 320px;
+}
+
+.toast-paper {
+    max-width: 280px;
+    font-size: 13px;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes slideOut {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateX(20px);
+    }
 }
 
 @keyframes slideUp {

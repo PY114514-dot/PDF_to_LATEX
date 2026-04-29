@@ -5,12 +5,15 @@ LLM大模型API统一调用管理
 支持多种模型选择
 支持多种temperature设置
 支持多种最大tokens设置
+支持详细错误报告和智能重试
 """
 
 import asyncio
 import httpx
-from typing import Dict, Any, List, Optional
+import time
+from typing import Dict, Any, List, Optional, Callable
 from config import settings
+
 
 class LLMClient:
 
@@ -27,16 +30,16 @@ class LLMClient:
     """
 
     def __init__(
-        self, 
-        api_key: str, 
-        base_url: str, 
-        model: str, 
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
         timeout: float = 1000.0,
         default_extra_params: Dict[str, Any] = None
     ):
         """
         初始化大模型客户端
-        
+
         Args:
             api_key: API密钥
             base_url: 请求地址
@@ -51,25 +54,67 @@ class LLMClient:
         self.model = model
         self.timeout = timeout
         self.default_extra_params = default_extra_params or {}
+        self._progress_callback: Optional[Callable[[str, str, int, int], None]] = None
+        self._current_page: int = 0
+        self._total_pages: int = 0
+
+    def set_progress_callback(self, callback: Callable[[str, str, int, int], None]) -> None:
+        """设置进度回调函数 (status_type, message, current_page, total_pages)"""
+        self._progress_callback = callback
+
+    def _emit_progress(self, status_type: str, message: str) -> None:
+        """发送进度更新"""
+        if self._progress_callback:
+            self._progress_callback(status_type, message, self._current_page, self._total_pages)
+
+    def _format_retry_message(
+        self,
+        error_type: str,
+        page_num: int,
+        attempt: int,
+        max_retries: int,
+        delay: float,
+        error_detail: str = ""
+    ) -> str:
+        """格式化重试消息"""
+        page_info = f"第{page_num + 1}页" if page_num > 0 else ""
+        prefix = f"{page_info} " if page_info else ""
+
+        messages = {
+            'timeout': f"{prefix}请求超时，正在重试 ({attempt}/{max_retries})，等待 {delay:.1f}s...",
+            'connect': f"{prefix}连接失败，正在重试 ({attempt}/{max_retries})，等待 {delay:.1f}s...",
+            'rate_limit': f"{prefix}请求频率超限，正在重试 ({attempt}/{max_retries})，等待 {delay:.1f}s...",
+            'server_error': f"{prefix}服务器错误，正在重试 ({attempt}/{max_retries})，等待 {delay:.1f}s...",
+        }
+
+        base_msg = messages.get(error_type, f"{prefix}发生错误，正在重试 ({attempt}/{max_retries})...")
+        if error_detail and attempt == 1:
+            base_msg += f" 错误详情: {error_detail[:100]}"
+
+        return base_msg
 
     # =============================== 基础聊天 ===================================
     async def chat(
-        self, 
-        messages: List[dict[str, str]], 
+        self,
+        messages: List[dict[str, str]],
         temperature: float = None,  # None 时不发送，GPT-5.2 + reasoning_effort 时必须为 None
         max_tokens: int = None,
+        page_num: int = 0,
+        total_pages: int = 0,
         **kwargs
     ) -> Dict[str, Any]:
-    
+
         """
-        基础聊天接口：
+        基础聊天接口（带详细错误报告和智能重试）：
 
         Args:
             messages: 消息列表
                 格式：[{"role": "system", "content": "你是一位自身的数学题目创作专家"}, {"role": "user", "content": "请创作一道数学题目"}]
                 role可以是："system", "user", "assistant"
             temperature: 温度参数，None表示不发送（GPT-5.2 + reasoning_effort 时必须为 None）
-            max_tokens: 最大tokens数，None表示不限制 
+            max_tokens: 最大tokens数，None表示不限制
+            page_num: 当前页码（用于错误报告）
+            total_pages: 总页数（用于错误报告）
             **kwargs: 其他参数，如：
                 - thinking: {"type": "enabled"}  # 智谱 Thinking 模式
                 - reasoning_effort: "medium"     # GPT-5.2 推理努力
@@ -83,6 +128,10 @@ class LLMClient:
                     ]
             }
         """
+
+        # 更新页码信息
+        self._current_page = page_num
+        self._total_pages = total_pages
 
         # 合并默认额外参数和传入参数（传入参数优先）
         merged_params = {**self.default_extra_params, **kwargs}
@@ -102,10 +151,11 @@ class LLMClient:
         if max_tokens is not None:
             request_body["max_tokens"] = max_tokens
 
-        # 添加重试机制
+        # 重试配置
         max_retries = 3
+        retry_delays = [2, 4, 8]  # 指数退避延迟（秒）
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient(
@@ -122,41 +172,101 @@ class LLMClient:
                     )
                     response.raise_for_status()
                     return response.json()
-            except httpx.ConnectError as e:
-                last_error = f"连接失败: {str(e)}"
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1 * (attempt + 1))  # 递增延迟
-                    continue
-                else:
-                    raise Exception(f"所有连接尝试均失败 ({max_retries}次): {last_error}")
+
             except httpx.TimeoutException as e:
-                last_error = f"请求超时: {str(e)}"
+                last_error = e
+                delay = retry_delays[attempt] if attempt < len(retry_delays) else retry_delays[-1]
+                self._emit_progress(
+                    'retry',
+                    self._format_retry_message('timeout', page_num, attempt + 1, max_retries, delay, str(e))
+                )
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(1 * (attempt + 1))
+                    await asyncio.sleep(delay)
                     continue
                 else:
-                    raise Exception(f"请求超时 ({max_retries}次): {last_error}")
+                    raise Exception(
+                        f"第{page_num + 1}页请求超时（已重试{max_retries}次）: {str(e)}"
+                    )
+
+            except httpx.ConnectError as e:
+                last_error = e
+                delay = retry_delays[attempt] if attempt < len(retry_delays) else retry_delays[-1]
+                self._emit_progress(
+                    'retry',
+                    self._format_retry_message('connect', page_num, attempt + 1, max_retries, delay, str(e))
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    raise Exception(
+                        f"第{page_num + 1}页连接失败（已重试{max_retries}次）: {str(e)}"
+                    )
+
             except httpx.HTTPStatusError as e:
-                # HTTP 错误（4xx, 5xx）不重试
                 status = e.response.status_code
                 error_detail = e.response.text
+                model_name = request_body.get('model', self.model)
+
                 if status == 404:
-                    # 可能是模型不存在或端点错误，尝试从错误信息中提取有用信息
-                    model_name = request_body.get('model', 'unknown')
-                    raise Exception(f"HTTP错误 404: 模型 '{model_name}' 不存在或无权访问。请检查：1) 模型名称是否正确；2) API Key 是否有权访问该模型；3) 端点URL是否正确。原始错误: {error_detail}")
+                    raise Exception(
+                        f"第{page_num + 1}页: HTTP 404 - 模型 '{model_name}' 不存在或无权访问。"
+                        f"请检查：1) 模型名称是否正确；2) API Key 是否有权访问该模型；3) 端点URL是否正确。"
+                    )
                 elif status == 401:
-                    raise Exception(f"HTTP错误 401: 认证失败，请检查 API Key 是否正确。原始错误: {error_detail}")
+                    raise Exception(
+                        f"第{page_num + 1}页: HTTP 401 - 认证失败，请检查 API Key 是否正确。"
+                    )
                 elif status == 429:
-                    raise Exception(f"HTTP错误 429: 请求过于频繁，请稍后重试。原始错误: {error_detail}")
+                    # 429 错误需要特殊处理，可能有 Retry-After 头
+                    retry_after = e.response.headers.get('retry-after', '请稍后')
+                    delay = retry_delays[attempt] if attempt < len(retry_delays) else int(retry_after) if retry_after.isdigit() else 10
+                    self._emit_progress(
+                        'retry',
+                        f"第{page_num + 1}页: HTTP 429 - 请求频率超限，{retry_after}秒后重试（已尝试 {attempt + 1}/{max_retries}）"
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise Exception(
+                            f"第{page_num + 1}页请求频率超限（已重试{max_retries}次）: 请稍后重试"
+                        )
+                elif status >= 500:
+                    delay = retry_delays[attempt] if attempt < len(retry_delays) else retry_delays[-1]
+                    self._emit_progress(
+                        'retry',
+                        self._format_retry_message('server_error', page_num, attempt + 1, max_retries, delay, str(status))
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise Exception(
+                            f"第{page_num + 1}页服务器错误（HTTP {status}，已重试{max_retries}次）"
+                        )
                 else:
-                    raise Exception(f"HTTP错误 {status}: {error_detail}")
+                    raise Exception(
+                        f"第{page_num + 1}页: HTTP错误 {status}: {error_detail[:200]}"
+                    )
+
             except Exception as e:
-                last_error = str(e)
+                last_error = e
+                delay = retry_delays[attempt] if attempt < len(retry_delays) else retry_delays[-1]
+                self._emit_progress(
+                    'retry',
+                    self._format_retry_message('unknown', page_num, attempt + 1, max_retries, delay, str(e))
+                )
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(1 * (attempt + 1))
+                    await asyncio.sleep(delay)
                     continue
                 else:
-                    raise Exception(f"请求失败 ({max_retries}次): {last_error}")
+                    raise Exception(
+                        f"第{page_num + 1}页请求失败（已重试{max_retries}次）: {str(e)}"
+                    )
+
+        # 如果所有重试都失败
+        raise Exception(f"第{page_num + 1}页请求失败（已重试{max_retries}次）")
 
     # =============================== 自动续写 ===================================
     async def chat_with_auto_continue(
@@ -203,7 +313,7 @@ class LLMClient:
             }
 
             # 发送请求
-            async with httpx.AsyncClient(timeout = None) as client:
+            async with httpx.AsyncClient(timeout = 300.0) as client:
                 response = await client.post(
                     self.base_url,
                     headers = {
@@ -371,13 +481,6 @@ deepseek_math = LLMClient(
     timeout = 600.0
 )
 
-gpt4o = LLMClient(
-    api_key = settings.OPENAI_API_KEY,
-    base_url = "https://api.openai.com/v1/chat/completions",
-    model = "gpt-4o",
-    timeout = 1000.0
-)
-
 doubao = LLMClient(
     api_key=settings.DOUBAO_API_KEY,
     base_url="https://ark.cn-beijing.volces.com/api/v3/chat/completions",
@@ -416,7 +519,7 @@ gpt52_with_reasoning = LLMClient(
 )
 
 # GPT-4o 通用模型（用于答案对比等简单任务）
-gpt4o = LLMClient(
+gpt4o_general = LLMClient(
     api_key=settings.OPENAI_API_KEY,
     base_url="https://api.openai.com/v1/chat/completions",
     model="gpt-4o",
@@ -667,7 +770,7 @@ gemini3_pro = LLMClient(
     api_key=settings.GEMINI_API_KEY,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     model="gemini-3-pro-preview",
-    timeout=None  # 无超时限制，允许长时间运行
+    timeout=600.0  # 10分钟超时，适合长时间运行任务
 )
 
 # DeepSeek Chat（通用对话模型）

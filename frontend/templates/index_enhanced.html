@@ -6,7 +6,7 @@
     <title>PDF2LaTeX - 智能PDF转LaTeX</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Crimson+Pro:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
     <!-- KaTeX for LaTeX rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -264,7 +264,7 @@
                         </svg>
                         复制代码
                     </button>
-                    <button class="btn-accent" onclick="renderLatex()">
+                    <button class="btn-primary" onclick="renderLatex()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                             <circle cx="12" cy="12" r="10"></circle>
                             <polygon points="10 8 16 12 10 16 10 8"></polygon>
@@ -327,11 +327,6 @@
                         <div class="code-header-right">
                             <span class="code-lines" id="codeLines">0 行</span>
                             <span class="code-hint">实时预览</span>
-                            <button class="icon-btn" onclick="toggleFullscreen(event)" title="全屏">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                    <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"></path>
-                                </svg>
-                            </button>
                         </div>
                     </div>
                     <div class="code-workspace-body">
@@ -380,7 +375,7 @@
 
             <div class="history-section" id="taskCenterSection">
                 <div class="history-header">
-                    <h3>任务中心</h3>
+                    <h3>进行中的任务</h3>
                     <div class="history-header-actions">
                         <button class="browse-btn" onclick="loadTaskCenter()">刷新</button>
                     </div>

@@ -1589,10 +1589,12 @@ function renderMathInContainer(container) {
                 { left: '$', right: '$', display: false },
                 { left: '\\(', right: '\\)', display: false }
             ],
-            throwOnError: false
+            throwOnError: false,
+            trust: true,
+            strict: false
         });
     } catch (error) {
-        console.warn('数学公式渲染失败:', error.message);
+        console.warn('renderMathInElement 失败:', error.message);
     }
 }
 
@@ -1608,16 +1610,15 @@ async function runPaperAgent() {
         return;
     }
 
-    const section = document.getElementById('paperAgentSection');
-    const loading = document.getElementById('paperAgentLoading');
-    const content = document.getElementById('paperAgentContent');
-    const meta = document.getElementById('paperAgentMeta');
-    if (!section || !loading || !content || !meta) return;
+    const latexEditor = document.getElementById('latexEditor');
+    const latexContent = latexEditor?.value || '';
+    if (!latexContent || latexContent.length < 50) {
+        showToast('请先完成PDF转换再进行学术分析', 'error');
+        return;
+    }
 
-    section.style.display = 'block';
-    loading.style.display = 'block';
-    content.style.display = 'none';
-    meta.textContent = '正在调用学术智能体...';
+    // 显示加载提示
+    showToast('正在分析论文，请稍候...', 'paper');
 
     try {
         paperAgentTaskId = `paper_${Date.now()}`;
@@ -1645,14 +1646,142 @@ async function runPaperAgent() {
             throw new Error(data.error || '学术分析失败');
         }
 
-        renderPaperAgentResult(data);
-        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        showToast('学术智能体分析完成', 'success');
+        // 保存LaTeX内容
+        window.__latexRenderPayload = {
+            latexContent: latexContent,
+            latexFilename: pdfFile.name.replace('.pdf', '.tex')
+        };
+
+        // 保存分析结果
+        window.__paperAgentResult = {
+            status: 'success',
+            result: data.result,
+            stats: data.stats,
+            model: data.model
+        };
+
+        // 打开新窗口显示分析结果
+        const newWindow = window.open('/paper-agent-view', '_blank', 'width=1400,height=900');
+        if (!newWindow) {
+            showToast('请允许弹出窗口', 'error');
+            return;
+        }
+
         paperAgentTaskId = null;
     } catch (error) {
-        loading.style.display = 'none';
-        content.style.display = 'none';
-        meta.textContent = `分析失败: ${error.message}`;
+        showToast(`学术分析失败: ${error.message}`, 'error');
+        paperAgentTaskId = null;
+    }
+}
+
+// 从历史记录运行学术智能体 - 打开新窗口
+async function runPaperAgentFromHistory(index) {
+    try {
+        // 获取历史记录的 LaTeX 内容
+        console.log('[PaperAgent] 获取历史记录:', index);
+        const response = await fetch(`/api/history/${index}`);
+        const data = await response.json();
+
+        if (!data.success || !data.record) {
+            throw new Error(data.error || '历史记录不存在');
+        }
+
+        let latexContent = '';
+        if (data.record.output_file) {
+            const filename = data.record.output_file.split(/[\\/]/).pop();
+            console.log('[PaperAgent] 下载文件:', filename);
+            const fileResponse = await fetch(`/api/download/${encodeURIComponent(filename)}`);
+
+            if (!fileResponse.ok) {
+                throw new Error('文件不存在或已被删除');
+            }
+            latexContent = await fileResponse.text();
+            console.log('[PaperAgent] 文件大小:', latexContent.length, '字符');
+        } else if (data.record.latex_content) {
+            latexContent = data.record.latex_content;
+        }
+
+        if (!latexContent || latexContent.length < 50) {
+            throw new Error('LaTeX 内容为空或太短');
+        }
+
+        const sourceFilename = data.record.filename || '历史文献';
+
+        // 保存 LaTeX 内容到 localStorage（作为备用）
+        try {
+            localStorage.setItem('latexContent', latexContent);
+            localStorage.setItem('latexFilename', sourceFilename);
+        } catch(e) {}
+
+        // 保存到 opener 的全局变量（新窗口会读取）
+        window.__latexRenderPayload = {
+            latexContent: latexContent,
+            latexFilename: sourceFilename
+        };
+
+        paperAgentTaskId = `paper_history_${Date.now()}`;
+        if (socket) {
+            socket.emit('join_task', { task_id: paperAgentTaskId });
+        }
+
+        console.log('[PaperAgent] 发送分析请求...');
+        showToast('正在分析论文，请稍候...', 'paper');
+
+        const formData = new FormData();
+        formData.append('latex_content', latexContent);
+        formData.append('model', document.getElementById('modelSelect')?.value || 'deepseek-chat');
+        formData.append('analysis_focus', 'summary_outline_mindmap_algorithms');
+        formData.append('task_id', paperAgentTaskId);
+
+        const analyzeResponse = await fetch('/api/paper-agent', {
+            method: 'POST',
+            body: formData
+        });
+        console.log('[PaperAgent] 响应状态:', analyzeResponse.status);
+
+        let analyzeData;
+        try {
+            analyzeData = await analyzeResponse.json();
+            console.log('[PaperAgent] 响应数据:', analyzeData);
+        } catch (e) {
+            const text = await analyzeResponse.text();
+            console.error('[PaperAgent] JSON解析失败:', e, '响应文本:', text.substring(0, 500));
+            throw new Error('服务器返回了无效的响应格式');
+        }
+
+        if (!analyzeResponse.ok || !analyzeData.success) {
+            throw new Error(analyzeData.error || '学术分析失败');
+        }
+
+        // 保存分析结果
+        window.__paperAgentResult = {
+            status: 'success',
+            result: analyzeData.result,
+            stats: analyzeData.stats,
+            model: analyzeData.model
+        };
+
+        // 打开新窗口
+        const newWindow = window.open('/paper-agent-view', '_blank', 'width=1400,height=900');
+        if (!newWindow) {
+            showToast('请允许弹出窗口', 'error');
+            return;
+        }
+
+        // 尝试通过 postMessage 发送数据
+        setTimeout(() => {
+            if (newWindow && !newWindow.closed) {
+                newWindow.postMessage({
+                    type: 'paper-agent-result',
+                    ...window.__paperAgentResult
+                }, '*');
+            }
+        }, 500);
+
+        showToast('学术智能体分析完成', 'paper');
+        paperAgentTaskId = null;
+    } catch (error) {
+        console.error('[PaperAgent] 错误:', error);
         showToast(`学术分析失败: ${error.message}`, 'error');
         paperAgentTaskId = null;
     }
@@ -1784,17 +1913,32 @@ function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
+
+    let bgColor, padding = '1rem 1.5rem', fontSize = '14px';
+    if (type === 'paper') {
+        bgColor = '#374151';
+        padding = '0.5rem 1rem';
+        fontSize = '13px';
+    } else if (type === 'success') {
+        bgColor = '#10b981';
+    } else if (type === 'error') {
+        bgColor = '#ef4444';
+    } else {
+        bgColor = '#3b82f6';
+    }
+
     toast.style.cssText = `
         position: fixed;
         top: 20px;
         right: 20px;
-        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+        background: ${bgColor};
         color: white;
-        padding: 1rem 1.5rem;
+        padding: ${padding};
         border-radius: 0.5rem;
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
         z-index: 10000;
         animation: slideIn 0.3s ease;
+        font-size: ${fontSize};
     `;
     
     document.body.appendChild(toast);
@@ -2020,6 +2164,40 @@ function parsePageInput(input) {
     }
 }
 
+// 压缩页码范围显示，如 "1,2,3,4,7,8,9,21,22,23,24" -> "1-4,7-9,21-24"
+function compressPageRanges(pagesStr) {
+    if (!pagesStr || pagesStr === 'all' || pagesStr === '*') {
+        return '全部';
+    }
+
+    // 如果已经是范围格式或单页，直接返回
+    if (pagesStr.includes('-')) {
+        return pagesStr;
+    }
+
+    const pages = pagesStr.split(',').map(p => parseInt(p.trim())).filter(p => !isNaN(p));
+    if (pages.length === 0) return pagesStr;
+    if (pages.length === 1) return pages[0].toString();
+
+    pages.sort((a, b) => a - b);
+    const ranges = [];
+    let start = pages[0];
+    let end = pages[0];
+
+    for (let i = 1; i < pages.length; i++) {
+        if (pages[i] === end + 1) {
+            end = pages[i];
+        } else {
+            ranges.push(start === end ? start.toString() : `${start}-${end}`);
+            start = pages[i];
+            end = pages[i];
+        }
+    }
+    ranges.push(start === end ? start.toString() : `${start}-${end}`);
+
+    return ranges.join(',');
+}
+
 // 获取PDF页数
 async function getPdfPageCount(file) {
     try {
@@ -2216,7 +2394,7 @@ async function loadHistory() {
                 const dateStr = date.toLocaleString('zh-CN');
                 const model = record.model || 'unknown';
                 const language = record.translated ? '中文' : '英文';
-                const pages = record.pages || 'all';
+                const pages = compressPageRanges(record.pages);
                 const tokens = record.stats?.total_tokens || 0;
                 
                 return `
@@ -2238,6 +2416,9 @@ async function loadHistory() {
                             </button>
                             <button class="history-action-btn secondary" onclick="viewHistory(${absoluteIndex})">
                                 查看
+                            </button>
+                            <button class="history-action-btn secondary" onclick="runPaperAgentFromHistory(${absoluteIndex})">
+                                学术阅读
                             </button>
                             <button class="history-action-btn danger" onclick="deleteHistory(${absoluteIndex})">
                                 删除
@@ -2295,24 +2476,24 @@ async function loadTaskCenter() {
             throw new Error(data.error || '加载任务中心失败');
         }
 
-        if (!data.tasks || data.tasks.length === 0) {
-            taskList.innerHTML = '<div class="history-empty"><p>暂无异步任务</p></div>';
+        // 只筛选未完成的任务（进行中、排队中、失败）
+        const incompleteTasks = (data.tasks || []).filter(task => {
+            const status = task.status || '';
+            return status !== 'completed';
+        });
+
+        if (incompleteTasks.length === 0) {
+            taskList.innerHTML = '<div class="history-empty"><p>暂无进行中的任务</p></div>';
             return;
         }
 
-        taskList.innerHTML = data.tasks.map(task => {
+        taskList.innerHTML = incompleteTasks.map(task => {
             const rawStatus = task.status || 'unknown';
-            let status = '未完成';
-            if (rawStatus === 'completed') {
-                status = '完成';
-            } else if (rawStatus === 'queued' || rawStatus === 'preparing' || rawStatus === 'uploading') {
-                status = '未完成-排队中';
-            } else if (rawStatus === 'processing' || rawStatus === 'extracting' || rawStatus === 'converting' || rawStatus === 'translating') {
-                status = '未完成-处理中';
+            let statusLabel = '处理中';
+            if (rawStatus === 'queued' || rawStatus === 'preparing' || rawStatus === 'uploading') {
+                statusLabel = '排队中';
             } else if (rawStatus === 'failed' || rawStatus === 'error') {
-                status = '未完成-失败';
-            } else {
-                status = `未完成-${rawStatus}`;
+                statusLabel = '失败';
             }
             const taskId = task.task_id;
             const updatedAt = task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : '-';
@@ -2323,22 +2504,18 @@ async function loadTaskCenter() {
 
             return `
                 <div class="history-item">
-                    <div class="history-icon">TASK</div>
+                    <div class="history-icon">${rawStatus === 'failed' ? '!' : '↻'}</div>
                     <div class="history-info">
                         <div class="history-filename">${sourceName}</div>
                         <div class="history-meta">
-                            <span>任务ID: ${taskId}</span>
-                            <span>状态: ${status}</span>
-                            <span>TEX: ${texName}</span>
+                            <span>状态: ${statusLabel}</span>
                             <span>进度: ${progress.percent ?? 0}%</span>
-                            <span>信息: ${progress.message || '-'}</span>
-                            <span>更新时间: ${updatedAt}</span>
+                            <span>${progress.message || '处理中...'}</span>
                         </div>
                     </div>
                     <div class="history-actions">
-                        ${result ? `<button class="history-action-btn primary" onclick="openTaskResult('${taskId}')">查看结果</button>` : ''}
-                        ${rawStatus === 'failed' ? `<button class="history-action-btn secondary" onclick="resumeTaskById('${taskId}')">恢复</button>` : ''}
-                        ${result?.download_url ? `<button class="history-action-btn secondary" onclick="window.location.href='${result.download_url}'">下载</button>` : ''}
+                        ${result ? `<button class="history-action-btn primary" onclick="openTaskResult('${taskId}')">查看</button>` : ''}
+                        ${rawStatus === 'failed' ? `<button class="history-action-btn secondary" onclick="resumeTaskById('${taskId}')">重试</button>` : ''}
                     </div>
                 </div>
             `;
@@ -2386,24 +2563,32 @@ async function viewHistory(index) {
     try {
         const response = await fetch(`/api/history/${index}`);
         const data = await response.json();
-        
+
         if (data.success && data.record) {
             // 获取文件内容并渲染
             if (data.record.output_file) {
                 const filename = data.record.output_file.split(/[\\/]/).pop();
-                
-                // 读取文件内容
-                const fileResponse = await fetch(`/api/download/${filename}`);
-                const latexContent = await fileResponse.text();
 
+                // 读取文件内容
+                const fileResponse = await fetch(`/api/download/${encodeURIComponent(filename)}`);
+
+                if (!fileResponse.ok) {
+                    const errorData = await fileResponse.json().catch(() => ({error: '文件不存在或已被删除'}));
+                    showToast(`文件不存在: ${errorData.error || '请检查文件是否被删除'}`, 'error');
+                    return;
+                }
+
+                const latexContent = await fileResponse.text();
                 openRenderPreview(latexContent, filename);
+            } else {
+                showToast('该历史记录没有对应的输出文件', 'error');
             }
         } else {
-            alert('记录不存在');
+            showToast('记录不存在', 'error');
         }
     } catch (error) {
         console.error('查看历史记录失败:', error);
-        alert('查看失败: ' + error.message);
+        showToast('查看失败: ' + error.message, 'error');
     }
 }
 
@@ -2412,18 +2597,20 @@ async function downloadHistory(index) {
     try {
         const response = await fetch(`/api/history/${index}`);
         const data = await response.json();
-        
+
         if (data.success && data.record) {
             if (data.record.output_file) {
                 const filename = data.record.output_file.split(/[\\/]/).pop();
-                window.location.href = `/api/download/${filename}`;
+                window.location.href = `/api/download/${encodeURIComponent(filename)}`;
+            } else {
+                showToast('该历史记录没有对应的输出文件', 'error');
             }
         } else {
-            alert('记录不存在');
+            showToast('记录不存在', 'error');
         }
     } catch (error) {
         console.error('下载历史记录失败:', error);
-        alert('下载失败: ' + error.message);
+        showToast('下载失败: ' + error.message, 'error');
     }
 }
 
@@ -2957,6 +3144,21 @@ function normalizeMathText(text) {
     s = s.replace(/\(cid:215\)/g, '\\times');
     // 清理多余空白
     s = s.replace(/\s+/g, ' ').trim();
+    // LaTeX 兼容性别名
+    // \hat 通常只对单个字符生效，\widehat 对多个字符生效
+    // 如果参数是多个字符，转换为 \widehat；如果是单个字符，保持 \hat
+    s = s.replace(/\\hat\{([a-zA-Z])\}/g, '\\hat{$1}');  // 单字符保持不变
+    s = s.replace(/\\hat\{([^}]+)\}/g, '\\widehat{$1}'); // 多字符转 \widehat
+    s = s.replace(/\\partial_t/gi, '\\partial_{t}');
+    s = s.replace(/\\nabla_t/gi, '\\nabla_{t}');
+    s = s.replace(/\\mathbf_([a-zA-Z])/g, '\\mathbf{$1}');
+    s = s.replace(/\\nabla_([a-zA-Z])/g, '\\nabla_{$1}');
+    s = s.replace(/\\int_([a-zA-Z])/g, '\\int_{$1}');
+    s = s.replace(/\\sum_([a-zA-Z])/g, '\\sum_{$1}');
+    // 确保下标语法正确：_单个字母 自动加括号
+    s = s.replace(/([a-zA-Z])_([a-zA-Z])(?![a-zA-Z{])/g, '$1_{$2}');
+    // 确保上标语法正确：^单个字母 自动加括号
+    s = s.replace(/([a-zA-Z])^([a-zA-Z])(?![a-zA-Z{])/g, '$1^{$2}');
     return s;
 }
 

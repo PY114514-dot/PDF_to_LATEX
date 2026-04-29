@@ -15,7 +15,7 @@ import pdfplumber
 from dotenv import load_dotenv
 from document_parser import PDFDocumentParser
 from clients import (
-    deepseek_chat, deepseek_reasoner, gpt4o, gpt4o_mini, gpt52_with_reasoning,
+    deepseek_chat, deepseek_reasoner,
     glm46_thinking, glm47_thinking, gemini3_pro, doubao, deepseek_math,
     LLMClient
 )
@@ -32,9 +32,6 @@ class PDF2LaTeXEnhanced:
     MODEL_MAP = {
         'deepseek-chat': deepseek_chat,
         'deepseek-reasoner': deepseek_reasoner,
-        'gpt4o': gpt4o,
-        'gpt4o-mini': gpt4o_mini,
-        'gpt52': gpt52_with_reasoning,
         'glm46': glm46_thinking,
         'glm47': glm47_thinking,
         'gemini3-pro': gemini3_pro,

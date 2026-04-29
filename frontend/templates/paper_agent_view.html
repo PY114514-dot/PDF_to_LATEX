@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>学术智能体分析</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
+    <!-- KaTeX CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <style>
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f0fdfa;
+            --bg-tertiary: #ccfbf1;
+            --text-primary: #134e4a;
+            --text-secondary: #0f766e;
+            --text-tertiary: #6b7280;
+            --border-color: #99f6e4;
+            --border-light: #e6fffa;
+            --hover-bg: #f0fdfa;
+            --accent-bg: #0d9488;
+            --accent-hover: #0f766e;
+            --accent-light: #14b8a6;
+            --radius: 8px;
+            --radius-sm: 6px;
+            --radius-lg: 12px;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+            --transition-fast: 150ms ease-out;
+            --transition-normal: 200ms ease-out;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg-secondary);
+            font-family: 'Atkinson Hyperlegible', 'Noto Sans SC', 'Segoe UI', sans-serif;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* 悬浮结果面板 */
+        .agent-float-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 440px;
+            max-height: calc(100vh - 40px);
+            background: var(--bg-primary);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+            z-index: 1000;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .agent-float-header {
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .agent-float-header h3 {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 600;
+        }
+
+        .agent-float-close {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            width: 36px;
+            height: 36px;
+            min-width: 36px;
+            min-height: 36px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+        }
+
+        .agent-float-close:hover {
+            background: var(--hover-bg);
+            color: var(--accent-bg);
+            border-color: var(--accent-light);
+        }
+
+        .agent-float-close svg {
+            width: 18px;
+            height: 18px;
+            stroke-width: 2;
+        }
+
+        .agent-float-body {
+            padding: 16px 20px;
+            overflow-y: auto;
+            flex: 1;
+            background: var(--bg-primary);
+        }
+
+        .agent-loading {
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .agent-loading .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--bg-tertiary);
+            border-top: 3px solid var(--accent-bg);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .agent-section {
+            margin-bottom: 20px;
+        }
+
+        .agent-section h4 {
+            font-size: 12px;
+            color: var(--accent-hover);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 0 0 10px 0;
+            border-bottom: 1px solid var(--border-light);
+            padding-bottom: 8px;
+        }
+
+        .agent-section p, .agent-section li {
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--text-primary);
+            margin: 0;
+        }
+
+        .agent-section ul {
+            padding-left: 20px;
+            margin: 0;
+        }
+
+        .agent-section pre {
+            background: var(--bg-secondary);
+            padding: 14px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            border-left: 3px solid var(--accent-bg);
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .agent-algo-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 14px;
+            margin-bottom: 10px;
+            transition: all var(--transition-fast);
+        }
+
+        .agent-algo-card:hover {
+            border-color: var(--accent-light);
+            transform: translateY(-1px);
+        }
+
+        .agent-algo-card h5 {
+            margin: 0 0 10px 0;
+            font-size: 15px;
+            color: var(--text-primary);
+        }
+
+        .agent-algo-card p {
+            font-size: 13px;
+            margin: 6px 0;
+            color: var(--text-secondary);
+        }
+
+        .agent-algo-card strong {
+            color: var(--accent-hover);
+        }
+
+        /* LaTeX 渲染区域 */
+        .latex-preview-container {
+            padding: 20px;
+            min-height: calc(100vh - 40px);
+        }
+
+        /* 最小化按钮 */
+        .agent-float-minimize {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 52px;
+            height: 52px;
+            min-width: 52px;
+            min-height: 52px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-bg) 0%, var(--accent-light) 100%);
+            color: white;
+            border: none;
+            box-shadow: var(--shadow-lg);
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+            transition: all var(--transition-normal);
+        }
+
+        .agent-float-minimize:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 32px rgba(13, 148, 136, 0.3);
+        }
+
+        .agent-float-minimize svg {
+            width: 24px;
+            height: 24px;
+            stroke-width: 2;
+        }
+    </style>
+</head>
+<body>
+    <!-- 悬浮结果面板 -->
+    <div class="agent-float-panel" id="agentPanel">
+        <div class="agent-float-header">
+            <h3>学术智能体分析结果</h3>
+            <button class="agent-float-close" onclick="togglePanel()" aria-label="关闭面板">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="agent-float-body" id="agentBody">
+            <div class="agent-loading">
+                <div class="spinner"></div>
+                <p>正在分析论文内容...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 最小化时的按钮 -->
+    <button class="agent-float-minimize" id="minimizeBtn" onclick="togglePanel()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M12 6v6l4 2"></path>
+        </svg>
+    </button>
+
+    <!-- LaTeX 渲染区域 -->
+    <div class="latex-preview-container">
+        <iframe id="latexFrame" src="/render?embedded=1" style="width: 100%; height: calc(100vh - 40px); border: none; border-radius: 12px;"></iframe>
+    </div>
+
+    <!-- KaTeX JS -->
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+    <script>
+        let panelMinimized = false;
+
+        function togglePanel() {
+            const panel = document.getElementById('agentPanel');
+            const minBtn = document.getElementById('minimizeBtn');
+            panelMinimized = !panelMinimized;
+            if (panelMinimized) {
+                panel.style.display = 'none';
+                minBtn.style.display = 'flex';
+            } else {
+                panel.style.display = 'flex';
+                minBtn.style.display = 'none';
+            }
+        }
+
+        // 从 URL 参数获取数据和状态
+        const urlParams = new URLSearchParams(window.location.search);
+        const taskId = urlParams.get('task_id');
+        const status = urlParams.get('status');
+
+        // 等待 iframe 加载完成后发送 LaTeX 内容
+        const latexFrame = document.getElementById('latexFrame');
+        latexFrame.addEventListener('load', function() {
+            if (window.opener && window.opener.__latexRenderPayload) {
+                const payload = window.opener.__latexRenderPayload;
+                latexFrame.contentWindow.postMessage({
+                    type: 'latex-preview-update',
+                    content: payload.latexContent || '',
+                    filename: payload.latexFilename || ''
+                }, '*');
+            }
+        });
+
+        // 监听来自父页面的消息
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'paper-agent-result') {
+                renderResult(event.data);
+            }
+        });
+
+        // 从 opener 获取结果（最稳妥）
+        if (window.opener && window.opener.__paperAgentResult) {
+            renderResult(window.opener.__paperAgentResult);
+        }
+
+        function renderResult(data) {
+            const body = document.getElementById('agentBody');
+
+            if (data.status === 'loading') {
+                body.innerHTML = `
+                    <div class="agent-loading">
+                        <div class="spinner"></div>
+                        <p>${data.message || '正在分析...'}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (data.status === 'error') {
+                body.innerHTML = `
+                    <div class="agent-loading">
+                        <p style="color: #c33;">分析失败: ${data.message}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const result = data.result || {};
+
+            // 渲染摘要
+            let html = '';
+            if (result.summary) {
+                html += `
+                    <div class="agent-section">
+                        <h4>摘要</h4>
+                        <p>${escapeHtml(result.summary)}</p>
+                    </div>
+                `;
+            }
+
+            // 渲染大纲
+            if (result.outline && result.outline.length) {
+                html += `
+                    <div class="agent-section">
+                        <h4>大纲</h4>
+                        <ul>
+                            ${result.outline.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            // 渲染思维导图
+            if (result.mindmap_markdown) {
+                html += `
+                    <div class="agent-section">
+                        <h4>思维导图</h4>
+                        <pre>${escapeHtml(result.mindmap_markdown)}</pre>
+                    </div>
+                `;
+            }
+
+            // 渲染算法
+            if (result.algorithms && result.algorithms.length) {
+                html += `<div class="agent-section"><h4>算法解析</h4>`;
+                result.algorithms.forEach((algo, idx) => {
+                    html += `
+                        <div class="agent-algo-card">
+                            <h5>算法 ${idx + 1}: ${escapeHtml(algo.name || '未命名')}</h5>
+                            ${algo.problem ? `<p><strong>问题：</strong>${escapeHtml(algo.problem)}</p>` : ''}
+                            ${algo.core_idea ? `<p><strong>核心思想：</strong>${escapeHtml(algo.core_idea)}</p>` : ''}
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+            }
+
+            // 渲染局限性
+            if (result.limitations && result.limitations.length) {
+                html += `
+                    <div class="agent-section">
+                        <h4>局限性</h4>
+                        <ul>
+                            ${result.limitations.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            // 渲染证据说明
+            if (result.evidence_note) {
+                html += `
+                    <div class="agent-section">
+                        <h4>证据说明</h4>
+                        <p>${escapeHtml(result.evidence_note)}</p>
+                    </div>
+                `;
+            }
+
+            // 统计信息
+            if (data.stats) {
+                html += `
+                    <div class="agent-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee;">
+                        <p style="font-size: 12px; color: #888;">
+                            Tokens: ${(data.stats.total_tokens || 0).toLocaleString()} |
+                            模型: ${data.model || 'unknown'}
+                        </p>
+                    </div>
+                `;
+            }
+
+            body.innerHTML = html || '<p style="color: #888;">未返回有效结果</p>';
+
+            // 尝试渲染数学公式
+            if (typeof renderMathInElement !== 'undefined') {
+                try {
+                    renderMathInElement(body, {
+                        delimiters: [
+                            { left: '$$', right: '$$', display: true },
+                            { left: '\\[', right: '\\]', display: true },
+                            { left: '$', right: '$', display: false },
+                            { left: '\\(', right: '\\)', display: false }
+                        ],
+                        throwOnError: false
+                    });
+                } catch(e) {
+                    console.warn('公式渲染失败:', e);
+                }
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

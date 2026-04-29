@@ -5,7 +5,8 @@
 2. [PDF转LaTeX流程](#pdf转latex流程)
 3. [图片转LaTeX流程](#图片转latex流程)
 4. [核心技术](#核心技术)
-5. [数据流向](#数据流向)
+5. [高级功能](#高级功能)
+6. [数据流向](#数据流向)
 
 ---
 
@@ -15,7 +16,9 @@
 ```
 前端 (HTML/JS) ←→ WebSocket + HTTP API ←→ Flask 后端 ←→ 核心处理模块 ←→ LLM API
                                               ↓
-                                          历史管理
+                                          任务管理
+                                              ↓
+                                        历史管理
                                               ↓
                                         文件存储系统
 ```
@@ -24,13 +27,18 @@
 
 | 模块 | 文件 | 功能 |
 |------|------|------|
-| **Web应用** | `app_enhanced.py` | Flask主程序，路由管理，WebSocket通信 |
-| **PDF处理** | `pdf2latex_enhanced.py` | PDF文本提取和LaTeX转换 |
-| **图片处理** | `image2latex_enhanced.py` | 图片OCR识别和LaTeX转换 |
-| **OCR引擎** | `ocr_client.py` | Tesseract + Vision API混合OCR |
-| **LLM客户端** | `clients.py` | 统一的LLM调用接口 |
-| **配置管理** | `config.py` | API密钥和系统设置 |
-| **历史管理** | `history_manager.py` | 转换历史记录 |
+| **Web应用** | `backend/app_enhanced.py` | Flask主程序，路由管理，WebSocket通信 |
+| **PDF处理** | `backend/pdf2latex_enhanced.py` | PDF文本提取和LaTeX转换 |
+| **图片处理** | `backend/image2latex_enhanced.py` | 图片OCR识别和LaTeX转换 |
+| **OCR引擎** | `backend/ocr_client.py` | Tesseract + Vision API混合OCR |
+| **LLM客户端** | `backend/clients.py` | 统一的LLM调用接口 |
+| **配置管理** | `backend/config.py` | API密钥和系统设置 |
+| **历史管理** | `backend/history_manager.py` | 转换历史记录 |
+| **任务管理** | `backend/task_manager.py` | 任务状态管理和进度跟踪 |
+| **错误处理** | `backend/error_handler.py` | 错误分类、重试机制、详细错误报告 |
+| **双语对照** | `backend/bilingual_reader.py` | 原文/译文对照、hover显示原文 |
+| **知识图谱** | `backend/knowledge_graph.py` | 论文结构分析、定理依赖关系 |
+| **语法检查** | `backend/latex_syntax.py` | LaTeX语法检查、自动纠错、质量评分 |
 
 ---
 
@@ -720,7 +728,118 @@ function parsePageInput(input) {
 5. **Token统计**: 精确统计每次LLM调用的Token使用和成本
 6. **历史记录管理**: 自动保存转换历史，支持查看和重新下载
 7. **中文文件名支持**: 正确处理中文文件名的上传、显示和下载
-8. **错误重试机制**: LLM调用失败时自动重试3次
+8. **智能错误重试**: 根据错误类型自动选择重试策略（指数退避/线性退避）
+9. **双语对照阅读**: 翻译内容支持hover显示原文，方便对照理解
+10. **论文知识图谱**: 自动分析论文结构，定理/引理依赖关系可视化
+11. **LaTeX质量评分**: 转换完成后自动评分，检测公式/表格/结构问题
+
+---
+
+## 🚀 高级功能
+
+### 1. 智能错误处理与重试
+**模块**: `backend/error_handler.py`
+
+**错误类型分类**:
+- `NETWORK_CONNECT`: 网络连接错误
+- `NETWORK_TIMEOUT`: 网络超时
+- `RATE_LIMIT`: 频率限制 (429)
+- `AUTH_ERROR`: 认证错误 (401)
+- `SERVER_ERROR`: 服务器错误 (5xx)
+
+**重试策略**:
+```python
+# 根据错误类型自动选择重试策略
+ErrorType.NETWORK_CONNECT → 指数退避 [1, 2, 4] 秒
+ErrorType.NETWORK_TIMEOUT → 指数退避 [2, 4, 8] 秒
+ErrorType.RATE_LIMIT → 线性退避 [5, 10, 15] 秒
+ErrorType.SERVER_ERROR → 指数退避 [1, 2, 4] 秒
+```
+
+**用户友好的错误消息**:
+```python
+"第3页网络超时（已重试 2/3 次），正在等待 4.0s 后重试..."
+"请求频率超限，10秒后重试（已尝试 1/3 次）"
+```
+
+### 2. 双语对照阅读
+**模块**: `backend/bilingual_reader.py`
+
+**功能**: 将原文和翻译按段落/句子级别对齐，支持hover显示原文
+
+**内容块类型**:
+- `paragraph`: 普通段落
+- `math_block`: 数学公式（直接渲染）
+- `table`: 表格
+- `figure`: 图片
+- `env_block`: 定理/证明等环境
+
+**统计信息**:
+```python
+{
+    'total_blocks': 50,
+    'translated_blocks': 45,
+    'translation_rate': 0.9,  # 90%
+    'math_blocks': 10,
+    'table_blocks': 3,
+    'paragraph_blocks': 37
+}
+```
+
+### 3. 论文知识图谱
+**模块**: `backend/knowledge_graph.py`
+
+**功能**: 从LaTeX文档中提取论文的逻辑结构：定理、引理、证明及其依赖关系
+
+**定理类型**: Lemma, Theorem, Proposition, Corollary, Claim, Fact, Definition, Proof, Example, Remark
+
+**依赖分析**:
+```python
+{
+    'nodes': [
+        {
+            'id': 'theorem:1',
+            'type': 'theorem',
+            'label': 'Theorem 1',
+            'dependencies': ['lemma:1'],
+            'referenced_by': ['theorem:2', 'corollary:1'],
+            'level': 1  # 依赖层级
+        }
+    ],
+    'edges': [
+        {'source': 'lemma:1', 'target': 'theorem:1'}
+    ],
+    'statistics': {
+        'total_theorems': 15,
+        'max_depth': 3,
+        'by_type': {'theorem': 5, 'lemma': 8, 'proof': 2}
+    }
+}
+```
+
+### 4. LaTeX语法检查与质量评分
+**模块**: `backend/latex_syntax.py`
+
+**质量评分维度**:
+| 维度 | 权重 | 检测内容 |
+|------|------|----------|
+| 公式完整性 | 30% | $符号匹配, equation环境平衡 |
+| 表格结构 | 20% | 列数匹配, &分隔符 |
+| 图片覆盖 | 15% | figure环境完整性 |
+| 引用完整 | 15% | \ref与\label匹配 |
+| 结构完整 | 20% | document环境, 章节结构 |
+
+**评分等级**:
+- A (≥90分): 优秀
+- B (75-89分): 良好
+- C (60-74分): 一般
+- D (40-59分): 较差
+- F (<40分): 极差
+
+**自动修复**:
+- 连续空行过多 → 合并为两个空行
+- 多余的反闭括号 → 删除孤立行尾的 }
+- 表格&截断 → 智能合并断行
 
 ---
 
@@ -753,5 +872,9 @@ function parsePageInput(input) {
 5. **智能内容检测**: 自动识别公式/文本/混合内容
 6. **完善的历史管理**: 记录所有转换历史和统计信息
 7. **用户友好界面**: 拖拽上传、实时预览、一键下载
+8. **智能错误处理**: 多层次错误分类 + 个性化重试策略
+9. **双语对照阅读**: 翻译内容与原文对照，hover显示原文
+10. **论文知识图谱**: 自动分析定理依赖关系，构建知识骨架
+11. **LaTeX质量评分**: 多维度评分 + 自动修复建议
 
 项目的核心优势在于**多层次的质量保证机制**和**灵活的引擎选择**，确保在各种场景下都能获得最佳的转换效果。

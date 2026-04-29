@@ -9,7 +9,19 @@
       "Bash(python -c ' *)",
       "Bash(python -m py_compile latex_utils.py document_parser.py pdf2latex_enhanced.py)",
       "Bash(mv static/* frontend/static/)",
-      "Bash(mv templates/* frontend/templates/)"
+      "Bash(mv templates/* frontend/templates/)",
+      "Bash(pip install *)",
+      "Bash(python -W error::SyntaxWarning -c \"import sys; print\\(sys.version\\)\")",
+      "Read(//c/Users/PY/.claude/skills/ui-ux-pro-max/**)",
+      "Bash(python scripts/search.py \"PDF to LaTeX academic tool professional\" --design-system -p \"PDF2LaTeX\" -f markdown)",
+      "Bash(python -W error::SyntaxWarning -c ' *)",
+      "Bash(python scripts/search.py \"animation accessibility button\" --domain ux -n 10)",
+      "Bash(python find_syntax_warnings.py)",
+      "WebFetch(domain:katex.org)",
+      "WebSearch",
+      "Bash(python)",
+      "Bash(python test_eqref.py)",
+      "Bash(node --check script_enhanced.js)"
     ]
   }
 }
