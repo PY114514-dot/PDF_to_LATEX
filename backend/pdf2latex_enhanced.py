@@ -21,8 +21,12 @@ from clients import (
 )
 from config import settings
 from latex_utils import sanitize_latex_body, wrap_with_template, split_references_section
+from logger import get_module_logger
 
 load_dotenv()
+
+# 获取模块 logger
+logger = get_module_logger(__name__)
 
 
 class PDF2LaTeXEnhanced:
@@ -265,7 +269,7 @@ class PDF2LaTeXEnhanced:
     6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
     7. 如果参考文献在原文已经是中文，保留其中文内容不变
     8. 只输出翻译后的文本
-    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\begin{multicols}{2}\n<翻译内容>\n\end{multicols}"""
+    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\\begin{multicols}{2}\n<翻译内容>\n\\end{multicols}"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
@@ -335,7 +339,7 @@ class PDF2LaTeXEnhanced:
     6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
     7. 如果参考文献在原文已经是中文，保留其中文内容不变
     8. 只输出翻译后的文本
-    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\begin{multicols}{2}\n<翻译内容>\n\end{multicols}"""
+    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\\begin{multicols}{2}\n<翻译内容>\n\\end{multicols}"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
@@ -423,15 +427,15 @@ class PDF2LaTeXEnhanced:
         display_total_pages = total_pages if display_total_pages is None else display_total_pages
         # 检查文本质量
         quality = self._check_text_quality(text)
-        print(f"[转换] 第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
+        logger.info(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
         
         # 如果文本为空或质量太低，提示用户
         if not text.strip():
-            print(f"[转换] 警告: 第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
+            logger.warning(f"第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
             return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
         
         if quality < 0.3:
-            print(f"[转换] 警告: 第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
+            logger.warning(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
         
         if translate:
             text = self.translate_text(
@@ -521,14 +525,14 @@ class PDF2LaTeXEnhanced:
         display_page_num = page_num if display_page_num is None else display_page_num
         display_total_pages = total_pages if display_total_pages is None else display_total_pages
         quality = self._check_text_quality(text)
-        print(f"[转换] 第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
+        logger.info(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
 
         if not text.strip():
-            print(f"[转换] 警告: 第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
+            logger.warning(f"第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
             return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
 
         if quality < 0.3:
-            print(f"[转换] 警告: 第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
+            logger.warning(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
 
         if translate:
             text = await self.translate_text_async(
@@ -629,7 +633,7 @@ class PDF2LaTeXEnhanced:
         quality_mode: str = 'standard'
     ) -> dict:
         """转换PDF到LaTeX"""
-        print(f"\n[转换开始] PDF路径={pdf_path}, 页码={pages}, 翻译={translate}")
+        logger.info(f"转换开始: PDF路径={pdf_path}, 页码={pages}, 翻译={translate}")
         start_time = time.time()
         
         # 重置统计
@@ -653,11 +657,15 @@ class PDF2LaTeXEnhanced:
             with open(pdf_path, 'rb') as file:
                 pdf_reader = PyPDF2.PdfReader(file)
                 total_pages = len(pdf_reader.pages)
-        except:
-            # 如果PyPDF2失败，用pdfplumber
-            import pdfplumber
-            with pdfplumber.open(pdf_path) as pdf:
-                total_pages = len(pdf.pages)
+        except Exception as e:
+            logger.warning(f"PyPDF2读取PDF失败: {e}，尝试使用pdfplumber")
+            try:
+                import pdfplumber
+                with pdfplumber.open(pdf_path) as pdf:
+                    total_pages = len(pdf.pages)
+            except Exception as e2:
+                logger.error(f"pdfplumber也无法读取PDF: {e2}")
+                raise RuntimeError(f"无法读取PDF文件: {pdf_path}") from e2
         
         # 确定要提取的页码
         if pages is None:
@@ -665,7 +673,7 @@ class PDF2LaTeXEnhanced:
         else:
             pages = [p for p in pages if 0 <= p < total_pages]
         
-        print(f"[转换] 准备提取 {len(pages)}/{total_pages} 页: {pages}")
+        logger.info(f"准备提取 {len(pages)}/{total_pages} 页: {pages}")
 
         # 只提取需要的页面
         pages_text = self.extract_text_from_pdf(pdf_path, pages)
@@ -715,7 +723,7 @@ class PDF2LaTeXEnhanced:
                 return page_num, latex_page, True
             except Exception as e:
                 err_text = str(e)
-                print(f"警告: 第 {page_num + 1} 页{mode_desc}失败: {err_text}")
+                logger.warning(f"第 {page_num + 1} 页{mode_desc}失败: {err_text}")
                 failed_pages.append((page_num + 1, err_text))
                 return page_num, None, False
 

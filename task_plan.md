@@ -89,14 +89,18 @@
 - [x] regex负向后查找修复
 
 ### Phase 2: 核心功能稳定化
-**状态**: in_progress
+**状态**: in_progress (大部分完成)
 **目标**: 修复已知问题，提升稳定性
 
-- [ ] 完善单元测试覆盖
+- [x] 完善单元测试覆盖 (完成: latex_utils, document_parser)
+- [x] 修复 regex replacement 中的转义问题 (lambda 函数替代)
+- [x] 修复 eqref KaTeX 兼容 (lambda 函数替代)
+- [x] 日志系统规范化 (添加 logger.py)
+- [x] 修复 bare except blocks (pdf2latex_enhanced.py)
+- [x] 修复 SyntaxWarning (无效转义序列)
 - [ ] 错误处理边界case优化
 - [ ] 性能优化（大批量页面处理）
 - [ ] 内存使用优化
-- [ ] 日志系统规范化
 
 **关键问题**:
 1. 如何确保OCR质量稳定？
@@ -145,9 +149,9 @@
 
 | 债务项 | 严重度 | 建议修复方式 |
 |--------|--------|--------------|
-| 缺少单元测试 | 高 | 添加pytest覆盖率 > 70% |
+| 缺少单元测试 | 高 | 添加pytest覆盖率 > 70% (已完成: latex_utils, document_parser) |
 | 硬编码默认值 | 中 | 迁移到config.py统一管理 |
-| 日志分散 | 中 | 统一使用logging模块 |
+| 日志分散 | 中 | 统一使用logging模块 (已添加 logger.py) |
 | 前端无状态管理 | 中 | 考虑引入Redux/Context |
 | API无版本控制 | 低 | 添加/api/v1/前缀 |
 
@@ -180,7 +184,7 @@
 1. [x] 添加基础单元测试框架
 2. [x] 修复 `parse_pages_input` 的 `max_pages` 参数（已支持传入实际PDF总页数）
 3. [x] 修复 `gpt4o` → `gpt4o_general` 后更新所有引用处
-4. [ ] 修复 SyntaxWarning (无效转义序列) - 见下方说明
+4. [x] 修复 SyntaxWarning (无效转义序列) - 已修复 \\n 为 \\\\n
 
 **短期规划 (本月)**:
 1. Phase 2: 核心功能稳定化

@@ -18,15 +18,19 @@
 PDF2LATEX/
 ├── backend/                    # Flask 后端
 │   ├── app_enhanced.py        # Flask 主应用入口
-│   ├── pdf2latex_enhanced.py # 核心 PDF→LaTeX 转换逻辑
+│   ├── pdf2latex_enhanced.py  # 核心 PDF→LaTeX 转换逻辑
 │   ├── image2latex_enhanced.py # 图片→LaTeX 流程
 │   ├── document_parser.py     # PDF 文本提取（pdfplumber + PyPDF2）
-│   ├── ocr_client.py         # OCR 引擎封装（Tesseract / Vision）
+│   ├── ocr_client.py          # OCR 引擎封装（Tesseract / Vision）
 │   ├── clients.py             # LLM 客户端（DeepSeek / GPT / GLM / Gemini / Doubao）
-│   ├── config.py             # 配置文件
+│   ├── config.py              # 配置文件
 │   ├── latex_utils.py        # LaTeX 清洗 / 包装 / 参考文献拆分
+│   ├── latex_syntax.py       # LaTeX 语法检查、自动纠错、质量评分
 │   ├── history_manager.py    # 历史记录管理
 │   ├── task_manager.py       # 异步任务管理
+│   ├── error_handler.py      # 错误分类、重试机制、详细错误报告
+│   ├── knowledge_graph.py    # 论文结构分析、定理依赖关系
+│   ├── bilingual_reader.py   # 原文/译文对照、hover显示原文
 │   └── requirements.txt      # Python 依赖
 │
 ├── frontend/                  # 前端资源
@@ -35,12 +39,17 @@ PDF2LATEX/
 │   │   └── style_enhanced.css  # 样式文件
 │   └── templates/
 │       ├── index_enhanced.html  # 主页面
-│       └── latex_render.html     # LaTeX 实时预览页
+│       ├── latex_render.html    # LaTeX 实时预览页
+│       └── paper_agent_view.html # AI 学术阅读页面
 │
 ├── uploads/                   # 上传文件临时目录（不提交到 git）
 ├── outputs/                  # 输出文件目录（不提交到 git）
 ├── .env                      # 环境变量（API 密钥等，勿提交）
 ├── .env_example              # 环境变量示例
+├── task_plan.md              # 项目任务规划
+├── progress.md               # 进度日志
+├── findings.md                # 研究发现
+├── PROJECT_FLOW.md           # 项目详细流程文档
 └── README.md
 ```
 
@@ -94,11 +103,13 @@ python app_enhanced.py
 ## 主要特性
 
 ### 多模型支持
-- **DeepSeek** - 高性价比，推荐
-- **OpenAI GPT-4o** - 高质量转换
-- **GLM（智谱清言）** - 国产大模型
-- **Gemini** - Google 大模型
-- **Doubao（豆包）** - 字节跳动大模型
+| 模型 | 说明 | 特点 |
+|------|------|------|
+| **DeepSeek** | deepseek-chat / deepseek-reasoner | 高性价比，推荐 |
+| **DeepSeek Math** | deepseek-math | 数学公式专用 |
+| **GLM（智谱）** | glm-4.6 / glm-4.7 | 国产大模型，支持 Thinking 模式 |
+| **Gemini** | gemini-3-pro | Google 大模型 |
+| **Doubao（豆包）** | doubao-seed-2.0-lite | 字节跳动大模型 |
 
 ### 核心功能
 - **智能 PDF 提取** - 文本层优先，OCR 兜底，保证文本质量
@@ -110,6 +121,8 @@ python app_enhanced.py
 - **表格优先还原** - 结构化表格上下文注入，优先生成完整 `tabular`
 - **参考文献保护** - 自动识别文献区，翻译时保持作者名/题名/刊名原文
 - **双栏版式检测** - 自动检测双栏排版页面，翻译后保留 `multicols` 结构
+- **运行标题过滤** - 自动过滤页眉页脚的章节标题
+- **KaTeX 兼容** - 自动转换 `\eqref` 为 `(\ref)` 确保前端渲染
 
 ### AI 学术阅读（仅 PDF）
 在 PDF 转换完成后，点击结果页中的 `AI学术阅读`，调用后端生成摘要、大纲、思维导图与算法解析。
@@ -125,8 +138,14 @@ python app_enhanced.py
 | `pdf2latex_enhanced.py` | PDF→LaTeX 核心流程，翻译/转换并发控制 |
 | `document_parser.py` | PDF 文本提取，三级降级（pdfplumber → PyPDF2 → OCR）|
 | `latex_utils.py` | LaTeX 清洗、表格修复、模板包装 |
+| `latex_syntax.py` | LaTeX 语法检查、自动纠错、质量评分（多维度）|
 | `clients.py` | 统一 LLM 客户端，支持多模型 |
 | `ocr_client.py` | OCR 引擎封装（Tesseract / DeepSeek Vision）|
+| `error_handler.py` | 错误分类、重试策略、用户友好错误消息 |
+| `knowledge_graph.py` | 论文结构分析、定理依赖关系图谱 |
+| `bilingual_reader.py` | 原文/译文对照，段落级对齐，hover 显示原文 |
+| `task_manager.py` | 异步任务状态管理 |
+| `history_manager.py` | 转换历史持久化 |
 
 ### 前端（原生 JS + CSS）
 | 文件 | 说明 |
@@ -135,6 +154,7 @@ python app_enhanced.py
 | `style_enhanced.css` | ChatGPT 风格黑白极简 UI |
 | `index_enhanced.html` | 主页面 |
 | `latex_render.html` | LaTeX 实时渲染预览页（KaTeX）|
+| `paper_agent_view.html` | AI 学术阅读页面 |
 
 ---
 
@@ -167,7 +187,22 @@ python app_enhanced.py
 **A:** 当前页面并发为 8（`max_concurrency=8`），可酌情调高。若遇 API 429 限流错误，请降低并发数。
 
 ### Q: 支持扫描版 PDF 吗？
-**A:** 支持。系统会自动检测文本质量，低质量时触发 OCR（需配置 Tesseract 或使用 DeepSeek Vision API）。
+**A:** 支持。系统会自动检测文本质量，低质量时触发 OCR（需配置 Tesseract 或使用 Vision API）。
+
+### Q: LaTeX 公式在网页上显示不正确？
+**A:** 系统会自动处理常见兼容性问题：
+- `\eqref` → `(\ref)` 自动转换（KaTeX 不支持 `\eqref`）
+- 矩阵转置符号修复（`W.T` → `W^{\mathsf{T}}`）
+- 参考文献区保护
+
+---
+
+## 项目文档
+
+- `PROJECT_FLOW.md` - 项目详细流程和技术文档
+- `task_plan.md` - 项目任务规划和里程碑
+- `progress.md` - 开发进度日志
+- `findings.md` - 研究发现和技术决策
 
 ---
 

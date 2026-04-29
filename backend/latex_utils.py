@@ -31,7 +31,7 @@ def fix_matrix_transpose(text: str) -> str:
     # 匹配: 字母/下标 + . + T
     text = re.sub(
         r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\.([T])',
-        r'\1^{\mathsf{T}}',
+        lambda m: m.group(1) + r'^{\mathsf{T}}',
         text
     )
 
@@ -40,7 +40,7 @@ def fix_matrix_transpose(text: str) -> str:
     # 使用负向先行断言确保 T 后面不是字母
     text = re.sub(
         r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\s+([T])(?![a-zA-Z])',
-        r'\1^{\mathsf{T}}',
+        lambda m: m.group(1) + r'^{\mathsf{T}}',
         text
     )
 
@@ -48,7 +48,7 @@ def fix_matrix_transpose(text: str) -> str:
     # 匹配: 矩阵变量后紧跟 ,t 或 )t
     text = re.sub(
         r'([A-Z])\.t\b',
-        r'\1^{\mathsf{T}}',
+        lambda m: m.group(1) + r'^{\mathsf{T}}',
         text
     )
 
@@ -56,14 +56,14 @@ def fix_matrix_transpose(text: str) -> str:
     # 但保留已经是 W^{\top} 的形式
     text = re.sub(
         r'(\w)\s*\\top\b',
-        r'\1^{\\top}',
+        lambda m: m.group(1) + r'^{\top}',
         text
     )
 
     # 模式5: 修复 AI 忘记加大括号的 \mathsf{T}
     text = re.sub(
         r'(\w)\s*\\mathsf\{T\}',
-        r'\1^{\\mathsf{T}}',
+        lambda m: m.group(1) + r'^{\mathsf{T}}',
         text
     )
 
@@ -71,14 +71,14 @@ def fix_matrix_transpose(text: str) -> str:
     # 但 W^{T} 已经正确，不需要修改
     text = re.sub(
         r'(\w)\^([A-Za-z])(?![{a-zA-Z])',
-        r'\1^{\2}',
+        lambda m: m.group(1) + '^' + '{' + m.group(2) + '}',
         text
     )
 
     # 模式7: 修复句点表示的 Hermitian 转置 (W.H → W^{\dagger})
     text = re.sub(
         r'(\w)\.H\b',
-        r'\1^{\\dagger}',
+        lambda m: m.group(1) + r'^{\dagger}',
         text
     )
 

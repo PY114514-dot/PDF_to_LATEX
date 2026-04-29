@@ -21,7 +21,16 @@
       "WebSearch",
       "Bash(python)",
       "Bash(python test_eqref.py)",
-      "Bash(node --check script_enhanced.js)"
+      "Bash(node --check script_enhanced.js)",
+      "Bash(git submodule *)",
+      "Bash(python -m pytest backend/tests/ -v --tb=short)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'backend'\\); from latex_utils import fix_matrix_transpose; print\\('W.T ->', fix_matrix_transpose\\('W.T'\\)\\)\")",
+      "Bash(cd /d d:\\\\PDF2LATEX)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'backend'\\); from logger import get_logger, logger; print\\('Logger module OK'\\); print\\('Default logger:', logger\\)\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'backend'\\); from logger import get_module_logger; l = get_module_logger\\('test'\\); print\\('Logger OK:', l\\)\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'backend'\\); from pdf2latex_enhanced import PDF2LaTeXEnhanced; print\\('pdf2latex_enhanced OK'\\)\")",
+      "Bash(python -c \"x = '''test\\\\ntest'''; print\\(x\\)\")",
+      "Bash(python -W error -c \"x = '\\\\n'; print\\(repr\\(x\\)\\)\")"
     ]
   }
 }
