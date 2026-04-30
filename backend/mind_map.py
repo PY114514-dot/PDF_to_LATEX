@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
 
@@ -119,7 +120,21 @@ class MindMapGenerator:
         """生成层级树状思维导图"""
         lines = ["mindmap", "  root(论文结构)"]
 
-        # 按层级组织节点
+        # 如果有章节结构，优先显示章节
+        if self.graph.sections:
+            section_tree = self._build_section_tree()
+            lines = self._render_section_tree(lines, section_tree, 1)
+            # 如果还有定理，添加定理作为子节点
+            if self.graph.theorems:
+                lines.append("    定理与定义")
+                for thm in self.graph.theorems.values():
+                    if thm.type == TheoremType.PROOF and not include_proofs:
+                        continue
+                    preview = self._truncate(thm.label, max_preview_length)
+                    lines.append(f"      {self._safe_id(thm.id)}(({preview}))")
+            return "\n".join(lines)
+
+        # 如果没有章节但有定理，按原来的层级方式显示
         levels: Dict[int, List[TheoremBlock]] = {}
         for thm in self.graph.theorems.values():
             if thm.type == TheoremType.PROOF and not include_proofs:
@@ -149,6 +164,48 @@ class MindMapGenerator:
                 node_map[thm.id] = node_id
 
         return "\n".join(lines)
+
+    def _build_section_tree(self) -> Dict[str, Any]:
+        """构建章节树结构"""
+        root = {"children": [], "title": "root", "level": 0}
+        stack = [root]
+        current_section = root
+
+        for sec in self.graph.sections:
+            level = sec.get('level', 1)
+            title = sec.get('title', 'Untitled')[:50]
+            sec_node = {"title": title, "level": level, "children": []}
+
+            # 找到正确的父节点
+            while stack and stack[-1]["level"] >= level:
+                stack.pop()
+
+            if stack:
+                stack[-1]["children"].append(sec_node)
+
+            stack.append(sec_node)
+
+        return root
+
+    def _render_section_tree(self, lines: List[str], node: Dict[str, Any], indent: int) -> List[str]:
+        """渲染章节树为Mermaid格式"""
+        prefix = "  " * indent
+
+        for child in node.get("children", []):
+            title = child.get("title", "Section")
+            level = child.get("level", 1)
+
+            if level == 1:
+                lines.append(f"{prefix}{self._safe_id('sec_' + title)}(({title}))")
+            elif level == 2:
+                lines.append(f"{prefix}{self._safe_id('sec_' + title)}(({title}))")
+            else:
+                lines.append(f"{prefix}{self._safe_id('sec_' + title)}(({title}))")
+
+            if child.get("children"):
+                self._render_section_tree(lines, child, indent + 1)
+
+        return lines
 
     def _generate_dependency_mermaid(
         self,
@@ -254,6 +311,18 @@ class MindMapGenerator:
         """生成安全的 Mermaid 节点 ID"""
         # 替换特殊字符
         safe = original_id.replace(":", "_").replace(".", "_").replace("-", "_")
+        # 移除空格和无法用于ID的字符（保留中文字符）
+        # 一-鿿 是CJK统一表意文字的范围
+        safe = re.sub(r'[^\w一-鿿]', '_', safe)
+        # 压缩连续的下划线
+        safe = re.sub(r'_+', '_', safe)
+        safe = safe.strip('_')
+        # 如果ID以数字开头，添加字母前缀
+        if safe and safe[0].isdigit():
+            safe = 'n' + safe
+        # 限制ID长度
+        if len(safe) > 30:
+            safe = safe[:30]
         return f"node_{safe}"
 
     def _truncate(self, text: str, max_length: int) -> str:
@@ -261,6 +330,12 @@ class MindMapGenerator:
         if len(text) <= max_length:
             return text.replace('"', "'").replace("\\", "/")
         return text[:max_length-3].replace('"', "'").replace("\\", "/") + "..."
+
+    def _safe_text_for_mermaid(self, text: str) -> str:
+        """确保文本安全用于Mermaid"""
+        # 移除或替换可能引起问题的字符
+        text = text.replace('"', "'").replace('\\', '/')
+        return text
 
     def _find_parent_id(self, thm: TheoremBlock) -> Optional[str]:
         """找到定理的父节点 ID"""
