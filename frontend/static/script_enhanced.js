@@ -1321,16 +1321,24 @@ function setupMindMapButton() {
 
 function toggleMindMapSection() {
     const section = document.getElementById('mindMapSection');
+    const btn = document.getElementById('mindMapBtn');
+    console.log('[MindMap] toggleMindMapSection called, section:', section, 'btn:', btn);
     if (!section) return;
 
     if (section.style.display === 'none') {
         section.style.display = 'block';
+        btn?.classList.add('active');
+        console.log('[MindMap] Section shown, calling generateMindMap');
         // Auto-generate mind map if there's latex content
         if (getCurrentLatexContent()) {
             generateMindMap();
+        } else {
+            console.log('[MindMap] No latex content available');
+            showMindMapError('没有可用的 LaTeX 内容。请先转换PDF获取LaTeX内容。');
         }
     } else {
         section.style.display = 'none';
+        btn?.classList.remove('active');
     }
 }
 
@@ -1852,8 +1860,9 @@ function initMermaid() {
 
 async function generateMindMap() {
     const latexContent = getCurrentLatexContent();
+    console.log('[MindMap] generateMindMap called, latexContent length:', latexContent?.length || 0);
     if (!latexContent) {
-        showMindMapError('没有可用的 LaTeX 内容');
+        showMindMapError('没有可用的 LaTeX 内容。请先转换PDF获取LaTeX内容。');
         return;
     }
 
@@ -1864,11 +1873,14 @@ async function generateMindMap() {
     const errorDiv = document.getElementById('mindmapError');
     const mermaidPre = document.getElementById('mindmapMermaid');
 
+    console.log('[MindMap] Elements - loading:', loading, 'errorDiv:', errorDiv, 'mermaidPre:', mermaidPre);
+
     if (loading) loading.style.display = 'block';
     if (errorDiv) errorDiv.style.display = 'none';
     if (mermaidPre) mermaidPre.innerHTML = '';
 
     try {
+        console.log('[MindMap] Calling API with layout:', layout, 'includeProofs:', includeProofs);
         const response = await fetch('/api/paper/mind-map', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1880,6 +1892,7 @@ async function generateMindMap() {
         });
 
         const data = await response.json();
+        console.log('[MindMap] API response:', data);
 
         if (!data.success) {
             showMindMapError(data.error || '生成思维导图失败');
@@ -1887,6 +1900,7 @@ async function generateMindMap() {
         }
 
         currentMindMapMermaid = data.mermaid;
+        console.log('[MindMap] Generated mermaid length:', currentMindMapMermaid?.length || 0);
 
         if (mermaidPre) {
             mermaidPre.textContent = currentMindMapMermaid;
