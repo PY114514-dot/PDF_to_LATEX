@@ -286,6 +286,41 @@
                         </svg>
                         AI学术阅读
                     </button>
+                    <button class="btn-secondary" id="mindMapBtn" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                        </svg>
+                        思维导图
+                    </button>
+                </div>
+
+                <!-- 独立的思维导图区域 -->
+                <div class="mindmap-section" id="mindMapSection" style="display: none;">
+                    <div class="mindmap-header">
+                        <h4>论文思维导图</h4>
+                        <p id="mindMapMeta">基于知识图谱自动生成</p>
+                    </div>
+                    <div class="mindmap-controls">
+                        <select id="mindmapLayoutSelect" class="mindmap-select">
+                            <option value="hierarchical">层级结构</option>
+                            <option value="dependency">依赖关系</option>
+                            <option value="timeline">时间线</option>
+                            <option value="classification">分类视图</option>
+                        </select>
+                        <label class="mindmap-checkbox">
+                            <input type="checkbox" id="mindmapIncludeProofs">
+                            <span>包含证明</span>
+                        </label>
+                        <button class="btn-primary btn-sm" id="generateMindmapBtn" type="button">生成</button>
+                        <button class="btn-secondary btn-sm" id="exportMindmapPng" type="button">导出 PNG</button>
+                        <button class="btn-secondary btn-sm" id="exportMindmapSvg" type="button">导出 SVG</button>
+                    </div>
+                    <div class="mindmap-container" id="mindmapContainer">
+                        <div class="mindmap-loading" id="mindmapLoading" style="display: none;">正在生成思维导图...</div>
+                        <div class="mindmap-error" id="mindmapError" style="display: none;"></div>
+                        <pre class="mermaid" id="paperMindmap"></pre>
+                    </div>
                 </div>
 
                 <div class="paper-agent-section" id="paperAgentSection" style="display: none;">
@@ -329,7 +364,7 @@
                             <div class="mindmap-container" id="mindmapContainer">
                                 <div class="mindmap-loading" id="mindmapLoading" style="display: none;">正在生成思维导图...</div>
                                 <div class="mindmap-error" id="mindmapError" style="display: none;"></div>
-                                <pre class="mermaid" id="paperMindmap"></pre>
+                                <pre class="mermaid" id="mindmapMermaid"></pre>
                             </div>
                         </div>
                         <div class="paper-block">

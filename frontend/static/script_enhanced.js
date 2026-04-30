@@ -96,6 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupPasteImage();
     setupConvertButton();
     setupPaperAgentButton();
+    setupMindMapButton();
     setupResultEditor();
     setupLatexSidebar();
     setupHistoryPagination();
@@ -1311,6 +1312,36 @@ function setupPaperAgentButton() {
     updatePaperAgentButtonState();
 }
 
+function setupMindMapButton() {
+    const btn = document.getElementById('mindMapBtn');
+    if (!btn) return;
+    btn.addEventListener('click', toggleMindMapSection);
+    updateMindMapButtonState();
+}
+
+function toggleMindMapSection() {
+    const section = document.getElementById('mindMapSection');
+    if (!section) return;
+
+    if (section.style.display === 'none') {
+        section.style.display = 'block';
+        // Auto-generate mind map if there's latex content
+        if (getCurrentLatexContent()) {
+            generateMindMap();
+        }
+    } else {
+        section.style.display = 'none';
+    }
+}
+
+function updateMindMapButtonState() {
+    const btn = document.getElementById('mindMapBtn');
+    if (!btn) return;
+    const canRun = !isImageMode && !isBatchMode;
+    btn.disabled = !canRun;
+    btn.title = canRun ? '基于知识图谱生成思维导图' : '仅支持单个PDF转换结果';
+}
+
 function updatePaperAgentButtonState() {
     const btn = document.getElementById('paperAgentBtn');
     if (!btn) return;
@@ -1831,7 +1862,7 @@ async function generateMindMap() {
 
     const loading = document.getElementById('mindmapLoading');
     const errorDiv = document.getElementById('mindmapError');
-    const mermaidPre = document.getElementById('paperMindmap');
+    const mermaidPre = document.getElementById('mindmapMermaid');
 
     if (loading) loading.style.display = 'block';
     if (errorDiv) errorDiv.style.display = 'none';
@@ -1872,7 +1903,7 @@ async function generateMindMap() {
 }
 
 async function renderMermaidDiagram() {
-    const mermaidPre = document.getElementById('paperMindmap');
+    const mermaidPre = document.getElementById('mindmapMermaid');
     if (!mermaidPre || !currentMindMapMermaid) return;
 
     try {

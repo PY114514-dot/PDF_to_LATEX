@@ -1002,7 +1002,30 @@ textarea.text-input {
     overflow-x: auto;
 }
 
-/* Mind Map Styles */
+/* Mind Map Section */
+.mindmap-section {
+    padding: 20px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.mindmap-header {
+    margin-bottom: 16px;
+}
+
+.mindmap-header h4 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.mindmap-header p {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* Mind Map Controls */
 .mindmap-controls {
     display: flex;
     flex-wrap: wrap;
