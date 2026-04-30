@@ -288,7 +288,8 @@ class KnowledgeGraphAnalyzer:
                     title=title,
                     content="",
                     content_preview="",
-                    line_number=line_num
+                    line_number=line_num,
+                    page_number=None
                 )
                 theorem_content = []
                 continue
@@ -362,15 +363,21 @@ class KnowledgeGraphAnalyzer:
             if thm_id not in self.graph.theorems:
                 return 0
 
+            # 检测循环依赖，避免无限递归
+            if thm_id in visited:
+                memo[thm_id] = 0
+                return 0
+
             thm = self.graph.theorems[thm_id]
             if not thm.dependencies:
                 memo[thm_id] = 0
                 return 0
 
+            visited.add(thm_id)
             max_dep_level = 0
             for dep_id in thm.dependencies:
                 if dep_id in self.graph.theorems:
-                    dep_level = calculate_level(dep_id, visited, memo)
+                    dep_level = calculate_level(dep_id, visited.copy(), memo)
                     max_dep_level = max(max_dep_level, dep_level)
 
             memo[thm_id] = max_dep_level + 1
