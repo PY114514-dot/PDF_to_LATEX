@@ -19,6 +19,13 @@
             document.write('<script src="/socket.io/socket.io.js"><\/script>');
         }
     </script>
+    <!-- Mermaid for mind map rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        if (typeof mermaid === 'undefined') {
+            document.write('<script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"><\/script>');
+        }
+    </script>
 </head>
 <body>
     <div class="container">
@@ -304,7 +311,26 @@
                         </div>
                         <div class="paper-block">
                             <h5>思维导图</h5>
-                            <pre id="paperMindmap"></pre>
+                            <div class="mindmap-controls">
+                                <select id="mindmapLayoutSelect" class="mindmap-select">
+                                    <option value="hierarchical">层级结构</option>
+                                    <option value="dependency">依赖关系</option>
+                                    <option value="timeline">时间线</option>
+                                    <option value="classification">分类视图</option>
+                                </select>
+                                <label class="mindmap-checkbox">
+                                    <input type="checkbox" id="mindmapIncludeProofs">
+                                    <span>包含证明</span>
+                                </label>
+                                <button class="btn-secondary btn-sm" id="generateMindmapBtn" type="button">生成</button>
+                                <button class="btn-secondary btn-sm" id="exportMindmapPng" type="button">导出 PNG</button>
+                                <button class="btn-secondary btn-sm" id="exportMindmapSvg" type="button">导出 SVG</button>
+                            </div>
+                            <div class="mindmap-container" id="mindmapContainer">
+                                <div class="mindmap-loading" id="mindmapLoading" style="display: none;">正在生成思维导图...</div>
+                                <div class="mindmap-error" id="mindmapError" style="display: none;"></div>
+                                <pre class="mermaid" id="paperMindmap"></pre>
+                            </div>
                         </div>
                         <div class="paper-block">
                             <h5>算法解析</h5>

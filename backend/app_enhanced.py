@@ -26,6 +26,7 @@ from latex_utils import merge_tex_contents
 from latex_syntax import check_latex_syntax, fix_latex_syntax, validate_latex, score_latex_quality
 from error_handler import DetailedErrorCollector, create_error_context
 from knowledge_graph import analyze_paper_structure, get_core_theorems
+from mind_map import generate_mind_map_from_latex, MindMapLayout
 from bilingual_reader import create_bilingual_view
 import re
 import unicodedata
@@ -2144,6 +2145,46 @@ def get_knowledge_graph():
             'success': True,
             'graph': graph_data,
             'core_theorems': get_core_theorems(latex_content, top_n=5)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/paper/mind-map', methods=['POST'])
+def get_paper_mind_map():
+    """
+    生成论文思维导图
+    返回 Mermaid 格式的思维导图代码
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = data.get('latex', '')
+        layout = data.get('layout', 'hierarchical')
+        include_proofs = data.get('include_proofs', False)
+
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+
+        # 转换为 MindMapLayout 枚举
+        layout_map = {
+            'hierarchical': MindMapLayout.HIERARCHICAL,
+            'dependency': MindMapLayout.DEPENDENCY,
+            'timeline': MindMapLayout.TIMELINE,
+            'classification': MindMapLayout.CLASSIFICATION,
+        }
+        layout_enum = layout_map.get(layout, MindMapLayout.HIERARCHICAL)
+
+        result = generate_mind_map_from_latex(
+            latex_content,
+            layout=layout,
+            include_proofs=include_proofs
+        )
+
+        return jsonify({
+            'success': True,
+            'mermaid': result['mermaid'],
+            'summary': result['summary'],
+            'layouts_available': ['hierarchical', 'dependency', 'timeline', 'classification']
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

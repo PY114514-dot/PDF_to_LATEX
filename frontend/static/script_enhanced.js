@@ -1401,8 +1401,13 @@ function renderPaperAgentResult(payload) {
         outline.appendChild(li);
     }
 
-    // 思维导图：使用 textContent 保持 Markdown 格式
-    mindmap.textContent = payload.result?.mindmap_markdown || '未返回思维导图';
+    // 思维导图：显示来自AI的markdown格式思维导图
+    // 注意：Mermaid渲染的思维导图通过"生成"按钮单独生成
+    if (payload.result?.mindmap_markdown) {
+        mindmap.textContent = payload.result.mindmap_markdown;
+    } else {
+        mindmap.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px;">点击上方"生成"按钮，基于知识图谱生成交互式思维导图</div>';
+    }
 
     // 算法块：核心修复 - 不对可能包含 LaTeX 的字段进行 HTML 转义
     const algoItems = Array.isArray(payload.result?.algorithms) ? payload.result.algorithms : [];
@@ -1786,6 +1791,197 @@ async function runPaperAgentFromHistory(index) {
         paperAgentTaskId = null;
     }
 }
+
+// 思维导图功能
+let currentMindMapMermaid = '';
+
+function initMermaid() {
+    if (typeof mermaid !== 'undefined') {
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#e3f2fd',
+                primaryTextColor: '#333',
+                primaryBorderColor: '#1976d2',
+                lineColor: '#666',
+                secondaryColor: '#f3e5f5',
+                tertiaryColor: '#f5f5f5'
+            },
+            mindmap: {
+                padding: 16
+            },
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true
+            }
+        });
+    }
+}
+
+async function generateMindMap() {
+    const latexContent = getCurrentLatexContent();
+    if (!latexContent) {
+        showMindMapError('没有可用的 LaTeX 内容');
+        return;
+    }
+
+    const layout = document.getElementById('mindmapLayoutSelect')?.value || 'hierarchical';
+    const includeProofs = document.getElementById('mindmapIncludeProofs')?.checked || false;
+
+    const loading = document.getElementById('mindmapLoading');
+    const errorDiv = document.getElementById('mindmapError');
+    const mermaidPre = document.getElementById('paperMindmap');
+
+    if (loading) loading.style.display = 'block';
+    if (errorDiv) errorDiv.style.display = 'none';
+    if (mermaidPre) mermaidPre.innerHTML = '';
+
+    try {
+        const response = await fetch('/api/paper/mind-map', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                latex: latexContent,
+                layout: layout,
+                include_proofs: includeProofs
+            })
+        });
+
+        const data = await response.json();
+
+        if (!data.success) {
+            showMindMapError(data.error || '生成思维导图失败');
+            return;
+        }
+
+        currentMindMapMermaid = data.mermaid;
+
+        if (mermaidPre) {
+            mermaidPre.textContent = currentMindMapMermaid;
+        }
+
+        await renderMermaidDiagram();
+
+    } catch (error) {
+        console.error('[MindMap] 生成失败:', error);
+        showMindMapError(`生成失败: ${error.message}`);
+    } finally {
+        if (loading) loading.style.display = 'none';
+    }
+}
+
+async function renderMermaidDiagram() {
+    const mermaidPre = document.getElementById('paperMindmap');
+    if (!mermaidPre || !currentMindMapMermaid) return;
+
+    try {
+        const id = 'mindmap-' + Date.now();
+        const { svg } = await mermaid.render(id, currentMindMapMermaid);
+        mermaidPre.innerHTML = svg;
+    } catch (error) {
+        console.error('[Mermaid] 渲染失败:', error);
+        // 如果渲染失败，显示原始文本
+        if (mermaidPre) {
+            mermaidPre.textContent = currentMindMapMermaid;
+        }
+    }
+}
+
+function showMindMapError(message) {
+    const errorDiv = document.getElementById('mindmapError');
+    const loading = document.getElementById('mindmapLoading');
+    if (loading) loading.style.display = 'none';
+    if (errorDiv) {
+        errorDiv.textContent = message;
+        errorDiv.style.display = 'block';
+    }
+}
+
+async function exportMindMap(format) {
+    if (!currentMindMapMermaid) {
+        showToast('请先生成思维导图', 'error');
+        return;
+    }
+
+    try {
+        const id = 'mindmap-export-' + Date.now();
+        const { svg } = await mermaid.render(id, currentMindMapMermaid);
+
+        if (format === 'svg') {
+            downloadFile(svg, 'mindmap.svg', 'image/svg+xml');
+        } else if (format === 'png') {
+            // Convert SVG to PNG
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+
+            img.onload = () => {
+                canvas.width = img.width * 2;
+                canvas.height = img.height * 2;
+                ctx.scale(2, 2);
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0);
+                canvas.toBlob(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'mindmap.png';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }, 'image/png');
+            };
+            img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+        }
+    } catch (error) {
+        console.error('[MindMap] 导出失败:', error);
+        showToast(`导出失败: ${error.message}`, 'error');
+    }
+}
+
+function downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function setupMindMapControls() {
+    const generateBtn = document.getElementById('generateMindmapBtn');
+    const exportPngBtn = document.getElementById('exportMindmapPng');
+    const exportSvgBtn = document.getElementById('exportMindmapSvg');
+    const layoutSelect = document.getElementById('mindmapLayoutSelect');
+
+    if (generateBtn) {
+        generateBtn.addEventListener('click', generateMindMap);
+    }
+
+    if (exportPngBtn) {
+        exportPngBtn.addEventListener('click', () => exportMindMap('png'));
+    }
+
+    if (exportSvgBtn) {
+        exportSvgBtn.addEventListener('click', () => exportMindMap('svg'));
+    }
+
+    if (layoutSelect) {
+        layoutSelect.addEventListener('change', () => {
+            if (currentMindMapMermaid) {
+                generateMindMap();
+            }
+        });
+    }
+}
+
+// 页面加载完成后初始化
+document.addEventListener('DOMContentLoaded', () => {
+    initMermaid();
+    setupMindMapControls();
+});
 
 // 显示错误
 function showError(message) {

@@ -1002,6 +1002,81 @@ textarea.text-input {
     overflow-x: auto;
 }
 
+/* Mind Map Styles */
+.mindmap-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.mindmap-select {
+    padding: 6px 10px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+    min-width: 120px;
+}
+
+.mindmap-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.mindmap-checkbox input {
+    cursor: pointer;
+}
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.mindmap-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    min-height: 200px;
+    overflow-x: auto;
+}
+
+.mindmap-container .mermaid {
+    display: flex;
+    justify-content: center;
+    background: white;
+    padding: 16px;
+    border-radius: var(--radius-sm);
+}
+
+.mindmap-container .mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.mindmap-loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.mindmap-error {
+    color: #ef4444;
+    padding: 12px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+}
+
 /* Error Section */
 .error-section {
     padding: 40px 24px;
