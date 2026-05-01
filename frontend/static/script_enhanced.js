@@ -96,7 +96,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setupPasteImage();
     setupConvertButton();
     setupPaperAgentButton();
-    setupMindMapButton();
     setupResultEditor();
     setupLatexSidebar();
     setupHistoryPagination();
@@ -105,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
     loadTaskCenter();
     initMinimalMotion();
+    initDocxUpload();
 });
 
 function initMinimalMotion() {
@@ -1312,44 +1312,6 @@ function setupPaperAgentButton() {
     updatePaperAgentButtonState();
 }
 
-function setupMindMapButton() {
-    const btn = document.getElementById('mindMapBtn');
-    if (!btn) return;
-    btn.addEventListener('click', toggleMindMapSection);
-    updateMindMapButtonState();
-}
-
-function toggleMindMapSection() {
-    const section = document.getElementById('mindMapSection');
-    const btn = document.getElementById('mindMapBtn');
-    console.log('[MindMap] toggleMindMapSection called, section:', section, 'btn:', btn);
-    if (!section) return;
-
-    if (section.style.display === 'none') {
-        section.style.display = 'block';
-        btn?.classList.add('active');
-        console.log('[MindMap] Section shown, calling generateMindMap');
-        // Auto-generate mind map if there's latex content
-        if (getCurrentLatexContent()) {
-            generateMindMap();
-        } else {
-            console.log('[MindMap] No latex content available');
-            showMindMapError('没有可用的 LaTeX 内容。请先转换PDF获取LaTeX内容。');
-        }
-    } else {
-        section.style.display = 'none';
-        btn?.classList.remove('active');
-    }
-}
-
-function updateMindMapButtonState() {
-    const btn = document.getElementById('mindMapBtn');
-    if (!btn) return;
-    const canRun = !isImageMode && !isBatchMode;
-    btn.disabled = !canRun;
-    btn.title = canRun ? '基于知识图谱生成思维导图' : '仅支持单个PDF转换结果';
-}
-
 function updatePaperAgentButtonState() {
     const btn = document.getElementById('paperAgentBtn');
     if (!btn) return;
@@ -1830,203 +1792,6 @@ async function runPaperAgentFromHistory(index) {
         paperAgentTaskId = null;
     }
 }
-
-// 思维导图功能
-let currentMindMapMermaid = '';
-
-function initMermaid() {
-    if (typeof mermaid !== 'undefined') {
-        mermaid.initialize({
-            startOnLoad: false,
-            theme: 'base',
-            themeVariables: {
-                primaryColor: '#e3f2fd',
-                primaryTextColor: '#333',
-                primaryBorderColor: '#1976d2',
-                lineColor: '#666',
-                secondaryColor: '#f3e5f5',
-                tertiaryColor: '#f5f5f5'
-            },
-            mindmap: {
-                padding: 16
-            },
-            flowchart: {
-                useMaxWidth: true,
-                htmlLabels: true
-            }
-        });
-    }
-}
-
-async function generateMindMap() {
-    const latexContent = getCurrentLatexContent();
-    console.log('[MindMap] generateMindMap called, latexContent length:', latexContent?.length || 0);
-    if (!latexContent) {
-        showMindMapError('没有可用的 LaTeX 内容。请先转换PDF获取LaTeX内容。');
-        return;
-    }
-
-    const layout = document.getElementById('mindmapLayoutSelect')?.value || 'hierarchical';
-    const includeProofs = document.getElementById('mindmapIncludeProofs')?.checked || false;
-
-    const loading = document.getElementById('mindmapLoading');
-    const errorDiv = document.getElementById('mindmapError');
-    const mermaidPre = document.getElementById('mindmapMermaid');
-
-    console.log('[MindMap] Elements - loading:', loading, 'errorDiv:', errorDiv, 'mermaidPre:', mermaidPre);
-
-    if (loading) loading.style.display = 'block';
-    if (errorDiv) errorDiv.style.display = 'none';
-    if (mermaidPre) mermaidPre.innerHTML = '';
-
-    try {
-        console.log('[MindMap] Calling API with layout:', layout, 'includeProofs:', includeProofs);
-        const response = await fetch('/api/paper/mind-map', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                latex: latexContent,
-                layout: layout,
-                include_proofs: includeProofs
-            })
-        });
-
-        const data = await response.json();
-        console.log('[MindMap] API response:', data);
-
-        if (!data.success) {
-            showMindMapError(data.error || '生成思维导图失败');
-            return;
-        }
-
-        currentMindMapMermaid = data.mermaid;
-        console.log('[MindMap] Generated mermaid length:', currentMindMapMermaid?.length || 0);
-
-        if (mermaidPre) {
-            mermaidPre.textContent = currentMindMapMermaid;
-        }
-
-        await renderMermaidDiagram();
-
-    } catch (error) {
-        console.error('[MindMap] 生成失败:', error);
-        showMindMapError(`生成失败: ${error.message}`);
-    } finally {
-        if (loading) loading.style.display = 'none';
-    }
-}
-
-async function renderMermaidDiagram() {
-    const mermaidPre = document.getElementById('mindmapMermaid');
-    if (!mermaidPre || !currentMindMapMermaid) return;
-
-    try {
-        const id = 'mindmap-' + Date.now();
-        const { svg } = await mermaid.render(id, currentMindMapMermaid);
-        mermaidPre.innerHTML = svg;
-    } catch (error) {
-        console.error('[Mermaid] 渲染失败:', error);
-        // 如果渲染失败，显示原始文本
-        if (mermaidPre) {
-            mermaidPre.textContent = currentMindMapMermaid;
-        }
-    }
-}
-
-function showMindMapError(message) {
-    const errorDiv = document.getElementById('mindmapError');
-    const loading = document.getElementById('mindmapLoading');
-    if (loading) loading.style.display = 'none';
-    if (errorDiv) {
-        errorDiv.textContent = message;
-        errorDiv.style.display = 'block';
-    }
-}
-
-async function exportMindMap(format) {
-    if (!currentMindMapMermaid) {
-        showToast('请先生成思维导图', 'error');
-        return;
-    }
-
-    try {
-        const id = 'mindmap-export-' + Date.now();
-        const { svg } = await mermaid.render(id, currentMindMapMermaid);
-
-        if (format === 'svg') {
-            downloadFile(svg, 'mindmap.svg', 'image/svg+xml');
-        } else if (format === 'png') {
-            // Convert SVG to PNG
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const img = new Image();
-
-            img.onload = () => {
-                canvas.width = img.width * 2;
-                canvas.height = img.height * 2;
-                ctx.scale(2, 2);
-                ctx.fillStyle = 'white';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, 0, 0);
-                canvas.toBlob(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'mindmap.png';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                }, 'image/png');
-            };
-            img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
-        }
-    } catch (error) {
-        console.error('[MindMap] 导出失败:', error);
-        showToast(`导出失败: ${error.message}`, 'error');
-    }
-}
-
-function downloadFile(content, filename, mimeType) {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-}
-
-function setupMindMapControls() {
-    const generateBtn = document.getElementById('generateMindmapBtn');
-    const exportPngBtn = document.getElementById('exportMindmapPng');
-    const exportSvgBtn = document.getElementById('exportMindmapSvg');
-    const layoutSelect = document.getElementById('mindmapLayoutSelect');
-
-    if (generateBtn) {
-        generateBtn.addEventListener('click', generateMindMap);
-    }
-
-    if (exportPngBtn) {
-        exportPngBtn.addEventListener('click', () => exportMindMap('png'));
-    }
-
-    if (exportSvgBtn) {
-        exportSvgBtn.addEventListener('click', () => exportMindMap('svg'));
-    }
-
-    if (layoutSelect) {
-        layoutSelect.addEventListener('change', () => {
-            if (currentMindMapMermaid) {
-                generateMindMap();
-            }
-        });
-    }
-}
-
-// 页面加载完成后初始化
-document.addEventListener('DOMContentLoaded', () => {
-    initMermaid();
-    setupMindMapControls();
-});
 
 // 显示错误
 function showError(message) {
@@ -3136,6 +2901,139 @@ function removeImage(index) {
         // 更新提示文本
         const dropText = dropZone.querySelector('.drop-text');
         dropText.innerHTML = `已选择 <strong>${selectedImages.length}</strong> 个图片`;
+    }
+}
+
+// ===== DOCX Upload Handling =====
+
+let selectedDocxFile = null;
+
+function initDocxUpload() {
+    const dropZone = document.getElementById('docx-drop-zone');
+    const fileInput = document.getElementById('docx-input');
+    const convertBtn = document.getElementById('convert-docx-btn');
+
+    if (!dropZone || !fileInput) return;
+
+    // Click to browse
+    dropZone.addEventListener('click', (e) => {
+        if (e.target.classList.contains('browse-link') || e.target === dropZone) {
+            fileInput.click();
+        }
+    });
+
+    // File selected
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            handleDocxFileSelect(file);
+        }
+    });
+
+    // Drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('drag-over');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file && file.name.endsWith('.docx')) {
+            handleDocxFileSelect(file);
+        }
+    });
+
+    // Convert button
+    if (convertBtn) {
+        convertBtn.addEventListener('click', convertDocxToLatex);
+    }
+}
+
+function handleDocxFileSelect(file) {
+    if (!file.name.endsWith('.docx')) {
+        showError('请上传 .docx 格式的文件');
+        return;
+    }
+
+    selectedDocxFile = file;
+    const dropZone = document.getElementById('docx-drop-zone');
+    const fileInfo = document.getElementById('docx-file-info');
+    const fileName = fileInfo.querySelector('.file-name');
+    const convertBtn = document.getElementById('convert-docx-btn');
+
+    if (dropZone) dropZone.style.display = 'none';
+    if (fileInfo) {
+        fileInfo.style.display = 'flex';
+        fileName.textContent = file.name;
+    }
+    if (convertBtn) convertBtn.disabled = false;
+}
+
+function removeDocxFile() {
+    selectedDocxFile = null;
+    const dropZone = document.getElementById('docx-drop-zone');
+    const fileInfo = document.getElementById('docx-file-info');
+    const fileInput = document.getElementById('docx-input');
+    const convertBtn = document.getElementById('convert-docx-btn');
+
+    if (dropZone) dropZone.style.display = 'block';
+    if (fileInfo) fileInfo.style.display = 'none';
+    if (fileInput) fileInput.value = '';
+    if (convertBtn) convertBtn.disabled = true;
+}
+
+async function convertDocxToLatex() {
+    if (!selectedDocxFile) {
+        showError('请先选择文件');
+        return;
+    }
+
+    const convertBtn = document.getElementById('convert-docx-btn');
+    const progressContainer = document.getElementById('docx-progress');
+    const progressFill = document.getElementById('docx-progress-fill');
+    const progressText = document.getElementById('docx-progress-text');
+
+    setUiLoading(true, convertBtn);
+    if (progressContainer) progressContainer.style.display = 'block';
+    if (progressText) progressText.textContent = '正在上传和转换...';
+
+    const formData = new FormData();
+    formData.append('file', selectedDocxFile);
+    formData.append('model', document.getElementById('docx-model-select')?.value || 'deepseek-math');
+    formData.append('translate', document.getElementById('docx-translate')?.checked ? 'true' : 'false');
+
+    try {
+        const response = await fetch('/api/convert-docx', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            if (progressFill) progressFill.style.width = '100%';
+            if (progressText) progressText.textContent = '转换完成！';
+
+            displayLatexResult(result.latex, result.download_url);
+
+            setTimeout(() => {
+                removeDocxFile();
+                if (progressContainer) progressContainer.style.display = 'none';
+                setUiLoading(false, convertBtn);
+            }, 1500);
+        } else {
+            throw new Error(result.error || '转换失败');
+        }
+    } catch (error) {
+        showError('转换失败: ' + error.message);
+        setUiLoading(false, convertBtn);
+        if (progressContainer) progressContainer.style.display = 'none';
     }
 }
 
