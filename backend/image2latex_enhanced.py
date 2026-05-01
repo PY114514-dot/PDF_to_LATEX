@@ -10,6 +10,14 @@ from typing import Optional, List, Dict, Any, Callable, Tuple
 from PIL import Image
 import asyncio
 
+# Vector image support
+try:
+    from vector2raster import VectorToRasterConverter
+    VECTOR_CONVERTER = VectorToRasterConverter()
+except ImportError:
+    VECTOR_CONVERTER = None
+    print("Warning: vector2raster not available. SVG/EMF support disabled.")
+
 from ocr_client import ocr_client
 from clients import LLMClient
 from config import settings
@@ -147,7 +155,37 @@ class Image2LaTeXEnhanced:
                 log_message=log_message or message,
                 tokens=tokens
             )
-    
+
+    def _preprocess_image(self, image_path: str) -> str:
+        """
+        Pre-process image: convert vector formats to raster if needed.
+
+        Args:
+            image_path: Path to image file
+
+        Returns:
+            Path to (possibly converted) raster image
+        """
+        path = Path(image_path)
+        ext = path.suffix.lower()
+
+        # Check if it's a vector format
+        if ext in ['.svg', '.emf']:
+            if VECTOR_CONVERTER is None:
+                raise ValueError(
+                    f"Vector format {ext} not supported. "
+                    "Please convert to PNG/JPG first or install cairosvg."
+                )
+
+            # Convert to PNG in same directory
+            output_path = path.with_suffix('.png')
+            if VECTOR_CONVERTER.convert_to_raster(str(path), str(output_path), dpi=300):
+                return str(output_path)
+            else:
+                raise ValueError(f"Failed to convert {ext} to PNG")
+
+        return str(image_path)
+
     async def extract_text_from_image(
         self,
         image_path: str,
@@ -408,7 +446,11 @@ class Image2LaTeXEnhanced:
         """
         start_time = time.time()
         image_path = Path(image_path)
-        
+
+        # Preprocess vector images if needed
+        image_path_str = self._preprocess_image(str(image_path))
+        image_path = Path(image_path_str)
+
         self._emit_progress('extracting', 0, 1, '🖼️ 正在识别图片内容...', 'info', '📸 开始OCR识别')
         
         # OCR识别
