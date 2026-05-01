@@ -1445,8 +1445,9 @@ def convert_images():
         add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
+        merge = request.form.get('merge', 'true').lower() == 'true'
         translation_prompt = request.form.get('translation_prompt', '').strip()
-        
+
         # 创建进度回调
         def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
             progress_callback(task_id, status, current, total, message, log_type, log_message, tokens)
@@ -1541,7 +1542,32 @@ def convert_images():
             'log_message': f'✅ 批量转换完成！成功 {result.get("successful_images", 0)}/{result.get("total_images", 0)} 张图片',
             'result': batch_result
         }, room=task_id)
-        
+
+        # If merge is requested and we have multiple images, create merged output
+        if merge and len(uploaded_paths) > 1:
+            from image_batch_merger import ImageBatchMerger
+            merger = ImageBatchMerger()
+
+            # Get LaTeX content from each successful result
+            merged_latex = merger.merge_to_latex(uploaded_paths, include_filenames=True)
+
+            # Save merged result
+            merged_filename = f"batch_merged_{timestamp}.tex"
+            merged_path = OUTPUT_FOLDER / merged_filename
+            merged_path.write_text(merged_latex, encoding='utf-8')
+
+            # Override batch_result for merged output
+            batch_result = {
+                'success': True,
+                'total_images': len(uploaded_paths),
+                'successful_images': result.get('successful_images', 0),
+                'failed_images': result.get('failed_images', 0),
+                'latex': merged_latex,
+                'download_url': f'/api/download/{merged_filename}',
+                'count': len(uploaded_paths),
+                'merged': True
+            }
+
         return jsonify(batch_result)
 
     except Exception as e:
