@@ -18,6 +18,7 @@ from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename as werkzeug_secure_filename
 from pdf2latex_enhanced import PDF2LaTeXEnhanced
 from image2latex_enhanced import Image2LaTeXEnhanced
+from docx2latex_converter import Docx2LaTeXConverter
 from clients import LLMClient
 from config import settings
 from history_manager import history_manager, preference_learner
@@ -26,7 +27,6 @@ from latex_utils import merge_tex_contents
 from latex_syntax import check_latex_syntax, fix_latex_syntax, validate_latex, score_latex_quality
 from error_handler import DetailedErrorCollector, create_error_context
 from knowledge_graph import analyze_paper_structure, get_core_theorems
-from mind_map import generate_mind_map_from_latex, MindMapLayout
 from bilingual_reader import create_bilingual_view
 import re
 import unicodedata
@@ -57,6 +57,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'pdf'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif'}
+ALLOWED_DOCX_EXTENSIONS = {'docx'}
 MAX_BATCH_PDF_FILES = 5
 
 # 存储转换任务的状态
@@ -77,6 +78,11 @@ def allowed_file(filename):
 def allowed_image_file(filename):
     """检查图片文件扩展名是否允许"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+
+def allowed_docx_file(filename):
+    """检查DOCX文件扩展名"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_DOCX_EXTENSIONS
 
 
 def secure_filename(filename):
@@ -1537,11 +1543,74 @@ def convert_images():
         }, room=task_id)
         
         return jsonify(batch_result)
-    
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/convert-docx', methods=['POST'])
+def convert_docx():
+    """Convert Word (.docx) to LaTeX."""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': '没有上传文件'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'error': '没有选择文件'}), 400
+
+    if not allowed_docx_file(file.filename):
+        return jsonify({'success': False, 'error': '不支持的文件格式，请上传 .docx 文件'}), 400
+
+    # Get parameters
+    model = request.form.get('model', 'deepseek-math')
+    translate = request.form.get('translate', 'false').lower() == 'true'
+
+    # Save uploaded file
+    timestamp = int(time.time() * 1000)
+    task_id = build_task_id('docx', file.filename, timestamp)
+    filename = secure_filename(file.filename)
+    docx_path = UPLOAD_FOLDER / f"{task_id}_{filename}"
+    file.save(str(docx_path))
+
+    try:
+        # Create converter
+        converter = Docx2LaTeXConverter(
+            model_name=model,
+            translate=translate
+        )
+
+        # Output path
+        output_filename = build_output_filename(filename, translate=translate)
+        output_path = OUTPUT_FOLDER / output_filename
+
+        # Convert
+        result = converter.convert(
+            str(docx_path),
+            str(output_path),
+            add_document_wrapper=True
+        )
+
+        # Cleanup uploaded file
+        docx_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'success': True,
+            'latex': Path(result['output_path']).read_text(encoding='utf-8'),
+            'download_url': f'/api/download/{output_filename}',
+            'messages': result.get('messages', [])
+        })
+
+    except Exception as e:
+        # Cleanup on error
+        docx_path.unlink(missing_ok=True)
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': f'转换失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
 
 
 @app.route('/api/convert-async', methods=['POST'])
@@ -2145,46 +2214,6 @@ def get_knowledge_graph():
             'success': True,
             'graph': graph_data,
             'core_theorems': get_core_theorems(latex_content, top_n=5)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/paper/mind-map', methods=['POST'])
-def get_paper_mind_map():
-    """
-    生成论文思维导图
-    返回 Mermaid 格式的思维导图代码
-    """
-    try:
-        data = request.get_json(silent=True) or {}
-        latex_content = data.get('latex', '')
-        layout = data.get('layout', 'hierarchical')
-        include_proofs = data.get('include_proofs', False)
-
-        if not latex_content:
-            return jsonify({'error': '请提供 LaTeX 内容'}), 400
-
-        # 转换为 MindMapLayout 枚举
-        layout_map = {
-            'hierarchical': MindMapLayout.HIERARCHICAL,
-            'dependency': MindMapLayout.DEPENDENCY,
-            'timeline': MindMapLayout.TIMELINE,
-            'classification': MindMapLayout.CLASSIFICATION,
-        }
-        layout_enum = layout_map.get(layout, MindMapLayout.HIERARCHICAL)
-
-        result = generate_mind_map_from_latex(
-            latex_content,
-            layout=layout,
-            include_proofs=include_proofs
-        )
-
-        return jsonify({
-            'success': True,
-            'mermaid': result['mermaid'],
-            'summary': result['summary'],
-            'layouts_available': ['hierarchical', 'dependency', 'timeline', 'classification']
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
