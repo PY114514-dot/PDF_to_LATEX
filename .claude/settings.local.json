@@ -30,7 +30,21 @@
       "Bash(python -c \"import sys; sys.path.insert\\(0, 'backend'\\); from logger import get_module_logger; l = get_module_logger\\('test'\\); print\\('Logger OK:', l\\)\")",
       "Bash(python -c \"import sys; sys.path.insert\\(0, 'backend'\\); from pdf2latex_enhanced import PDF2LaTeXEnhanced; print\\('pdf2latex_enhanced OK'\\)\")",
       "Bash(python -c \"x = '''test\\\\ntest'''; print\\(x\\)\")",
-      "Bash(python -W error -c \"x = '\\\\n'; print\\(repr\\(x\\)\\)\")"
+      "Bash(python -W error -c \"x = '\\\\n'; print\\(repr\\(x\\)\\)\")",
+      "Bash(if not exist \"D:\\\\PDF2LATEX\\\\docs\\\\superpowers\\\\specs\" mkdir \"D:\\\\PDF2LATEX\\\\docs\\\\superpowers\\\\specs\")",
+      "Bash(git commit:*)",
+      "Bash(python -m pytest tests/test_docx2latex.py -v)",
+      "Bash(python:*)",
+      "Bash(pytest backend/tests/ -v -k \"not test_docx\" --ignore=backend/tests/test_docx_endpoint.py)",
+      "Bash(cd /d D:PDF2LATEX)",
+      "Bash(git -C \"D:\\\\PDF2LATEX\" add backend/image2latex_enhanced.py)",
+      "Bash(git -C \"D:\\\\PDF2LATEX\" commit -m \"feat: add SVG/EMF vector image support to image2latex\")",
+      "Bash(git -C D:/PDF2LATEX add backend/app_enhanced.py)",
+      "Bash(git -C D:/PDF2LATEX commit -m \"$\\(cat <<''EOF''\nfeat: enhance /api/convert-images with batch merge support\nEOF\n\\)\")",
+      "Bash(git -C D:/PDF2LATEX add frontend/templates/index_enhanced.html frontend/static/script_enhanced.js frontend/static/style_enhanced.css)",
+      "Bash(git -C D:/PDF2LATEX commit -m \"feat: add Word upload tab to frontend UI\")",
+      "Bash(git -C D:/PDF2LATEX status)",
+      "Bash(pytest tests/ -v --tb=short)"
     ]
   }
 }

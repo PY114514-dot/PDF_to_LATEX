@@ -3,6 +3,48 @@
     "filename": "The Mathematical Analysis of the Incompressible Euler and Navier-stokes Equations An Introduction (Jacob Bedrossian, Vlad Vicol) (Z-Library).pdf",
     "model": "deepseek-chat",
     "translated": true,
+    "pages": "21,22,23,24,25,26,27,28,29,30",
+    "output_file": "D:\\PDF2LATEX\\outputs\\The Mathematical Analysis of the Incompressible Euler and Navier-stokes Equations An Introduction (Jacob Bedrossian, Vlad Vicol) (Z-Library)_cn_6.tex",
+    "stats": {
+      "total_pages": 235,
+      "processed_pages": 10,
+      "total_tokens": 31872,
+      "processing_time": 33.68
+    },
+    "timestamp": "2026-04-30T12:15:45.029280"
+  },
+  {
+    "filename": "1-s2.0-S0925231214000952-main.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "all",
+    "output_file": "D:\\PDF2LATEX\\outputs\\1-s2.0-S0925231214000952-main_cn_5.tex",
+    "stats": {
+      "total_pages": 8,
+      "processed_pages": 8,
+      "total_tokens": 60445,
+      "processing_time": 78.0
+    },
+    "timestamp": "2026-04-30T12:05:01.271575"
+  },
+  {
+    "filename": "1-s2.0-S0925231214000952-main.pdf",
+    "model": "deepseek-chat",
+    "translated": true,
+    "pages": "all",
+    "output_file": "D:\\PDF2LATEX\\outputs\\1-s2.0-S0925231214000952-main_cn_4.tex",
+    "stats": {
+      "total_pages": 8,
+      "processed_pages": 8,
+      "total_tokens": 59956,
+      "processing_time": 79.59
+    },
+    "timestamp": "2026-04-30T11:57:29.271200"
+  },
+  {
+    "filename": "The Mathematical Analysis of the Incompressible Euler and Navier-stokes Equations An Introduction (Jacob Bedrossian, Vlad Vicol) (Z-Library).pdf",
+    "model": "deepseek-chat",
+    "translated": true,
     "pages": "16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73",
     "output_file": "D:\\PDF2LATEX\\outputs\\The Mathematical Analysis of the Incompressible Euler and Navier-stokes Equations An Introduction (Jacob Bedrossian, Vlad Vicol) (Z-Library)_cn_5.tex",
     "stats": {
