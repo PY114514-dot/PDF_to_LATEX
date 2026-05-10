@@ -33,7 +33,7 @@ class Settings:
     # ==================== 应用设置 ====================
     
     # 默认模型（应为前后端统一的模型ID）
-    DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek-chat")
+    DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek_v4_flash")
     
     # 超时设置
     DEFAULT_TIMEOUT: float = float(os.getenv("DEFAULT_TIMEOUT", "600.0"))
@@ -43,7 +43,18 @@ class Settings:
     
     # 批量处理文件数量限制
     MAX_BATCH_FILES: int = int(os.getenv("MAX_BATCH_FILES", "10"))
-    
+
+    # ==================== 缓存设置 ====================
+
+    # 是否启用转换结果缓存
+    ENABLE_CACHE: bool = os.getenv("ENABLE_CACHE", "true").lower() == "true"
+
+    # 缓存目录
+    CACHE_DIR: str = os.getenv("CACHE_DIR", "cache/convert")
+
+    # 缓存过期时间（秒），默认 7 天
+    CACHE_EXPIRY_SECONDS: int = int(os.getenv("CACHE_EXPIRY_SECONDS", "604800"))
+
     # ==================== OCR 和图片识别设置 ====================
     
     # OCR 引擎选择: 'mixed' | 'deepseek' | 'tesseract'
@@ -80,75 +91,14 @@ class Settings:
     def get_available_models(cls) -> list:
         """获取已配置的可用模型列表"""
         available = []
-        
+
         if cls.DEEPSEEK_API_KEY:
-            available.extend([
-                {
-                    'id': 'deepseek-chat',
-                    'name': 'DeepSeek Chat',
-                    'description': 'DeepSeek 通用对话模型'
-                },
-                {
-                    'id': 'deepseek-reasoner',
-                    'name': 'DeepSeek Reasoner',
-                    'description': 'DeepSeek 推理模型'
-                }
-            ])
-        
-        if cls.DOUBAO_API_KEY:
             available.append({
-                'id': 'doubao',
-                'name': 'Doubao Lite',
-                'description': '字节豆包轻量模型 (Seed-2.0-Lite)'
+                'id': 'deepseek_v4_flash',
+                'name': 'DeepSeek V4 Flash',
+                'description': 'DeepSeek V4 Flash 最新模型'
             })
-        
-        if cls.OPENAI_API_KEY:
-            available.extend([
-                {
-                    'id': 'gpt4o',
-                    'name': 'GPT-4o',
-                    'description': 'OpenAI 高性能模型'
-                },
-                {
-                    'id': 'gpt4o-mini',
-                    'name': 'GPT-4o Mini',
-                    'description': 'OpenAI 轻量级模型'
-                },
-                {
-                    'id': 'gpt52',
-                    'name': 'GPT-5.2',
-                    'description': 'OpenAI 推理模型'
-                }
-            ])
-        
-        if cls.ZHIPU_API_KEY:
-            available.extend([
-                {
-                    'id': 'glm46',
-                    'name': 'GLM-4.6',
-                    'description': '智谱AI模型'
-                },
-                {
-                    'id': 'glm47',
-                    'name': 'GLM-4.7',
-                    'description': '智谱AI Thinking模型'
-                }
-            ])
-        
-        if cls.GEMINI_API_KEY:
-            available.append({
-                'id': 'gemini3-pro',
-                'name': 'Gemini 3 Pro',
-                'description': 'Google AI模型'
-            })
-        
-        if cls.CANOPY_WAVE_API_KEY:
-            available.append({
-                'id': 'deepseek-math',
-                'name': 'DeepSeek Math',
-                'description': '数学专用模型'
-            })
-        
+
         return available
 
 # 创建全局配置实例

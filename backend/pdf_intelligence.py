@@ -167,7 +167,7 @@ class PDFIntelligence:
         """根据统计信息生成转换建议"""
         recommendations = {
             'suggested_pages': list(range(1, total_pages + 1)),
-            'model_hint': 'deepseek-chat',
+            'model_hint': 'deepseek_v4_flash',
             'translate': False,
             'quality_threshold': 0.3,
             'skip_pages': [],
@@ -185,11 +185,11 @@ class PDFIntelligence:
 
         # 低质量页面多，建议使用更高质量的模型
         if stats['low_quality_pages'] > total_pages * 0.3:
-            recommendations['model_hint'] = 'deepseek-reasoner'
+            recommendations['model_hint'] = 'deepseek_v4'
 
         # 表格多的文档，建议使用专门的表格处理
         if stats['table_pages'] > total_pages * 0.4:
-            recommendations['model_hint'] = 'deepseek-chat'
+            recommendations['model_hint'] = 'deepseek_v4'
 
         # 大量英文内容，建议翻译
         if stats['english_pages'] > total_pages * 0.8:
@@ -273,7 +273,7 @@ def quick_analysis(pdf_path: str) -> Dict[str, Any]:
     Returns:
         {
             'suggested_pages': [1, 2, 3, ...],  # 1-indexed
-            'model': 'deepseek-chat',
+            'model': 'deepseek_v4_flash',
             'translate': False,
             'total_pages': int,
             'content_pages': int

@@ -10,17 +10,16 @@ frontend/              # HTML/CSS/JS
 
 backend/              # Flask后端
   ├── app_enhanced.py      # 主应用，路由，WebSocket
-  ├── pdf2latex_enhanced.py # PDF处理核心
+  ├── pdf2latex_enhanced.py # PDF处理核心 (含批量翻译)
   ├── image2latex_enhanced.py # 图片OCR+转换
   ├── ocr_client.py        # OCR引擎封装
-  ├── clients.py           # LLM客户端统一接口
+  ├── clients.py           # LLM客户端 (仅deepseek_v4_flash)
   ├── config.py            # 配置管理
   ├── history_manager.py   # 历史记录
   ├── task_manager.py      # 任务状态管理
   ├── error_handler.py     # 错误处理
   ├── latex_syntax.py      # LaTeX语法检查
-  ├── knowledge_graph.py   # 论文知识图谱
-  └── bilingual_reader.py  # 双语对照
+  └── knowledge_graph.py   # 论文知识图谱
 ```
 
 ### 数据流
@@ -113,4 +112,28 @@ backend/              # Flask后端
 
 ---
 
-*最后更新: 2026-04-29*
+## 翻译质量改进发现
+
+### 问题诊断
+用户反馈直接给DeepSeek的LaTeX比项目输出的质量高
+
+**原因**:
+- 项目之前逐页翻译，每页独立处理，丢失上下文
+- 结构化信息（如algorithm环境）被拆散
+- 页眉/页脚重复出现
+
+**解决方案**:
+- 批量翻译：每4页为一块，用[PAGE X]标记
+- 上下文连贯：同一块的页面一起翻译，AI能看到完整结构
+- 去重机制：_mark_duplicate_headers检测并标记重复内容
+
+### 批处理实现
+```python
+translate_batch_async(pages_text, pages_info, total_pages)
+  → 每4页为一块
+  → combined_text = "[PAGE 1]\n<text1>\n---\n[PAGE 2]\n<text2>..."
+  → 批量翻译后按PAGE标记分割
+```
+
+---
+*最后更新: 2026-05-06*

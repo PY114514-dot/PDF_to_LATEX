@@ -29,7 +29,7 @@ class Image2LaTeXEnhanced:
     
     def __init__(
         self,
-        model_name: str = "deepseek-chat",
+        model_name: str = "deepseek_v4_flash",
         translate: bool = False,
         translation_prompt: str = "",
         progress_callback: Optional[Callable] = None
@@ -68,15 +68,10 @@ class Image2LaTeXEnhanced:
     def _init_llm_client(self) -> LLMClient:
         """初始化LLM客户端"""
         model_configs = {
-            'deepseek-chat': {
+            'deepseek_v4_flash': {
                 'api_key': settings.DEEPSEEK_API_KEY,
                 'base_url': 'https://api.deepseek.com/v1/chat/completions',
-                'model': 'deepseek-chat'
-            },
-            'deepseek-reasoner': {
-                'api_key': settings.DEEPSEEK_API_KEY,
-                'base_url': 'https://api.deepseek.com/v1/chat/completions',
-                'model': 'deepseek-reasoner'
+                'model': 'deepseek-v4-flash'
             },
             'gpt4o': {
                 'api_key': settings.OPENAI_API_KEY,
@@ -112,11 +107,6 @@ class Image2LaTeXEnhanced:
                 'api_key': settings.DOUBAO_API_KEY,
                 'base_url': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
                 'model': 'doubao-seed-2-0-lite-260215'
-            },
-            'deepseek-math': {
-                'api_key': settings.CANOPY_WAVE_API_KEY,
-                'base_url': 'https://api.canopywave.io/v1/chat/completions',
-                'model': 'deepseek-ai/DeepSeek-Math-V2'
             }
         }
         

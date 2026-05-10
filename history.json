@@ -1,5 +1,47 @@
 [
   {
+    "filename": "FSTTCS04.pdf",
+    "model": "deepseek_v4_flash",
+    "translated": true,
+    "pages": "all",
+    "output_file": "D:\\PDF2LATEX\\outputs\\FSTTCS04_cn.tex",
+    "stats": {
+      "total_pages": 12,
+      "processed_pages": 12,
+      "total_tokens": 62651,
+      "processing_time": 96.12
+    },
+    "timestamp": "2026-05-05T19:11:53.986743"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek_v4",
+    "translated": true,
+    "pages": "all",
+    "output_file": "D:\\PDF2LATEX\\outputs\\dlpu22_cn_2.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 26,
+      "total_tokens": 126932,
+      "processing_time": 107.95
+    },
+    "timestamp": "2026-05-03T13:15:43.136814"
+  },
+  {
+    "filename": "dlpu22.pdf",
+    "model": "deepseek_v4",
+    "translated": true,
+    "pages": "all",
+    "output_file": "D:\\PDF2LATEX\\outputs\\dlpu22_cn.tex",
+    "stats": {
+      "total_pages": 26,
+      "processed_pages": 26,
+      "total_tokens": 128424,
+      "processing_time": 113.15
+    },
+    "timestamp": "2026-05-03T13:12:28.036231"
+  },
+  {
     "filename": "The Mathematical Analysis of the Incompressible Euler and Navier-stokes Equations An Introduction (Jacob Bedrossian, Vlad Vicol) (Z-Library).pdf",
     "model": "deepseek-chat",
     "translated": true,

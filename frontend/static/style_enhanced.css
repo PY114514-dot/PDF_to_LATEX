@@ -98,6 +98,21 @@ h1, h2, h3, h4, h5, h6 {
     padding: 20px;
 }
 
+/* Sidebar sections (History, Task Center) - constrain width for aesthetics */
+.history-section {
+    max-width: 752px;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+}
+
+#taskCenterSection {
+    max-width: 752px;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+}
+
 /* Header */
 .header {
     text-align: center;
@@ -997,11 +1012,6 @@ textarea.text-input {
     font-size: 1em;
 }
 
-.paper-formula-block .katex-display {
-    margin: 0;
-    overflow-x: auto;
-}
-
 /* Error Section */
 .error-section {
     padding: 40px 24px;
@@ -1411,11 +1421,6 @@ textarea.text-input {
     max-width: 320px;
 }
 
-.toast-paper {
-    max-width: 280px;
-    font-size: 13px;
-}
-
 @keyframes slideIn {
     from {
         opacity: 0;
@@ -1558,42 +1563,27 @@ textarea.text-input {
     color: var(--text-tertiary);
 }
 
-/* DOCX Upload Styles */
+/* DOCX Upload Styles - Match PDF drop-zone sizing */
 .upload-tab {
-    padding: 20px;
+    padding: 0;
 }
 
-.upload-tab h3 {
-    font-size: 16px;
-    font-weight: 600;
-    margin-bottom: 8px;
-}
-
-.upload-hint {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 16px;
-}
-
-.file-drop-zone {
-    border: 2px dashed #ddd;
-    border-radius: 8px;
-    padding: 40px 20px;
+.upload-tab .file-drop-zone {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-lg);
+    margin: 24px;
+    padding: 60px 40px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.3s ease;
-    background: #fafafa;
+    transition: all var(--transition-normal);
+    background: var(--bg-secondary);
 }
 
-.file-drop-zone:hover,
-.file-drop-zone.drag-over {
-    border-color: #4a90d9;
-    background: #f0f7ff;
-}
-
-.file-drop-zone .drop-zone-content svg {
-    color: #4a90d9;
-    margin-bottom: 10px;
+.upload-tab .file-drop-zone:hover,
+.upload-tab .file-drop-zone.drag-over {
+    border-color: var(--accent-light);
+    background: var(--hover-bg);
+    transform: scale(1.005);
 }
 
 .file-drop-zone p {

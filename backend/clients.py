@@ -474,18 +474,13 @@ class LLMClient:
             content = message.get("content", "") or ""
         return reasoning, content
 
-deepseek_math = LLMClient(
-    api_key = settings.CANOPY_WAVE_API_KEY,
-    base_url = "https://api.canopywave.io/v1/chat/completions",
-    model = "deepseek-ai/DeepSeek-Math-V2",
-    timeout = 600.0
-)
-
-doubao = LLMClient(
-    api_key=settings.DOUBAO_API_KEY,
-    base_url="https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-    model="doubao-seed-2-0-lite-260215",
-    timeout = 1000.0
+# DeepSeek V4 Flash（最新模型）
+deepseek_v4_flash = LLMClient(
+    api_key=settings.DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com/v1/chat/completions",
+    model="deepseek-v4-flash",
+    timeout=600.0,
+    default_extra_params={}
 )
 
 
@@ -773,20 +768,11 @@ gemini3_pro = LLMClient(
     timeout=600.0  # 10分钟超时，适合长时间运行任务
 )
 
-# DeepSeek Chat（通用对话模型）
-deepseek_chat = LLMClient(
+# DeepSeek V4 Flash（最新模型）
+deepseek_v4_flash = LLMClient(
     api_key=settings.DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com/v1/chat/completions",
-    model="deepseek-chat",
-    timeout=600.0,
-    default_extra_params={}
-)
-
-# DeepSeek Reasoner（推理模型）
-deepseek_reasoner = LLMClient(
-    api_key=settings.DEEPSEEK_API_KEY,
-    base_url="https://api.deepseek.com/v1/chat/completions",
-    model="deepseek-reasoner",
+    model="deepseek-v4-flash",
     timeout=600.0,
     default_extra_params={}
 )

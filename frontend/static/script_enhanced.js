@@ -12,7 +12,6 @@ let activeAsyncTask = null;
 let isBatchMode = false;  // 是否批量模式
 let isImageMode = false;  // 是否图片模式
 let lastAnalyzedPdfFile = null;
-let paperAgentTaskId = null;
 let currentPhaseRank = 0;
 let translatePhaseProgress = 0;
 let convertPhaseProgress = 0;
@@ -95,8 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupBatchFileInput();
     setupPasteImage();
     setupConvertButton();
-    setupPaperAgentButton();
-    setupResultEditor();
+        setupResultEditor();
     setupLatexSidebar();
     setupHistoryPagination();
     initWebSocket();
@@ -434,12 +432,6 @@ function initWebSocket() {
     });
     
     socket.on('progress', (data) => {
-        // 论文智能阅读进度单独处理，避免走常规转换展示逻辑。
-        if (paperAgentTaskId && data.task_id === paperAgentTaskId) {
-            updatePaperAgentRealtime(data);
-            return;
-        }
-
         updateProgress(data);
         
         // 如果转换完成，停止进度条并显示结果
@@ -1254,9 +1246,7 @@ function showResult(result) {
     latexFilename = result.filename || result.output_filename || 'converted.tex';
     safeStorage.setItem('latexContent', latexContent || '');
     safeStorage.setItem('latexFilename', latexFilename || '');
-    resetPaperAgentPanel();
-    updatePaperAgentButtonState();
-
+        
     if (latexEditor) {
         latexEditor.value = result.content || '';
     }
@@ -1305,283 +1295,14 @@ function showResult(result) {
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function setupPaperAgentButton() {
-    const btn = document.getElementById('paperAgentBtn');
-    if (!btn) return;
-    btn.addEventListener('click', runPaperAgent);
-    updatePaperAgentButtonState();
-}
 
-function updatePaperAgentButtonState() {
-    const btn = document.getElementById('paperAgentBtn');
-    if (!btn) return;
-    const canRun = !isImageMode && !isBatchMode;
-    btn.disabled = !canRun;
-    btn.title = canRun ? '基于当前PDF调用学术智能体分析' : '仅支持单个PDF转换结果';
-}
 
-function resetPaperAgentPanel() {
-    const section = document.getElementById('paperAgentSection');
-    const loading = document.getElementById('paperAgentLoading');
-    const content = document.getElementById('paperAgentContent');
-    const meta = document.getElementById('paperAgentMeta');
-    if (section) section.style.display = 'none';
-    if (loading) loading.style.display = 'none';
-    if (content) content.style.display = 'none';
-    if (meta) meta.textContent = '等待分析';
-}
 
-function escapeHtml(value) {
-    return String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
 
-function renderPaperAgentResult(payload) {
-    // 调试日志
-    console.log('[PaperAgent] 接收到AI分析结果 payload:', {
-        algorithms: payload.result?.algorithms?.length || 0,
-        outline: payload.result?.outline?.length || 0,
-        summary: (payload.result?.summary || '').substring(0, 100)
-    });
-    if (payload.result?.algorithms?.length) {
-        payload.result.algorithms.slice(0, 2).forEach((algo, idx) => {
-            console.log(`[PaperAgent] 算法 ${idx + 1}:`, {
-                name: algo.name,
-                formulas: algo.formulas?.length || 0,
-                hasDerivation: !!algo.derivation,
-                derivation: (algo.derivation || '').substring(0, 100)
-            });
-        });
-    }
-    
-    const section = document.getElementById('paperAgentSection');
-    const loading = document.getElementById('paperAgentLoading');
-    const content = document.getElementById('paperAgentContent');
-    const meta = document.getElementById('paperAgentMeta');
-    const summary = document.getElementById('paperSummary');
-    const outline = document.getElementById('paperOutline');
-    const mindmap = document.getElementById('paperMindmap');
-    const algorithms = document.getElementById('paperAlgorithms');
-    const limitations = document.getElementById('paperLimitations');
-    const evidence = document.getElementById('paperEvidence');
 
-    if (!section || !loading || !content || !meta || !summary || !outline || !mindmap || !algorithms || !limitations || !evidence) {
-        return;
-    }
 
-    loading.style.display = 'none';
-    content.style.display = 'block';
-    section.style.display = 'block';
 
-    // 隐藏进度条
-    const progressSection = document.getElementById('paperAgentProgress');
-    if (progressSection) {
-        progressSection.style.display = 'none';
-    }
 
-    const stats = payload.stats || {};
-    meta.textContent = `模型: ${payload.model} | 页码: ${payload.pages} | Tokens: ${(stats.total_tokens || 0).toLocaleString()}`;
-    summary.textContent = payload.result?.summary || '未返回摘要';
-
-    // 大纲：使用 textContent 保持原始文本，便于 KaTeX 渲染公式
-    const outlineItems = Array.isArray(payload.result?.outline) ? payload.result.outline : [];
-    outline.innerHTML = '';
-    if (outlineItems.length) {
-        outlineItems.forEach((item) => {
-            const li = document.createElement('li');
-            li.textContent = item;
-            outline.appendChild(li);
-        });
-    } else {
-        const li = document.createElement('li');
-        li.textContent = '未返回大纲';
-        outline.appendChild(li);
-    }
-
-    // 思维导图：显示来自AI的markdown格式思维导图
-    // 注意：Mermaid渲染的思维导图通过"生成"按钮单独生成
-    if (payload.result?.mindmap_markdown) {
-        mindmap.textContent = payload.result.mindmap_markdown;
-    } else {
-        mindmap.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px;">点击上方"生成"按钮，基于知识图谱生成交互式思维导图</div>';
-    }
-
-    // 算法块：核心修复 - 不对可能包含 LaTeX 的字段进行 HTML 转义
-    const algoItems = Array.isArray(payload.result?.algorithms) ? payload.result.algorithms : [];
-    algorithms.innerHTML = '';
-    
-    if (algoItems.length) {
-        algoItems.forEach((algo, idx) => {
-            const card = document.createElement('div');
-            card.className = 'paper-algo-card';
-            
-            // 标题
-            const title = document.createElement('h6');
-            title.textContent = `算法 ${idx + 1}: ${algo.name || '未命名算法'}`;
-            card.appendChild(title);
-            
-            // 问题
-            const problemP = document.createElement('p');
-            problemP.innerHTML = '<strong>问题：</strong>';
-            const problemSpan = document.createElement('span');
-            problemSpan.textContent = algo.problem || '原文未提供';
-            problemP.appendChild(problemSpan);
-            card.appendChild(problemP);
-            
-            // 核心思想
-            const coreP = document.createElement('p');
-            coreP.innerHTML = '<strong>核心思想：</strong>';
-            const coreSpan = document.createElement('span');
-            coreSpan.textContent = algo.core_idea || '原文未提供';
-            coreP.appendChild(coreSpan);
-            card.appendChild(coreP);
-            
-            // 步骤
-            if (Array.isArray(algo.steps) && algo.steps.length) {
-                const ol = document.createElement('ol');
-                algo.steps.forEach((step) => {
-                    const li = document.createElement('li');
-                    li.textContent = step;
-                    ol.appendChild(li);
-                });
-                card.appendChild(ol);
-            } else {
-                const stepsP = document.createElement('p');
-                stepsP.textContent = '步骤：原文未提供';
-                card.appendChild(stepsP);
-            }
-            
-            // 推导说明
-            const derivP = document.createElement('p');
-            derivP.innerHTML = '<strong>推导说明：</strong>';
-            const derivSpan = document.createElement('span');
-            derivSpan.textContent = algo.derivation || '原文未提供';
-            derivP.appendChild(derivSpan);
-            card.appendChild(derivP);
-            
-            // 学术建议
-            const adviceP = document.createElement('p');
-            adviceP.innerHTML = '<strong>学术建议：</strong>';
-            const adviceSpan = document.createElement('span');
-            adviceSpan.textContent = algo.paper_advice || '原文未提供';
-            adviceP.appendChild(adviceSpan);
-            card.appendChild(adviceP);
-            
-            // 公式列表（优先直接 KaTeX 渲染，避免缺少分隔符时无法显示）
-            const ul = document.createElement('ul');
-            if (Array.isArray(algo.formulas) && algo.formulas.length) {
-                algo.formulas.forEach((f, fi) => {
-                    const li = document.createElement('li');
-                    li.style.marginBottom = '12px';
-
-                    const formula = document.createElement('div');
-                    formula.className = 'paper-formula-block';
-                    formula.style.marginBottom = '6px';
-
-                    const rawLatex = f.latex || '';
-                    const normalized = normalizeMathText(rawLatex);
-
-                    console.log(`[PaperAgent] 公式 ${fi + 1} 原始值:`, rawLatex.substring(0, 200));
-                    console.log(`[PaperAgent] 公式 ${fi + 1} 规范化后:`, normalized.substring(0, 200));
-
-                    // 优先尝试 auto-render（支持多种分隔符），失败时降级到纯文本
-                    if (typeof renderMathInElement === 'function' && normalized) {
-                        try {
-                            renderMathInElement(formula, {
-                                delimiters: [
-                                    { left: '$$', right: '$$', display: true },
-                                    { left: '\\[', right: '\\]', display: true },
-                                    { left: '$', right: '$', display: false },
-                                    { left: '\\(', right: '\\)', display: false }
-                                ],
-                                throwOnError: false,
-                                trust: true
-                            });
-                            console.log(`[PaperAgent] 公式 ${fi + 1} auto-render 成功`);
-                        } catch (e) {
-                            console.warn(`[PaperAgent] 公式 ${fi + 1} auto-render 失败:`, e.message);
-                            // auto-render 失败，尝试纯 KaTeX 渲染
-                            if (typeof katex !== 'undefined') {
-                                try {
-                                    katex.render(normalized, formula, {
-                                        displayMode: true,
-                                        throwOnError: false,
-                                        trust: true
-                                    });
-                                    console.log(`[PaperAgent] 公式 ${fi + 1} katex.render 成功`);
-                                } catch (e2) {
-                                    console.warn(`[PaperAgent] 公式 ${fi + 1} katex.render 也失败:`, e2.message);
-                                    formula.textContent = rawLatex || '公式';
-                                }
-                            } else {
-                                console.warn(`[PaperAgent] katex 未加载`);
-                                formula.textContent = rawLatex || '公式';
-                            }
-                        }
-                    } else {
-                        console.warn(`[PaperAgent] renderMathInElement 不可用或公式为空`);
-                        formula.textContent = rawLatex || '公式';
-                    }
-
-                    const meaning = document.createElement('span');
-                    meaning.textContent = (f.meaning || '') ? `：${f.meaning}` : '';
-                    meaning.style.color = 'var(--text-secondary)';
-                    meaning.style.fontSize = '13px';
-
-                    const evidence = document.createElement('br');
-                    const evidenceSpan = document.createElement('span');
-                    evidenceSpan.textContent = (f.evidence || '') ? `证据：${normalizeMathText(f.evidence)}` : '';
-                    evidenceSpan.style.color = 'var(--text-tertiary)';
-                    evidenceSpan.style.fontSize = '12px';
-
-                    li.appendChild(formula);
-                    if (meaning.textContent) li.appendChild(meaning);
-                    li.appendChild(evidence);
-                    li.appendChild(evidenceSpan);
-                    ul.appendChild(li);
-                });
-            } else {
-                const li = document.createElement('li');
-                li.textContent = '原文未提供可验证公式';
-                ul.appendChild(li);
-            }
-            card.appendChild(ul);
-            algorithms.appendChild(card);
-        });
-    } else {
-        const p = document.createElement('p');
-        p.textContent = '未识别到算法内容';
-        algorithms.appendChild(p);
-    }
-
-    // 局限性：使用 textContent 保留原始文本
-    const limitationsItems = Array.isArray(payload.result?.limitations) ? payload.result.limitations : [];
-    limitations.innerHTML = '';
-    if (limitationsItems.length) {
-        limitationsItems.forEach((item) => {
-            const li = document.createElement('li');
-            li.textContent = item;
-            limitations.appendChild(li);
-        });
-    } else {
-        const li = document.createElement('li');
-        li.textContent = '未返回局限性';
-        limitations.appendChild(li);
-    }
-
-    evidence.textContent = payload.result?.evidence_note || '未返回证据说明';
-    
-    // 最后渲染所有容器中的数学公式
-    renderMathInContainer(outline);
-    renderMathInContainer(mindmap);
-    renderMathInContainer(algorithms);
-    renderMathInContainer(limitations);
-    renderMathInContainer(evidence);
-}
 
 function renderMathInContainer(container) {
     if (!container || typeof renderMathInElement !== 'function') {
@@ -1604,194 +1325,10 @@ function renderMathInContainer(container) {
     }
 }
 
-async function runPaperAgent() {
-    if (isImageMode || isBatchMode) {
-        showToast('仅支持单个PDF文件的学术阅读分析', 'error');
-        return;
-    }
 
-    const pdfFile = selectedFile || lastAnalyzedPdfFile;
-    if (!pdfFile || !pdfFile.name.toLowerCase().endsWith('.pdf')) {
-        showToast('未找到可用于分析的PDF，请先完成单个PDF转换', 'error');
-        return;
-    }
-
-    const latexEditor = document.getElementById('latexEditor');
-    const latexContent = latexEditor?.value || '';
-    if (!latexContent || latexContent.length < 50) {
-        showToast('请先完成PDF转换再进行学术分析', 'error');
-        return;
-    }
-
-    // 显示加载提示
-    showToast('正在分析论文，请稍候...', 'paper');
-
-    try {
-        paperAgentTaskId = `paper_${Date.now()}`;
-        if (socket) {
-            socket.emit('join_task', { task_id: paperAgentTaskId });
-        }
-
-        const formData = new FormData();
-        const options = collectCommonOptions();
-        const pages = document.getElementById('pagesInput')?.value?.trim() || '';
-        formData.append('file', pdfFile);
-        formData.append('model', options.model || 'deepseek-chat');
-        formData.append('analysis_focus', 'summary_outline_mindmap_algorithms');
-        formData.append('task_id', paperAgentTaskId);
-        if (pages) {
-            formData.append('pages', parsePageInput(pages));
-        }
-
-        const response = await fetch('/api/paper-agent', {
-            method: 'POST',
-            body: formData
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-            throw new Error(data.error || '学术分析失败');
-        }
-
-        // 保存LaTeX内容
-        window.__latexRenderPayload = {
-            latexContent: latexContent,
-            latexFilename: pdfFile.name.replace('.pdf', '.tex')
-        };
-
-        // 保存分析结果
-        window.__paperAgentResult = {
-            status: 'success',
-            result: data.result,
-            stats: data.stats,
-            model: data.model
-        };
-
-        // 打开新窗口显示分析结果
-        const newWindow = window.open('/paper-agent-view', '_blank', 'width=1400,height=900');
-        if (!newWindow) {
-            showToast('请允许弹出窗口', 'error');
-            return;
-        }
-
-        paperAgentTaskId = null;
-    } catch (error) {
-        showToast(`学术分析失败: ${error.message}`, 'error');
-        paperAgentTaskId = null;
-    }
-}
 
 // 从历史记录运行学术智能体 - 打开新窗口
-async function runPaperAgentFromHistory(index) {
-    try {
-        // 获取历史记录的 LaTeX 内容
-        console.log('[PaperAgent] 获取历史记录:', index);
-        const response = await fetch(`/api/history/${index}`);
-        const data = await response.json();
 
-        if (!data.success || !data.record) {
-            throw new Error(data.error || '历史记录不存在');
-        }
-
-        let latexContent = '';
-        if (data.record.output_file) {
-            const filename = data.record.output_file.split(/[\\/]/).pop();
-            console.log('[PaperAgent] 下载文件:', filename);
-            const fileResponse = await fetch(`/api/download/${encodeURIComponent(filename)}`);
-
-            if (!fileResponse.ok) {
-                throw new Error('文件不存在或已被删除');
-            }
-            latexContent = await fileResponse.text();
-            console.log('[PaperAgent] 文件大小:', latexContent.length, '字符');
-        } else if (data.record.latex_content) {
-            latexContent = data.record.latex_content;
-        }
-
-        if (!latexContent || latexContent.length < 50) {
-            throw new Error('LaTeX 内容为空或太短');
-        }
-
-        const sourceFilename = data.record.filename || '历史文献';
-
-        // 保存 LaTeX 内容到 localStorage（作为备用）
-        try {
-            localStorage.setItem('latexContent', latexContent);
-            localStorage.setItem('latexFilename', sourceFilename);
-        } catch(e) {}
-
-        // 保存到 opener 的全局变量（新窗口会读取）
-        window.__latexRenderPayload = {
-            latexContent: latexContent,
-            latexFilename: sourceFilename
-        };
-
-        paperAgentTaskId = `paper_history_${Date.now()}`;
-        if (socket) {
-            socket.emit('join_task', { task_id: paperAgentTaskId });
-        }
-
-        console.log('[PaperAgent] 发送分析请求...');
-        showToast('正在分析论文，请稍候...', 'paper');
-
-        const formData = new FormData();
-        formData.append('latex_content', latexContent);
-        formData.append('model', document.getElementById('modelSelect')?.value || 'deepseek-chat');
-        formData.append('analysis_focus', 'summary_outline_mindmap_algorithms');
-        formData.append('task_id', paperAgentTaskId);
-
-        const analyzeResponse = await fetch('/api/paper-agent', {
-            method: 'POST',
-            body: formData
-        });
-        console.log('[PaperAgent] 响应状态:', analyzeResponse.status);
-
-        let analyzeData;
-        try {
-            analyzeData = await analyzeResponse.json();
-            console.log('[PaperAgent] 响应数据:', analyzeData);
-        } catch (e) {
-            const text = await analyzeResponse.text();
-            console.error('[PaperAgent] JSON解析失败:', e, '响应文本:', text.substring(0, 500));
-            throw new Error('服务器返回了无效的响应格式');
-        }
-
-        if (!analyzeResponse.ok || !analyzeData.success) {
-            throw new Error(analyzeData.error || '学术分析失败');
-        }
-
-        // 保存分析结果
-        window.__paperAgentResult = {
-            status: 'success',
-            result: analyzeData.result,
-            stats: analyzeData.stats,
-            model: analyzeData.model
-        };
-
-        // 打开新窗口
-        const newWindow = window.open('/paper-agent-view', '_blank', 'width=1400,height=900');
-        if (!newWindow) {
-            showToast('请允许弹出窗口', 'error');
-            return;
-        }
-
-        // 尝试通过 postMessage 发送数据
-        setTimeout(() => {
-            if (newWindow && !newWindow.closed) {
-                newWindow.postMessage({
-                    type: 'paper-agent-result',
-                    ...window.__paperAgentResult
-                }, '*');
-            }
-        }, 500);
-
-        showToast('学术智能体分析完成', 'paper');
-        paperAgentTaskId = null;
-    } catch (error) {
-        console.error('[PaperAgent] 错误:', error);
-        showToast(`学术分析失败: ${error.message}`, 'error');
-        paperAgentTaskId = null;
-    }
-}
 
 // 显示错误
 function showError(message) {
@@ -1920,17 +1457,11 @@ function showToast(message, type = 'info') {
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
 
-    let bgColor, padding = '1rem 1.5rem', fontSize = '14px';
-    if (type === 'paper') {
-        bgColor = '#374151';
-        padding = '0.5rem 1rem';
-        fontSize = '13px';
-    } else if (type === 'success') {
+    let bgColor = '#3b82f6', padding = '1rem 1.5rem', fontSize = '14px';
+    if (type === 'success') {
         bgColor = '#10b981';
     } else if (type === 'error') {
         bgColor = '#ef4444';
-    } else {
-        bgColor = '#3b82f6';
     }
 
     toast.style.cssText = `
@@ -2065,9 +1596,7 @@ function showBatchResult(result) {
     loadHistory();
 
     resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    resetPaperAgentPanel();
-    updatePaperAgentButtonState();
-}
+        }
 
 // 下载批量结果
 function downloadBatchResults(batchId) {
@@ -2267,9 +1796,7 @@ function resetApp() {
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
     tokenStats.style.display = 'none';
-    resetPaperAgentPanel();
-    updatePaperAgentButtonState();
-
+        
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -2423,9 +1950,7 @@ async function loadHistory() {
                             <button class="history-action-btn secondary" onclick="viewHistory(${absoluteIndex})">
                                 查看
                             </button>
-                            <button class="history-action-btn secondary" onclick="runPaperAgentFromHistory(${absoluteIndex})">
-                                学术阅读
-                            </button>
+                            
                             <button class="history-action-btn danger" onclick="deleteHistory(${absoluteIndex})">
                                 删除
                             </button>
@@ -2904,31 +2429,55 @@ function removeImage(index) {
     }
 }
 
+// ===== Tab Switching =====
+
+function showPdfTab() {
+    document.getElementById('docx-tab').style.display = 'none';
+    document.getElementById('fileInput').click();
+}
+
+function showDocxTab() {
+    document.getElementById('docx-tab').style.display = 'block';
+    // Hide PDF-related sections
+    const optionsSection = document.getElementById('optionsSection');
+    const progressSection = document.getElementById('progressSection');
+    const resultSection = document.getElementById('resultSection');
+    const imagePreviewSection = document.getElementById('imagePreviewSection');
+    if (optionsSection) optionsSection.style.display = 'none';
+    if (progressSection) progressSection.style.display = 'none';
+    if (resultSection) resultSection.style.display = 'none';
+    if (imagePreviewSection) imagePreviewSection.style.display = 'none';
+}
+
 // ===== DOCX Upload Handling =====
 
-let selectedDocxFile = null;
+let selectedDocxFiles = [];
 
 function initDocxUpload() {
     const dropZone = document.getElementById('docx-drop-zone');
     const fileInput = document.getElementById('docx-input');
+    const batchInput = document.getElementById('docx-batch-input');
     const convertBtn = document.getElementById('convert-docx-btn');
 
     if (!dropZone || !fileInput) return;
 
-    // Click to browse
-    dropZone.addEventListener('click', (e) => {
-        if (e.target.classList.contains('browse-link') || e.target === dropZone) {
-            fileInput.click();
+    // File selected (single)
+    fileInput.addEventListener('change', (e) => {
+        const files = Array.from(e.target.files).filter(f => f.name.endsWith('.docx'));
+        if (files.length > 0) {
+            handleDocxFilesSelect(files);
         }
     });
 
-    // File selected
-    fileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            handleDocxFileSelect(file);
-        }
-    });
+    // Batch file selected
+    if (batchInput) {
+        batchInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files).filter(f => f.name.endsWith('.docx'));
+            if (files.length > 0) {
+                handleDocxFilesSelect(files);
+            }
+        });
+    }
 
     // Drag and drop
     dropZone.addEventListener('dragover', (e) => {
@@ -2943,9 +2492,9 @@ function initDocxUpload() {
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('drag-over');
-        const file = e.dataTransfer.files[0];
-        if (file && file.name.endsWith('.docx')) {
-            handleDocxFileSelect(file);
+        const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.docx'));
+        if (files.length > 0) {
+            handleDocxFilesSelect(files);
         }
     });
 
@@ -2955,58 +2504,76 @@ function initDocxUpload() {
     }
 }
 
-function handleDocxFileSelect(file) {
-    if (!file.name.endsWith('.docx')) {
-        showError('请上传 .docx 格式的文件');
-        return;
-    }
-
-    selectedDocxFile = file;
+function handleDocxFilesSelect(files) {
+    selectedDocxFiles = files;
     const dropZone = document.getElementById('docx-drop-zone');
-    const fileInfo = document.getElementById('docx-file-info');
-    const fileName = fileInfo.querySelector('.file-name');
-    const convertBtn = document.getElementById('convert-docx-btn');
+    const optionsSection = document.getElementById('docxOptionsSection');
+    const dropText = dropZone?.querySelector('.drop-text');
+    const dropSubtitle = dropZone?.querySelector('.drop-text-subtitle');
 
-    if (dropZone) dropZone.style.display = 'none';
-    if (fileInfo) {
-        fileInfo.style.display = 'flex';
-        fileName.textContent = file.name;
+    if (dropText) {
+        dropText.textContent = files.length === 1
+            ? files[0].name
+            : `已选择 ${files.length} 个文件`;
     }
-    if (convertBtn) convertBtn.disabled = false;
+    if (dropSubtitle) {
+        dropSubtitle.textContent = '点击下方"开始转换"按钮进行转换';
+    }
+
+    if (optionsSection) {
+        optionsSection.style.display = 'block';
+    }
 }
 
 function removeDocxFile() {
-    selectedDocxFile = null;
+    selectedDocxFiles = [];
     const dropZone = document.getElementById('docx-drop-zone');
-    const fileInfo = document.getElementById('docx-file-info');
+    const optionsSection = document.getElementById('docxOptionsSection');
     const fileInput = document.getElementById('docx-input');
-    const convertBtn = document.getElementById('convert-docx-btn');
+    const batchInput = document.getElementById('docx-batch-input');
+    const progressSection = document.getElementById('docx-progress');
+    const dropText = dropZone?.querySelector('.drop-text');
+    const dropSubtitle = dropZone?.querySelector('.drop-text-subtitle');
 
     if (dropZone) dropZone.style.display = 'block';
-    if (fileInfo) fileInfo.style.display = 'none';
+    if (optionsSection) optionsSection.style.display = 'none';
+    if (progressSection) progressSection.style.display = 'none';
     if (fileInput) fileInput.value = '';
-    if (convertBtn) convertBtn.disabled = true;
+    if (batchInput) batchInput.value = '';
+    if (dropText) dropText.textContent = '拖拽 Word 文件到此处';
+    if (dropSubtitle) dropSubtitle.textContent = '支持 .docx 格式，可多选';
 }
 
 async function convertDocxToLatex() {
-    if (!selectedDocxFile) {
+    if (selectedDocxFiles.length === 0) {
         showError('请先选择文件');
         return;
     }
 
     const convertBtn = document.getElementById('convert-docx-btn');
-    const progressContainer = document.getElementById('docx-progress');
-    const progressFill = document.getElementById('docx-progress-fill');
+    const progressSection = document.getElementById('docx-progress');
     const progressText = document.getElementById('docx-progress-text');
 
-    setUiLoading(true, convertBtn);
-    if (progressContainer) progressContainer.style.display = 'block';
-    if (progressText) progressText.textContent = '正在上传和转换...';
+    // Disable button and show loading
+    if (convertBtn) {
+        convertBtn.disabled = true;
+        const btnText = convertBtn.querySelector('.btn-text');
+        const btnLoading = convertBtn.querySelector('.btn-loading');
+        if (btnText) btnText.style.display = 'none';
+        if (btnLoading) btnLoading.style.display = 'inline-flex';
+    }
+    if (progressSection) progressSection.style.display = 'block';
+    if (progressText) progressText.textContent = `正在上传和转换 ${selectedDocxFiles.length} 个文件...`;
 
     const formData = new FormData();
-    formData.append('file', selectedDocxFile);
+    selectedDocxFiles.forEach(file => {
+        formData.append('files', file);
+    });
     formData.append('model', document.getElementById('docx-model-select')?.value || 'deepseek-math');
+    formData.append('template', document.getElementById('docx-template-select')?.value || 'article');
+    formData.append('quality', document.getElementById('docx-quality-select')?.value || 'standard');
     formData.append('translate', document.getElementById('docx-translate')?.checked ? 'true' : 'false');
+    formData.append('async_mode', document.getElementById('docx-async-option')?.checked ? 'true' : 'false');
 
     try {
         const response = await fetch('/api/convert-docx', {
@@ -3017,23 +2584,32 @@ async function convertDocxToLatex() {
         const result = await response.json();
 
         if (result.success) {
-            if (progressFill) progressFill.style.width = '100%';
-            if (progressText) progressText.textContent = '转换完成！';
+            if (progressText) progressText.textContent = `转换完成！共 ${selectedDocxFiles.length} 个文件`;
 
-            displayLatexResult(result.latex, result.download_url);
+            if (result.results && result.results.length > 0) {
+                displayLatexResult(result.results[0].latex, result.results[0].download_url);
+            } else {
+                displayLatexResult(result.latex, result.download_url);
+            }
 
             setTimeout(() => {
                 removeDocxFile();
-                if (progressContainer) progressContainer.style.display = 'none';
-                setUiLoading(false, convertBtn);
             }, 1500);
         } else {
             throw new Error(result.error || '转换失败');
         }
     } catch (error) {
         showError('转换失败: ' + error.message);
-        setUiLoading(false, convertBtn);
-        if (progressContainer) progressContainer.style.display = 'none';
+    } finally {
+        // Re-enable button
+        if (convertBtn) {
+            convertBtn.disabled = false;
+            const btnText = convertBtn.querySelector('.btn-text');
+            const btnLoading = convertBtn.querySelector('.btn-loading');
+            if (btnText) btnText.style.display = 'inline-flex';
+            if (btnLoading) btnLoading.style.display = 'none';
+        }
+        if (progressSection) progressSection.style.display = 'none';
     }
 }
 
@@ -3240,105 +2816,5 @@ async function startBatchImageConversion() {
     }
 }
 
-function updatePaperAgentRealtime(data) {
-    const loading = document.getElementById('paperAgentLoading');
-    const meta = document.getElementById('paperAgentMeta');
-    const section = document.getElementById('paperAgentSection');
-    const progressSection = document.getElementById('paperAgentProgress');
-    const progressBar = document.getElementById('paperAgentProgressBar');
-    const progressText = document.getElementById('paperAgentProgressText');
-    if (!loading || !meta || !section) return;
 
-    section.style.display = 'block';
-    loading.style.display = 'block';
 
-    const percent = data.percent ?? 0;
-    const msg = data.message || '处理中...';
-    const current = data.current || 0;
-    const total = data.total || 0;
-    const status = data.status || 'processing';
-
-    loading.textContent = `${msg} (${percent}%)`;
-    meta.textContent = `实时进度: ${status} | ${current}/${total}`;
-
-    // 更新进度条
-    if (progressSection && progressBar && progressText) {
-        progressSection.style.display = 'block';
-        progressBar.style.width = `${percent}%`;
-        progressText.textContent = `${msg}`;
-    }
-
-    if (data.status === 'error') {
-        addTerminalLog('error', data.log_message || data.message || '学术阅读失败');
-    } else {
-        addTerminalLog(data.log_type || 'info', data.log_message || data.message || '学术阅读处理中');
-    }
-}
-
-function normalizeMathText(text) {
-    let s = String(text || '');
-    // 常见 OCR 噪声修正
-    s = s.replace(/\(cid:88\)/g, '\\sum');
-    s = s.replace(/\(cid:8722\)/g, '-');
-    s = s.replace(/\(cid:215\)/g, '\\times');
-    // 清理多余空白
-    s = s.replace(/\s+/g, ' ').trim();
-    // LaTeX 兼容性别名
-    // \hat 通常只对单个字符生效，\widehat 对多个字符生效
-    // 如果参数是多个字符，转换为 \widehat；如果是单个字符，保持 \hat
-    s = s.replace(/\\hat\{([a-zA-Z])\}/g, '\\hat{$1}');  // 单字符保持不变
-    s = s.replace(/\\hat\{([^}]+)\}/g, '\\widehat{$1}'); // 多字符转 \widehat
-    s = s.replace(/\\partial_t/gi, '\\partial_{t}');
-    s = s.replace(/\\nabla_t/gi, '\\nabla_{t}');
-    s = s.replace(/\\mathbf_([a-zA-Z])/g, '\\mathbf{$1}');
-    s = s.replace(/\\nabla_([a-zA-Z])/g, '\\nabla_{$1}');
-    s = s.replace(/\\int_([a-zA-Z])/g, '\\int_{$1}');
-    s = s.replace(/\\sum_([a-zA-Z])/g, '\\sum_{$1}');
-    // 确保下标语法正确：_单个字母 自动加括号
-    s = s.replace(/([a-zA-Z])_([a-zA-Z])(?![a-zA-Z{])/g, '$1_{$2}');
-    // 确保上标语法正确：^单个字母 自动加括号
-    s = s.replace(/([a-zA-Z])^([a-zA-Z])(?![a-zA-Z{])/g, '$1^{$2}');
-    return s;
-}
-
-function looksLikeMathExpression(text) {
-    const s = String(text || '');
-    return /\\[a-zA-Z]+|\^|_|\{|\}|=|\+|\-|\*|\/|∑|←|→/.test(s);
-}
-
-function ensureMathDelimiters(text) {
-    const raw = normalizeMathText(text);
-    if (!raw) return raw;
-    if (/\$\$[\s\S]*\$\$|\$[^$]+\$|\\\[[\s\S]*\\\]|\\\([\s\S]*\\\)/.test(raw)) {
-        return raw;
-    }
-    if (looksLikeMathExpression(raw)) {
-        return `$$${raw}$$`;
-    }
-    return raw;
-}
-
-function renderFormulaDirect(rawFormula, targetEl) {
-    if (!targetEl) return;
-    const normalized = normalizeMathText(rawFormula || '');
-    if (!normalized) {
-        targetEl.textContent = '公式';
-        return;
-    }
-
-    // 优先直接 KaTeX 渲染（不依赖 $ 分隔符）
-    if (typeof katex !== 'undefined' && typeof katex.render === 'function') {
-        try {
-            katex.render(normalized, targetEl, {
-                displayMode: true,
-                throwOnError: false
-            });
-            return;
-        } catch (error) {
-            // 失败则回退到 auto-render
-        }
-    }
-
-    targetEl.textContent = ensureMathDelimiters(normalized);
-    renderMathInContainer(targetEl);
-}

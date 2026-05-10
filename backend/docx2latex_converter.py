@@ -25,7 +25,7 @@ class Docx2LaTeXConverter:
 
     def __init__(
         self,
-        model_name: str = "deepseek-math",
+        model_name: str = "deepseek_v4_flash",
         translate: bool = False,
         translation_prompt: str = "",
         progress_callback: Optional[callable] = None
@@ -39,13 +39,13 @@ class Docx2LaTeXConverter:
     def _init_llm_client(self) -> LLMClient:
         """Initialize LLM client for complex element optimization."""
         model_configs = {
-            'deepseek-math': {
-                'api_key': settings.CANOPY_WAVE_API_KEY,
-                'base_url': 'https://api.canopywave.io/v1/chat/completions',
-                'model': 'deepseek-ai/DeepSeek-Math-V2'
+            'deepseek_v4_flash': {
+                'api_key': settings.DEEPSEEK_API_KEY,
+                'base_url': 'https://api.deepseek.com/v1/chat/completions',
+                'model': 'deepseek-v4-flash'
             }
         }
-        config = model_configs.get(self.model_name, model_configs['deepseek-math'])
+        config = model_configs.get(self.model_name, model_configs['deepseek_v4_flash'])
         return LLMClient(
             api_key=config['api_key'],
             base_url=config['base_url'],

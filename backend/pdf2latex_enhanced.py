@@ -9,14 +9,13 @@ import time
 import asyncio
 import re
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Tuple
 import PyPDF2
 import pdfplumber
 from dotenv import load_dotenv
 from document_parser import PDFDocumentParser
 from clients import (
-    deepseek_chat, deepseek_reasoner,
-    glm46_thinking, glm47_thinking, gemini3_pro, doubao, deepseek_math,
+    deepseek_v4_flash,
     LLMClient
 )
 from config import settings
@@ -34,31 +33,16 @@ class PDF2LaTeXEnhanced:
     
     # 模型映射表
     MODEL_MAP = {
-        'deepseek-chat': deepseek_chat,
-        'deepseek-reasoner': deepseek_reasoner,
-        'glm46': glm46_thinking,
-        'glm47': glm47_thinking,
-        'gemini3-pro': gemini3_pro,
-        'doubao': doubao,
-        'deepseek-math': deepseek_math
+        'deepseek_v4_flash': deepseek_v4_flash
     }
     
-    def __init__(self, model: str = "deepseek-chat", translation_prompt: str = ""):
+    def __init__(self, model: str = "deepseek_v4_flash", translation_prompt: str = ""):
         """
         初始化PDF2LaTeX转换器
         
         Args:
             model: 模型名称，可选值：
-                - deepseek-chat: DeepSeek通用对话模型
-                - deepseek-reasoner: DeepSeek推理模型
-                - gpt4o: GPT-4o
-                - gpt4o-mini: GPT-4o Mini
-                - gpt52: GPT-5.2推理模型
-                - glm46: 智谱GLM-4.6
-                - glm47: 智谱GLM-4.7
-                - gemini3-pro: Gemini 3 Pro
-                - doubao: 豆包
-                - deepseek-math: DeepSeek数学模型
+                - deepseek_v4_flash: DeepSeek V4 Flash 最新模型
         """
         if model not in self.MODEL_MAP:
             raise ValueError(f"不支持的模型: {model}。支持的模型: {list(self.MODEL_MAP.keys())}")
@@ -312,6 +296,179 @@ class PDF2LaTeXEnhanced:
             
         except Exception as e:
             raise Exception(f"翻译失败: {str(e)}")
+
+    async def translate_batch_async(
+        self,
+        pages_text: List[str],
+        pages_info: List[Tuple[int, int]],  # (original_page_num, display_idx)
+        display_total: int,
+        translate: bool = True
+    ) -> List[Tuple[int, str]]:
+        """
+        批量翻译多页文本，保留上下文。
+
+        Args:
+            pages_text: 每页原始文本列表
+            pages_info: 每页信息 (原始页码, 显示索引)
+            display_total: 总页数（用于显示）
+            translate: 是否翻译
+
+        Returns:
+            [(original_page_num, translated_latex), ...]
+        """
+        if not translate:
+            return [(p[0], t) for p, t in zip(pages_info, pages_text)]
+
+        # 每3-5页作为一块，避免token超限
+        CHUNK_SIZE = 4
+
+        results = []
+
+        for i in range(0, len(pages_text), CHUNK_SIZE):
+            chunk_texts = pages_text[i:i+CHUNK_SIZE]
+            chunk_info = pages_info[i:i+CHUNK_SIZE]
+
+            if not chunk_texts or all(not t.strip() for t in chunk_texts):
+                continue
+
+            # 构建带页码标记的批量prompt
+            block_content = []
+            for idx, (original_page, display_idx) in enumerate(chunk_info):
+                page_text = chunk_texts[idx]
+                if not page_text.strip():
+                    continue
+                block_content.append(f"[PAGE {original_page + 1}]\n{page_text}")
+
+            if not block_content:
+                continue
+
+            combined_text = "\n---\n".join(block_content)
+
+            # 检测并标记重复的页眉/页脚
+            combined_text = self._mark_duplicate_headers(combined_text)
+
+            system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
+
+要求：
+1. 保持学术性和专业性
+2. 数学公式、符号、变量名保持原样
+3. 专业术语使用准确的中文翻译
+4. 保持原文段落结构
+5. 翻译流畅自然
+6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样
+7. 如果参考文献在原文已经是中文，保留其中文内容不变
+8. [PAGE X] 标记表示这是第X页，保留这些标记在输出中
+9. [DUPLICATE_HEADER] 和 [DUPLICATE_FOOTER] 标记的内容是页眉页脚，通常不需要翻译（或只翻译一次）
+10. 只输出翻译后的文本，不要解释"""
+
+            user_prompt = f"""请将以下多页学术文本翻译成中文（第 {display_total} 页中的 {len(pages_info)} 页）：
+
+{combined_text}
+
+请保持 [PAGE X] 标记，对 [DUPLICATE_HEADER]/[DUPLICATE_FOOTER] 标记的内容只翻译一次。"""
+
+            try:
+                response = await self.client.chat(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=16000
+                )
+
+                if 'usage' in response:
+                    usage = response['usage']
+                    self.prompt_tokens += usage.get('prompt_tokens', 0)
+                    self.completion_tokens += usage.get('completion_tokens', 0)
+                    self.total_tokens += usage.get('total_tokens', 0)
+
+                content = LLMClient.extract_content(response)
+
+                # 解析返回的内容，按PAGE标记分割
+                translated_pages = self._parse_batch_translation(content, chunk_info)
+                results.extend(translated_pages)
+
+            except Exception as e:
+                logger.warning(f"批量翻译第 {i//CHUNK_SIZE + 1} 块失败: {e}")
+                # 如果批量失败，回退到逐页翻译（使用asyncio.gather并发）
+                fallback_tasks = []
+                fallback_pages = []
+                for idx, (original_page, display_idx) in enumerate(chunk_info):
+                    if idx < len(chunk_texts) and chunk_texts[idx].strip():
+                        fallback_tasks.append(
+                            self.translate_text_async(
+                                chunk_texts[idx], original_page, display_total,
+                                display_page_num=display_idx, display_total_pages=display_total
+                            )
+                        )
+                        fallback_pages.append(original_page)
+
+                if fallback_tasks:
+                    fallback_results = await asyncio.gather(*fallback_tasks, return_exceptions=True)
+                    for original_page, result in zip(fallback_pages, fallback_results):
+                        if isinstance(result, Exception):
+                            logger.warning(f"回退失败 page {original_page + 1}: {result}")
+                        else:
+                            results.append((original_page, result))
+
+        return results
+
+    def _mark_duplicate_headers(self, combined_text: str) -> str:
+        """检测连续出现的重复内容（页眉页脚），标记为需要去重"""
+        lines = combined_text.split('\n')
+        marked_lines = []
+        prev_line = ""
+        seen_lines = {}  # 记录已见过的短行及其首次出现的索引
+
+        for line in lines:
+            stripped = line.strip()
+            is_short_duplicate = len(stripped) < 60 and stripped and stripped == prev_line
+
+            if is_short_duplicate and stripped not in seen_lines:
+                # 第一次出现重复，标记
+                seen_lines[stripped] = len(marked_lines)
+                marked_lines.append(f"[DUPLICATE_HEADER]{stripped}[/DUPLICATE_HEADER]")
+            elif is_short_duplicate and stripped in seen_lines:
+                # 后续重复行跳过
+                pass
+            else:
+                marked_lines.append(line)
+
+            prev_line = stripped
+
+        return '\n'.join(marked_lines)
+
+    def _parse_batch_translation(self, content: str, chunk_info: List[Tuple[int, int]]) -> List[Tuple[int, str]]:
+        """解析批量翻译结果，按PAGE标记分割"""
+        results = []
+
+        # 按PAGE标记分割
+        pages_content = re.split(r'\[PAGE\s+(\d+)\]', content)
+
+        if len(pages_content) <= 1:
+            # 没有明确的PAGE标记，按双换行分割
+            pages = content.split('\n\n')
+            for idx, (original_page, _display_idx) in enumerate(chunk_info):
+                page_content = pages[idx] if idx < len(pages) else (pages[0] if pages else content)
+                results.append((original_page, page_content.strip()))
+            return results
+
+        # pages_content[0]是前缀，[1]=页码1, [2]=内容1, [3]=页码2, [4]=内容2, ...
+        for i in range(1, len(pages_content), 2):
+            if i + 1 >= len(pages_content):
+                break
+            page_num = int(pages_content[i])
+            page_content = pages_content[i + 1]
+
+            # 清理duplicate标记
+            page_content = re.sub(r'\[DUPLICATE_HEADER\].*?\[/DUPLICATE_HEADER\]', '', page_content)
+            page_content = re.sub(r'\[DUPLICATE_FOOTER\].*?\[/DUPLICATE_FOOTER\]', '', page_content)
+
+            # page_num是1-based，需要转回0-based
+            results.append((page_num - 1, page_content.strip()))
+
+        return results
 
     async def translate_text_async(
         self,
@@ -681,11 +838,33 @@ class PDF2LaTeXEnhanced:
         # 构建LaTeX正文
         latex_content = []
         failed_pages = []
-        
+
         mode_desc = "翻译并转换" if translate else "转换"
         processed_pages = 0
         total_to_process = len(pages)
-        
+
+        # 批量翻译模式：每4页作为一块，减少API调用次数
+        if translate:
+            async def batch_translate_pages():
+                pages_info = [(p, idx) for idx, p in enumerate(pages)]
+                translated_results = await self.translate_batch_async(
+                    pages_text,
+                    pages_info,
+                    total_to_process,
+                    translate=True
+                )
+                return translated_results
+
+            translated_map = {}
+            try:
+                translated_results = asyncio.run(batch_translate_pages())
+                for original_page, translated_text in translated_results:
+                    translated_map[original_page] = translated_text
+                logger.info(f"批量翻译完成: {len(translated_map)}/{len(pages)} 页")
+            except Exception as e:
+                logger.warning(f"批量翻译失败: {e}，回退到逐页翻译")
+                translated_map = {}
+
         async def process_page(idx: int, page_num: int):
             text = pages_text[page_num]
             if not text.strip():
@@ -702,11 +881,15 @@ class PDF2LaTeXEnhanced:
             )
 
             try:
+                page_text_to_convert = text
+                if translate and page_num in translated_map:
+                    page_text_to_convert = translated_map[page_num]
+
                 latex_page = await self.convert_text_to_latex_async(
-                    text,
+                    page_text_to_convert,
                     page_num,
                     len(pages_text),
-                    translate=translate,
+                    translate=False,  # 已经翻译过了，不再重复翻译
                     quality_mode=quality_mode,
                     display_page_num=idx,
                     display_total_pages=total_to_process,
@@ -729,7 +912,7 @@ class PDF2LaTeXEnhanced:
 
         async def process_all_pages():
             # 控制并发，避免同时发起过多LLM请求导致连接失败。
-            max_concurrency = 8
+            max_concurrency = 4  # 降低并发，因为批量翻译已经减少了API调用次数
             semaphore = asyncio.Semaphore(max_concurrency)
 
             async def _run_with_limit(idx: int, page_num: int):
