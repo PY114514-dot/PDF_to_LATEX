@@ -36,6 +36,26 @@ class _ImageRegion:
     source: str
 
 
+@dataclass
+class ChapterBoundary:
+    """PDF章节边界信息"""
+    page_num: int           # 起始页 (0-indexed)
+    title: str              # 章节标题文本
+    level: int              # 1=Chapter, 2=Section, 3=Subsection
+    font_size: float        # 标题字号
+    char_count: int         # 标题字符数
+
+
+@dataclass
+class PageFeatures:
+    """单页特征 - 用于困难页判定"""
+    page_num: int
+    formula_density: float      # 公式密度 0-1
+    table_density: float        # 表格密度 0-1
+    image_density: float        # 图像密度 0-1
+    is_difficult: bool          # 任一密度超阈值
+
+
 class PDFDocumentParser:
     """PDF 文档解析：文本层优先，扫描页和图片区域走 OCR。"""
 
@@ -549,6 +569,232 @@ class PDFDocumentParser:
         if secondary in primary:
             return primary
         return f"{primary}\n\n[OCR补充]\n{secondary}"
+
+    # ==================== v0.9 章节检测与困难页分类 ====================
+
+    def detect_chapter_boundaries(self, pdf_path: str) -> List[ChapterBoundary]:
+        """
+        检测PDF的章节边界。
+
+        算法:
+        1. 用pdfplumber读取每页所有chars
+        2. 按y坐标聚类成行
+        3. 计算每页的「正文基线字号」= 中位数
+        4. 字号 > 基线*1.25 且 < 基线*3.0 的行 → 候选标题
+        5. 正则二次确认（中英文）
+        6. 过滤过短（<2字）和过长（>80字）的标题
+
+        Returns:
+            按页码排序的 ChapterBoundary 列表
+        """
+        boundaries: List[ChapterBoundary] = []
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page_idx, page in enumerate(pdf.pages):
+                    chars = page.chars
+                    if not chars or len(chars) < 10:
+                        continue
+
+                    # 1. 计算每行字号（按y坐标聚类）
+                    lines = self._group_chars_into_lines(chars)
+                    if not lines:
+                        continue
+
+                    # 2. 找正文基线字号（页面字号中位数）
+                    sizes = [ln['size'] for ln in lines if ln['size'] > 0]
+                    if not sizes:
+                        continue
+                    sorted_sizes = sorted(sizes)
+                    median_size = sorted_sizes[len(sorted_sizes) // 2]
+                    if median_size <= 0:
+                        continue
+
+                    # 3. 找候选标题行：字号 > 基线*1.25 且 < 基线*3.0
+                    for line in lines:
+                        if not (median_size * 1.25 < line['size'] < median_size * 3.0):
+                            continue
+                        text = line['text'].strip()
+                        if not text or len(text) < 2 or len(text) > 80:
+                            continue
+                        # 跳过纯数字（页码/章节编号后面没标题的）
+                        if not any(c.isalpha() or '一' <= c <= '鿿' for c in text):
+                            continue
+                        # 正则二次确认
+                        if not self._looks_like_heading(text):
+                            continue
+                        # 过滤页眉/页脚区域（前5%或后5%）
+                        page_height = page.height or 792
+                        if line['y0'] < page_height * 0.05 or line['y0'] > page_height * 0.95:
+                            continue
+                        # 判断标题级别
+                        level = self._classify_heading_level(text, line['size'], median_size)
+                        boundaries.append(ChapterBoundary(
+                            page_num=page_idx,
+                            title=text,
+                            level=level,
+                            font_size=round(line['size'], 2),
+                            char_count=len(text),
+                        ))
+        except Exception as exc:
+            # 任何异常都返回空列表，调用方回退到4-页块
+            print(f"[章节检测] 失败: {exc}")
+            return []
+
+        # 去重：相邻页出现相同标题 → 保留字号更大的
+        deduped: List[ChapterBoundary] = []
+        for b in boundaries:
+            if deduped and deduped[-1].title == b.title and abs(deduped[-1].page_num - b.page_num) <= 1:
+                if b.font_size > deduped[-1].font_size:
+                    deduped[-1] = b
+                continue
+            deduped.append(b)
+        return deduped
+
+    def _group_chars_into_lines(self, chars: List[dict]) -> List[dict]:
+        """把chars按y坐标聚类成行，返回 [{text, size, y0, x0}, ...]"""
+        if not chars:
+            return []
+        # 按top(y0)排序
+        sorted_chars = sorted(chars, key=lambda c: (c.get('top', c.get('y0', 0)), c.get('x0', 0)))
+        lines: List[dict] = []
+        current: List[dict] = []
+        current_y = None
+        y_tolerance = 3.0
+        for c in sorted_chars:
+            y = c.get('top', c.get('y0', 0))
+            if current_y is None or abs(y - current_y) <= y_tolerance:
+                current.append(c)
+                current_y = y if current_y is None else (current_y + y) / 2
+            else:
+                if current:
+                    lines.append(self._chars_to_line_dict(current))
+                current = [c]
+                current_y = y
+        if current:
+            lines.append(self._chars_to_line_dict(current))
+        return lines
+
+    def _chars_to_line_dict(self, chars: List[dict]) -> dict:
+        """一行chars → {text, size, y0, x0}"""
+        text = ''.join(c.get('text', '') for c in chars).strip()
+        sizes = [c.get('size', 0) for c in chars if c.get('size', 0) > 0]
+        avg_size = sum(sizes) / len(sizes) if sizes else 0
+        y0 = min((c.get('top', c.get('y0', 0)) for c in chars), default=0)
+        x0 = min((c.get('x0', 0) for c in chars), default=0)
+        return {'text': text, 'size': avg_size, 'y0': y0, 'x0': x0}
+
+    def _looks_like_heading(self, text: str) -> bool:
+        """正则确认是否像标题（中英文）"""
+        patterns = [
+            # 英文: Chapter N, Section N, N. Title, N.M Title, Abstract, References
+            r'^(Chapter|CHAPTER|Section|SECTION|Part|PART)\s+[\dIVX]+',
+            r'^(Abstract|ABSTRACT|Introduction|INTRODUCTION|Conclusion|CONCLUSION|References|REFERENCES|Bibliography|Acknowledgement|Appendix)\b',
+            r'^\d+(\.\d+){0,3}\.?\s+[A-Z][\w\s\-:,\(\)]{2,60}$',
+            r'^\d+\.\s+[A-Z][a-zA-Z]+',
+            # 中文: 第X章/节, 摘要, 结论, 参考文献
+            r'^第\s*[一二三四五六七八九十\d]+\s*[章节]\s*[一-鿿]',
+            r'^(摘要|Abstract|引言|前言|背景|相关工作|方法|实验|结果|讨论|结论|总结|参考文献|致谢|附录)\b',
+        ]
+        for p in patterns:
+            if re.match(p, text):
+                return True
+        return False
+
+    def _classify_heading_level(self, text: str, font_size: float, median_size: float) -> int:
+        """根据字号和文本模式判断标题级别"""
+        ratio = font_size / median_size if median_size > 0 else 1.0
+        # 字号 > 2x 基线 → Chapter (level 1)
+        if ratio > 2.0:
+            return 1
+        # 含 Chapter/第X章 → level 1
+        if re.match(r'^(Chapter|CHAPTER|第\s*[一二三四五六七八九十\d]+\s*章)', text):
+            return 1
+        # 含 Section/第X节 → level 2
+        if re.match(r'^(Section|SECTION|第\s*[一二三四五六七八九十\d]+\s*节)', text):
+            return 2
+        # 数字编号 N.M(.K) → 推测 level (深度 = 点数+1)
+        m = re.match(r'^(\d+)(\.\d+)+', text)
+        if m:
+            depth = m.group(0).count('.') + 1
+            return min(3, depth)
+        # 纯 N. → level 2
+        if re.match(r'^\d+\.', text):
+            return 2
+        # 中等字号 → level 2
+        if ratio > 1.6:
+            return 1
+        return 2
+
+    def classify_difficult_pages(self, pdf_path: str) -> List[PageFeatures]:
+        """
+        分类每页难度：公式密度/表格密度/图像密度。
+
+        Returns:
+            PageFeatures 列表
+        """
+        results: List[PageFeatures] = []
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page_idx, page in enumerate(pdf.pages):
+                    text = page.extract_text() or ''
+                    # 公式密度
+                    formula_lines = self._count_formula_lines(text)
+                    total_lines = max(1, len([l for l in text.split('\n') if l.strip()]))
+                    formula_density = formula_lines / total_lines
+                    # 表格密度（多列结构：同行含多个 ≥2 空格的序列）
+                    table_lines = sum(1 for l in text.split('\n') if re.search(r'\S\s{2,}\S\s{2,}\S', l))
+                    table_density = table_lines / total_lines
+                    # 图像密度
+                    image_area = sum(
+                        (img.get('x1', 0) - img.get('x0', 0)) * (img.get('bottom', img.get('y1', 0)) - img.get('top', img.get('y0', 0)))
+                        for img in page.images
+                    )
+                    page_area = (page.width or 612) * (page.height or 792)
+                    image_density = image_area / page_area if page_area > 0 else 0.0
+                    # 判定困难
+                    is_difficult = (
+                        formula_density > 0.30
+                        or table_density > 0.20
+                        or image_density > 0.15
+                    )
+                    results.append(PageFeatures(
+                        page_num=page_idx,
+                        formula_density=round(formula_density, 3),
+                        table_density=round(table_density, 3),
+                        image_density=round(image_density, 3),
+                        is_difficult=is_difficult,
+                    ))
+        except Exception as exc:
+            print(f"[困难页分类] 失败: {exc}")
+            return []
+        return results
+
+    def _count_formula_lines(self, text: str) -> int:
+        """统计含数学公式的行数"""
+        if not text:
+            return 0
+        formula_patterns = [
+            r'\$[^$]+\$',                # $...$
+            r'\\\([^)]+\\\)',            # \(...\)
+            r'\\\[[^\]]+\\\]',           # \[...\]
+            r'\\begin\{equation',        # \begin{equation}
+            r'\\begin\{align',           # \begin{align}
+            r'\\frac\b',                 # \frac
+            r'\\sum\b|\\int\b|\\prod\b',  # 求和/积分/乘积
+            r'\\partial\b|\\nabla\b',    # 偏导/梯度
+            r'\\alpha|\\beta|\\gamma|\\theta|\\lambda|\\mu|\\sigma|\\omega',
+            r'\^[_a-zA-Z0-9\{\(]',        # 上标
+            r'[_a-zA-Z0-9\}]\^',         # 上标（在前）
+        ]
+        count = 0
+        for line in text.split('\n'):
+            if not line.strip():
+                continue
+            for p in formula_patterns:
+                if re.search(p, line):
+                    count += 1
+                    break
+        return count
 
     def extract_text_from_pdf(self, pdf_path: str, pages: Optional[List[int]] = None) -> List[str]:
         """提取 PDF 的每页文本，优先文本层，必要时 OCR 兜底。"""

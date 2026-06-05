@@ -57,11 +57,15 @@ class PDF2LaTeXEnhanced:
         
         # 进度回调
         self.progress_callback = None
-        
+
         # Token统计
         self.total_tokens = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
+
+        # v0.9 章节感知 - 每次 convert_pdf 前由调用方注入
+        self._chapter_boundaries: List = []
+        self._difficult_pages: set = set()
     
     def set_progress_callback(self, callback: Callable):
         """设置进度回调函数"""
@@ -305,49 +309,150 @@ class PDF2LaTeXEnhanced:
         translate: bool = True
     ) -> List[Tuple[int, str]]:
         """
-        批量翻译多页文本，保留上下文。
+        批量翻译多页文本，v0.9 章节感知版。
 
-        Args:
-            pages_text: 每页原始文本列表
-            pages_info: 每页信息 (原始页码, 显示索引)
-            display_total: 总页数（用于显示）
-            translate: 是否翻译
-
-        Returns:
-            [(original_page_num, translated_latex), ...]
+        策略：
+        1. 若启用章节感知且PDF有检测到章节 → 按章节切分（每块最多 MAX_PAGES_PER_CHAPTER 页）
+        2. 否则回退到固定 4-页块（v0.8 行为，完全兼容）
+        3. 单块失败 → 并发回退到逐页翻译
         """
         if not translate:
             return [(p[0], t) for p, t in zip(pages_info, pages_text)]
 
-        # 每3-5页作为一块，避免token超限
-        CHUNK_SIZE = 4
+        # 决定切分策略
+        chunks = self._plan_chunks(pages_text, pages_info)
+        logger.info(f"批量翻译分块: 共 {len(chunks)} 块（{'章节感知' if self._chapter_aware_active() else '4-页固定'}）")
 
-        results = []
+        results: List[Tuple[int, str]] = []
+        for chunk_texts, chunk_info in chunks:
+            chunk_results = await self._translate_chunk(
+                chunk_texts, chunk_info, display_total,
+            )
+            results.extend(chunk_results)
+        return results
 
-        for i in range(0, len(pages_text), CHUNK_SIZE):
-            chunk_texts = pages_text[i:i+CHUNK_SIZE]
-            chunk_info = pages_info[i:i+CHUNK_SIZE]
+    def _chapter_aware_active(self) -> bool:
+        """判断是否启用章节感知（CONFIG开关 + 缓存的边界非空）"""
+        return bool(getattr(settings, 'ENABLE_CHAPTER_AWARE', False)) and bool(self._chapter_boundaries)
 
-            if not chunk_texts or all(not t.strip() for t in chunk_texts):
-                continue
+    def _plan_chunks(
+        self,
+        pages_text: List[str],
+        pages_info: List[Tuple[int, int]],
+    ) -> List[Tuple[List[str], List[Tuple[int, int]]]]:
+        """
+        决定如何切分页：章节感知 vs 4-页块。
+        返回 [(chunk_texts, chunk_info), ...]
+        """
+        max_per_chunk = max(1, getattr(settings, 'MAX_PAGES_PER_CHAPTER', 8))
 
-            # 构建带页码标记的批量prompt
-            block_content = []
-            for idx, (original_page, display_idx) in enumerate(chunk_info):
-                page_text = chunk_texts[idx]
-                if not page_text.strip():
+        # 章节感知路径
+        if self._chapter_aware_active() and self._chapter_boundaries:
+            # 把 boundaries 按 page_num 排序，构造 (start, end) 区间
+            starts = sorted({b.page_num for b in self._chapter_boundaries} | {len(pages_text)})
+            chunks: List[Tuple[List[str], List[Tuple[int, int]]]] = []
+            prev_start = 0
+            for s in starts:
+                if s <= prev_start:
                     continue
-                block_content.append(f"[PAGE {original_page + 1}]\n{page_text}")
+                # 一个章节区间 [prev_start, s)，但单块不超过 max_per_chunk
+                while prev_start < s:
+                    end = min(prev_start + max_per_chunk, s)
+                    chunks.append((
+                        pages_text[prev_start:end],
+                        pages_info[prev_start:end],
+                    ))
+                    prev_start = end
+            return chunks
 
-            if not block_content:
+        # 4-页固定块（v0.8 兼容）
+        CHUNK_SIZE = 4
+        chunks = []
+        for i in range(0, len(pages_text), CHUNK_SIZE):
+            chunks.append((
+                pages_text[i:i + CHUNK_SIZE],
+                pages_info[i:i + CHUNK_SIZE],
+            ))
+        return chunks
+
+    async def _translate_chunk(
+        self,
+        chunk_texts: List[str],
+        chunk_info: List[Tuple[int, int]],
+        display_total: int,
+    ) -> List[Tuple[int, str]]:
+        """
+        翻译单个块（4页或一个章节）。
+        v0.9: 块内 difficult 页抽出做双次翻译+LLM评分，其余走批量翻译。
+        失败时回退到逐页并发翻译。
+        """
+        if not chunk_texts or all(not t.strip() for t in chunk_texts):
+            return []
+
+        # 分离 difficult 页与 normal 页
+        normal_indices: List[int] = []
+        difficult_indices: List[int] = []
+        for idx, (original_page, _display_idx) in enumerate(chunk_info):
+            if idx < len(chunk_texts) and chunk_texts[idx].strip():
+                if original_page in self._difficult_pages:
+                    difficult_indices.append(idx)
+                else:
+                    normal_indices.append(idx)
+
+        results: List[Tuple[int, str]] = []
+
+        # 1) difficult 页：双次翻译 + LLM评分（并发）
+        if difficult_indices and getattr(settings, 'ENABLE_DIFFICULT_DOUBLE_TRANSLATE', False):
+            difficult_results = await self._translate_difficult_pages(
+                [chunk_texts[i] for i in difficult_indices],
+                [chunk_info[i] for i in difficult_indices],
+                display_total,
+            )
+            results.extend(difficult_results)
+
+        # 2) normal 页：原批量翻译（difficulty 索引排除）
+        remaining_texts = [chunk_texts[i] for i in normal_indices]
+        remaining_info = [chunk_info[i] for i in normal_indices]
+
+        if remaining_texts and any(t.strip() for t in remaining_texts):
+            batch_results = await self._translate_pages_batch(
+                remaining_texts, remaining_info, display_total,
+            )
+            results.extend(batch_results)
+
+        # 3) 如果difficult全部失败回退到了空 → 把difficult页也用原批量兜底
+        if difficult_indices and not any(p == chunk_info[i][0] for p, _ in results for i in difficult_indices):
+            # 没有返回任何 difficult 页结果（说明被完全降级），让外层兜底处理
+            pass
+
+        return results
+
+    async def _translate_pages_batch(
+        self,
+        chunk_texts: List[str],
+        chunk_info: List[Tuple[int, int]],
+        display_total: int,
+    ) -> List[Tuple[int, str]]:
+        """
+        原批量翻译（仅 normal 页），失败时回退逐页并发。
+        """
+        if not chunk_texts or all(not t.strip() for t in chunk_texts):
+            return []
+
+        block_content = []
+        for idx, (original_page, _display_idx) in enumerate(chunk_info):
+            page_text = chunk_texts[idx] if idx < len(chunk_texts) else ''
+            if not page_text.strip():
                 continue
+            block_content.append(f"[PAGE {original_page + 1}]\n{page_text}")
 
-            combined_text = "\n---\n".join(block_content)
+        if not block_content:
+            return []
 
-            # 检测并标记重复的页眉/页脚
-            combined_text = self._mark_duplicate_headers(combined_text)
+        combined_text = "\n---\n".join(block_content)
+        combined_text = self._mark_duplicate_headers(combined_text)
 
-            system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
+        system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
 
 要求：
 1. 保持学术性和专业性
@@ -361,57 +466,227 @@ class PDF2LaTeXEnhanced:
 9. [DUPLICATE_HEADER] 和 [DUPLICATE_FOOTER] 标记的内容是页眉页脚，通常不需要翻译（或只翻译一次）
 10. 只输出翻译后的文本，不要解释"""
 
-            user_prompt = f"""请将以下多页学术文本翻译成中文（第 {display_total} 页中的 {len(pages_info)} 页）：
+        user_prompt = f"""请将以下多页学术文本翻译成中文（第 {display_total} 页中的 {len(chunk_info)} 页）：
 
 {combined_text}
 
 请保持 [PAGE X] 标记，对 [DUPLICATE_HEADER]/[DUPLICATE_FOOTER] 标记的内容只翻译一次。"""
 
+        try:
+            response = await self.client.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=16000
+            )
+
+            if 'usage' in response:
+                usage = response['usage']
+                self.prompt_tokens += usage.get('prompt_tokens', 0)
+                self.completion_tokens += usage.get('completion_tokens', 0)
+                self.total_tokens += usage.get('total_tokens', 0)
+
+            content = LLMClient.extract_content(response)
+            return self._parse_batch_translation(content, chunk_info)
+
+        except Exception as e:
+            logger.warning(f"批量翻译块失败: {e}")
+            return await self._fallback_translate_pages(chunk_texts, chunk_info, display_total)
+
+    async def _translate_difficult_pages(
+        self,
+        pages_text: List[str],
+        pages_info: List[Tuple[int, int]],
+        display_total: int,
+    ) -> List[Tuple[int, str]]:
+        """
+        对每个 difficult 页：
+        1. 并发调两次LLM（temperature=0.3 和 0.7）
+        2. 调第三次 LLM 评分挑选最佳
+        3. 失败时回退单次翻译或原文
+        """
+        if not pages_text:
+            return []
+
+        # 1) 两次并发翻译
+        results: List[Tuple[int, str]] = []
+        tasks_per_page: List = []  # [(page_num, [v1, v2]), ...]
+
+        for text, (original_page, display_idx) in zip(pages_text, pages_info):
             try:
-                response = await self.client.chat(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.3,
-                    max_tokens=16000
+                v1, v2 = await asyncio.gather(
+                    self._single_translate_for_difficult(text, original_page, display_total, temperature=0.3),
+                    self._single_translate_for_difficult(text, original_page, display_total, temperature=0.7),
+                    return_exceptions=True,
                 )
-
-                if 'usage' in response:
-                    usage = response['usage']
-                    self.prompt_tokens += usage.get('prompt_tokens', 0)
-                    self.completion_tokens += usage.get('completion_tokens', 0)
-                    self.total_tokens += usage.get('total_tokens', 0)
-
-                content = LLMClient.extract_content(response)
-
-                # 解析返回的内容，按PAGE标记分割
-                translated_pages = self._parse_batch_translation(content, chunk_info)
-                results.extend(translated_pages)
-
             except Exception as e:
-                logger.warning(f"批量翻译第 {i//CHUNK_SIZE + 1} 块失败: {e}")
-                # 如果批量失败，回退到逐页翻译（使用asyncio.gather并发）
-                fallback_tasks = []
-                fallback_pages = []
-                for idx, (original_page, display_idx) in enumerate(chunk_info):
-                    if idx < len(chunk_texts) and chunk_texts[idx].strip():
-                        fallback_tasks.append(
-                            self.translate_text_async(
-                                chunk_texts[idx], original_page, display_total,
-                                display_page_num=display_idx, display_total_pages=display_total
-                            )
-                        )
-                        fallback_pages.append(original_page)
+                logger.warning(f"困难页双次翻译并发失败 page {original_page + 1}: {e}")
+                v1, v2 = None, None
 
-                if fallback_tasks:
-                    fallback_results = await asyncio.gather(*fallback_tasks, return_exceptions=True)
-                    for original_page, result in zip(fallback_pages, fallback_results):
-                        if isinstance(result, Exception):
-                            logger.warning(f"回退失败 page {original_page + 1}: {result}")
-                        else:
-                            results.append((original_page, result))
+            valid_versions: List[str] = []
+            for v in (v1, v2):
+                if isinstance(v, str) and v.strip():
+                    valid_versions.append(v)
+                elif isinstance(v, Exception):
+                    logger.warning(f"困难页翻译失败 page {original_page + 1}: {v}")
 
+            if not valid_versions:
+                # 完全失败：回退到单次同步调用
+                try:
+                    fallback = await self._single_translate_for_difficult(
+                        text, original_page, display_total, temperature=0.3,
+                    )
+                    results.append((original_page, fallback or text))
+                except Exception as e:
+                    logger.warning(f"困难页最终回退失败 page {original_page + 1}: {e}")
+                    results.append((original_page, text))
+                continue
+
+            if len(valid_versions) == 1:
+                results.append((original_page, valid_versions[0]))
+                continue
+
+            # 2) LLM 评分挑选最佳
+            chosen = await self._pick_better_translation(text, valid_versions[0], valid_versions[1])
+            results.append((original_page, chosen))
+
+        return results
+
+    async def _single_translate_for_difficult(
+        self,
+        text: str,
+        original_page: int,
+        display_total: int,
+        temperature: float = 0.3,
+    ) -> str:
+        """单次同步翻译（不维护 [PAGE X] 标记，专为 difficult 页单页用）"""
+        system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
+
+要求：
+1. 保持学术性和专业性
+2. 数学公式、LaTeX 命令、变量名保持原样
+3. 专业术语使用准确的中文翻译
+4. 保持原文段落结构
+5. 翻译流畅自然
+6. 不要添加任何解释、注释或额外标记
+7. 完整保留所有公式、表格和代码结构"""
+
+        user_prompt = f"""请将以下单页内容（第 {original_page + 1} / {display_total} 页）翻译成中文：
+
+{text}"""
+
+        response = await self.client.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=temperature,
+            max_tokens=8000,
+        )
+
+        if 'usage' in response:
+            usage = response['usage']
+            self.prompt_tokens += usage.get('prompt_tokens', 0)
+            self.completion_tokens += usage.get('completion_tokens', 0)
+            self.total_tokens += usage.get('total_tokens', 0)
+
+        return LLMClient.extract_content(response).strip()
+
+    async def _pick_better_translation(self, original: str, v1: str, v2: str) -> str:
+        """
+        LLM 评分对比两版翻译，挑选最佳。
+        失败时默认返回 v1（temperature=0.3，更稳定）。
+        """
+        try:
+            system_prompt = "你是学术翻译质量评审，请严格按JSON格式输出。"
+            user_prompt = f"""下面是对同一段英文的两种中文翻译版本。
+
+【原文】
+{original[:2000]}
+
+【版本1】
+{v1[:2000]}
+
+【版本2】
+{v2[:2000]}
+
+请按以下维度评分（每项0-10分）：
+- 准确性：是否准确传达原文意思
+- 公式/LaTeX：数学公式、LaTeX命令保留是否完整
+- 学术性：表达是否符合学术规范
+- 流畅度：中文表达是否自然
+
+输出JSON（严格遵循，不要解释）：
+{{"winner": 1或2, "score1": x.x, "score2": y.y, "reason": "简短理由"}}"""
+
+            response = await self.client.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500,
+            )
+
+            if 'usage' in response:
+                usage = response['usage']
+                self.prompt_tokens += usage.get('prompt_tokens', 0)
+                self.completion_tokens += usage.get('completion_tokens', 0)
+                self.total_tokens += usage.get('total_tokens', 0)
+
+            content = LLMClient.extract_content(response).strip()
+            # 简单 JSON 提取：找 winner 字段
+            import json as _json
+            # 容错：去掉 markdown 代码块
+            cleaned = content
+            if cleaned.startswith('```'):
+                cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', cleaned, flags=re.MULTILINE).strip()
+            try:
+                data = _json.loads(cleaned)
+                winner = int(data.get('winner', 1))
+                return v1 if winner == 1 else v2
+            except (ValueError, _json.JSONDecodeError):
+                # 退而求其次：找 "winner": 1 或 2
+                m = re.search(r'"winner"\s*:\s*([12])', content)
+                if m:
+                    return v1 if m.group(1) == '1' else v2
+                logger.warning(f"评分JSON解析失败，默认选v1: {content[:100]}")
+                return v1
+        except Exception as e:
+            logger.warning(f"LLM评分失败，默认选v1: {e}")
+            return v1
+
+    async def _fallback_translate_pages(
+        self,
+        chunk_texts: List[str],
+        chunk_info: List[Tuple[int, int]],
+        display_total: int,
+    ) -> List[Tuple[int, str]]:
+        """并发回退到逐页翻译"""
+        fallback_tasks = []
+        fallback_pages = []
+        for idx, (original_page, display_idx) in enumerate(chunk_info):
+            if idx < len(chunk_texts) and chunk_texts[idx].strip():
+                fallback_tasks.append(
+                    self.translate_text_async(
+                        chunk_texts[idx], original_page, display_total,
+                        display_page_num=display_idx, display_total_pages=display_total
+                    )
+                )
+                fallback_pages.append(original_page)
+
+        if not fallback_tasks:
+            return []
+
+        fallback_results = await asyncio.gather(*fallback_tasks, return_exceptions=True)
+        results = []
+        for original_page, result in zip(fallback_pages, fallback_results):
+            if isinstance(result, Exception):
+                logger.warning(f"回退失败 page {original_page + 1}: {result}")
+            else:
+                results.append((original_page, result))
         return results
 
     def _mark_duplicate_headers(self, combined_text: str) -> str:
@@ -797,6 +1072,23 @@ class PDF2LaTeXEnhanced:
         self.total_tokens = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
+
+        # v0.9 章节检测 + 困难页分类（仅翻译模式有效）
+        self._chapter_boundaries = []
+        self._difficult_pages = set()
+        if translate:
+            try:
+                if getattr(settings, 'ENABLE_CHAPTER_AWARE', False):
+                    self._chapter_boundaries = self.document_parser.detect_chapter_boundaries(pdf_path)
+                    logger.info(f"章节检测: 发现 {len(self._chapter_boundaries)} 个标题边界")
+                if getattr(settings, 'ENABLE_DIFFICULT_DOUBLE_TRANSLATE', False):
+                    features = self.document_parser.classify_difficult_pages(pdf_path)
+                    self._difficult_pages = {f.page_num for f in features if f.is_difficult}
+                    logger.info(f"困难页分类: {len(self._difficult_pages)} 页标记为困难")
+            except Exception as e:
+                logger.warning(f"v0.9 章节/困难页检测失败，回退到4-页块: {e}")
+                self._chapter_boundaries = []
+                self._difficult_pages = set()
         
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")

@@ -55,6 +55,17 @@ class Settings:
     # 缓存过期时间（秒），默认 7 天
     CACHE_EXPIRY_SECONDS: int = int(os.getenv("CACHE_EXPIRY_SECONDS", "604800"))
 
+    # ==================== v0.9 章节感知设置 ====================
+
+    # 是否启用按章节切分（关闭则回退到固定4页块）
+    ENABLE_CHAPTER_AWARE: bool = os.getenv("ENABLE_CHAPTER_AWARE", "true").lower() == "true"
+
+    # 单个章节块最多包含的页数（防止token超限）
+    MAX_PAGES_PER_CHAPTER: int = int(os.getenv("MAX_PAGES_PER_CHAPTER", "8"))
+
+    # 是否对困难页（公式/表格/图像密集）做双次翻译+LLM评分
+    ENABLE_DIFFICULT_DOUBLE_TRANSLATE: bool = os.getenv("ENABLE_DIFFICULT_DOUBLE_TRANSLATE", "true").lower() == "true"
+
     # ==================== OCR 和图片识别设置 ====================
     
     # OCR 引擎选择: 'mixed' | 'deepseek' | 'tesseract'

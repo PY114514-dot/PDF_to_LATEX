@@ -130,9 +130,25 @@
 
 - [x] 批处理并行化 (translate_batch_async, 每4页为一块)
 - [x] 页眉页脚去重 (_mark_duplicate_headers)
+- [x] **v0.9 智能章节识别** (detect_chapter_boundaries, 字号+正则)
+- [x] **v0.9 困难页双次翻译+LLM评分** (classify_difficult_pages, _pick_better_translation)
+- [x] **v0.9 章节感知 chunking** (_plan_chunks, MAX_PAGES_PER_CHAPTER=8)
 - [ ] 内存优化
 - [ ] 公式识别模型优化
 - [ ] 表格结构恢复算法
+
+### Phase 7: v0.9 发布 ✅
+**状态**: 已完成
+**内容**:
+- [x] document_parser.py: detect_chapter_boundaries (字号+中英文正则)
+- [x] document_parser.py: classify_difficult_pages (公式/表格/图像密度)
+- [x] document_parser.py: ChapterBoundary, PageFeatures dataclass
+- [x] pdf2latex_enhanced.py: _plan_chunks (章节感知 vs 4-页块)
+- [x] pdf2latex_enhanced.py: _translate_chunk (分离 difficult 页)
+- [x] pdf2latex_enhanced.py: _translate_difficult_pages (双次并发+评分)
+- [x] pdf2latex_enhanced.py: _pick_better_translation (LLM评分容错)
+- [x] config.py: ENABLE_CHAPTER_AWARE / MAX_PAGES_PER_CHAPTER / ENABLE_DIFFICULT_DOUBLE_TRANSLATE
+- [x] tests/test_v09_chapter_aware.py: 15/15 测试通过
 
 ### Phase 5: Word文档支持
 **状态**: pending
