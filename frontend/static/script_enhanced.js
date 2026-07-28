@@ -1,6 +1,7 @@
 // PDF2LaTeX Enhanced - 增强版前端脚本
 
 let selectedFile = null;
+let sourcePdfObjectUrl = null;
 let selectedFiles = [];  // 批量文件
 let selectedImages = [];  // 图片文件
 let downloadUrl = null;
@@ -15,6 +16,10 @@ let lastAnalyzedPdfFile = null;
 let currentPhaseRank = 0;
 let translatePhaseProgress = 0;
 let convertPhaseProgress = 0;
+let currentPageDiagnostics = [];
+let currentResultStats = {};
+let lastPolledProgressSignature = '';
+let sessionApiKey = '';
 let historyCurrentPage = 1;
 const HISTORY_PAGE_SIZE = 10;
 const HISTORY_MAX_RECORDS = 20;
@@ -78,31 +83,38 @@ const translateProgressLabel = document.getElementById('translateProgressLabel')
 const convertProgressLabel = document.getElementById('convertProgressLabel');
 const translateProgressItem = document.getElementById('translateProgressItem');
 const progressDetail = document.getElementById('progressDetail');
-const tokenStats = document.getElementById('tokenStats');
 const latexEditor = document.getElementById('latexEditor');
 const latexRenderFrame = document.getElementById('latexRenderFrame');
+const sourcePdfPanel = document.getElementById('sourcePdfPanel');
+const sourcePdfFrame = document.getElementById('sourcePdfFrame');
+const sourcePdfName = document.getElementById('sourcePdfName');
+const openSourcePdfBtn = document.getElementById('openSourcePdfBtn');
 const codeLines = document.getElementById('codeLines');
+const compileLatexBtn = document.getElementById('compileLatexBtn');
+const compileStatus = document.getElementById('compileStatus');
 const downloadBtn = document.getElementById('downloadBtn');
 const errorMessage = document.getElementById('errorMessage');
+const resultCost = document.getElementById('resultCost');
+const pageQualitySummary = document.getElementById('pageQualitySummary');
+const pageQualityCounts = document.getElementById('pageQualityCounts');
+const pageQualityList = document.getElementById('pageQualityList');
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     loadPublicConfig();
     setupDragAndDrop();
     setupFileInput();
-    setupImageInput();
     setupBatchFileInput();
-    setupPasteImage();
     setupConvertButton();
-        setupResultEditor();
+    setupResultEditor();
+    setupAppSettings();
+    setupLatexCompiler();
     setupLatexSidebar();
     setupHistoryPagination();
     initWebSocket();
     loadAvailableModels();
     loadHistory();
-    loadTaskCenter();
     initMinimalMotion();
-    initDocxUpload();
 });
 
 function initMinimalMotion() {
@@ -213,6 +225,8 @@ function setupResultEditor() {
         safeStorage.setItem('latexContent', latexEditor.value);
         safeStorage.setItem('latexFilename', latexFilename || '');
     });
+
+    latexEditor.addEventListener('dblclick', focusLatexPreviewAtEditorLine);
 
     latexRenderFrame.addEventListener('load', () => {
         pushPreview();
@@ -615,13 +629,6 @@ function updateProgress(data) {
         currentPhaseRank = incomingRank;
     }
     
-    // 如果有token信息，更新token统计显示
-    if (data.tokens) {
-        document.getElementById('promptTokens').textContent = (data.tokens.prompt_tokens || 0).toLocaleString();
-        document.getElementById('completionTokens').textContent = (data.tokens.completion_tokens || 0).toLocaleString();
-        document.getElementById('totalTokens').textContent = (data.tokens.total_tokens || 0).toLocaleString();
-    }
-    
     // 显示终端日志
     // 如果有log_message就用log_message，否则对于某些状态使用message
     const shouldShowLog = data.log_message || ['preparing', 'uploading', 'extracting', 'converting', 'translating', 'processing', 'completed'].includes(data.status);
@@ -673,11 +680,9 @@ function updateProgress(data) {
             break;
         case 'translating':
             label = '翻译中';
-            tokenStats.style.display = 'block';
             break;
         case 'converting':
             label = '转换中';
-            tokenStats.style.display = 'block';
             break;
         case 'processing':
             label = '处理中';
@@ -750,27 +755,103 @@ function handleDrop(e) {
     const files = Array.from(dt.files);
     
     if (files.length === 0) return;
-    
-    // 检查文件类型
-    const hasImages = files.some(f => isImageFile(f));
-    const hasPDFs = files.some(f => f.name.toLowerCase().endsWith('.pdf'));
-    
+
     if (files.length > 1) {
-        // 多个文件 - 批量模式
-        if (hasImages && hasPDFs) {
-            alert('不支持混合PDF和图片，请分别上传');
-            return;
-        }
         const fakeEvent = { target: { files: files } };
         handleBatchFileSelect(fakeEvent);
     } else if (files.length === 1) {
-        // 单个文件
-        if (isImageFile(files[0])) {
-            const fakeEvent = { target: { files: [files[0]] } };
-            handleImageFileSelect(fakeEvent);
-        } else {
-            handleFileSelect(files[0]);
+        handleFileSelect(files[0]);
+    }
+}
+
+function focusLatexPreviewAtEditorLine() {
+    if (!latexEditor || !latexRenderFrame || !latexRenderFrame.contentWindow) return;
+    const selectionStart = latexEditor.selectionStart || 0;
+    const line = latexEditor.value.slice(0, selectionStart).split('\n').length;
+    latexRenderFrame.contentWindow.postMessage({
+        type: 'latex-preview-focus-line',
+        line,
+    }, window.location.origin);
+}
+
+function showCompileStatus(message, kind = '') {
+    if (!compileStatus) return;
+    compileStatus.textContent = message;
+    compileStatus.className = `compile-status is-visible ${kind ? `is-${kind}` : ''}`;
+}
+
+function focusLatexLine(line) {
+    if (!latexEditor || !Number.isInteger(line) || line < 1) return;
+    const lines = latexEditor.value.split('\n');
+    const start = lines.slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0);
+    const end = start + (lines[line - 1] || '').length;
+    latexEditor.focus();
+    latexEditor.setSelectionRange(start, end);
+}
+
+async function compileLatex() {
+    const latex = getCurrentLatexContent().trim();
+    if (!latex) {
+        showCompileStatus('没有可编译的 LaTeX 内容。', 'error');
+        return;
+    }
+    if (compileLatexBtn) compileLatexBtn.disabled = true;
+    showCompileStatus('正在编译 LaTeX…');
+    try {
+        const response = await fetch('/api/latex/compile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                latex,
+                template: document.getElementById('templateSelect')?.value || 'article'
+            })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            const detail = result.errors?.[0];
+            const lineText = detail?.line ? `第 ${detail.line} 行：` : '';
+            showCompileStatus(`${lineText}${detail?.message || result.error || '编译失败'}`, 'error');
+            if (detail?.line) {
+                compileStatus.onclick = () => focusLatexLine(detail.line);
+                focusLatexLine(detail.line);
+            }
+            return;
         }
+        showCompileStatus(`编译成功（${result.compiler}）。已在新窗口打开 PDF 预览。`, 'success');
+        window.open(result.pdf_url, '_blank', 'noopener');
+    } catch (error) {
+        showCompileStatus(`编译请求失败：${error.message}`, 'error');
+    } finally {
+        if (compileLatexBtn) compileLatexBtn.disabled = false;
+    }
+}
+
+function setupLatexCompiler() {
+    if (compileLatexBtn) compileLatexBtn.addEventListener('click', compileLatex);
+}
+
+function clearSourcePdfPreview() {
+    if (sourcePdfObjectUrl) {
+        URL.revokeObjectURL(sourcePdfObjectUrl);
+        sourcePdfObjectUrl = null;
+    }
+    if (sourcePdfFrame) sourcePdfFrame.removeAttribute('src');
+    if (sourcePdfName) sourcePdfName.textContent = '';
+    if (sourcePdfPanel) sourcePdfPanel.style.display = 'none';
+}
+
+function updateSourcePdfPreview(file) {
+    if (!file || !sourcePdfPanel || !sourcePdfFrame) {
+        clearSourcePdfPreview();
+        return;
+    }
+    if (sourcePdfObjectUrl) URL.revokeObjectURL(sourcePdfObjectUrl);
+    sourcePdfObjectUrl = URL.createObjectURL(file);
+    sourcePdfFrame.src = sourcePdfObjectUrl;
+    if (sourcePdfName) sourcePdfName.textContent = file.name;
+    sourcePdfPanel.style.display = 'block';
+    if (openSourcePdfBtn) {
+        openSourcePdfBtn.onclick = () => window.open(sourcePdfObjectUrl, '_blank', 'noopener');
     }
 }
 
@@ -809,6 +890,7 @@ async function handleFileSelect(file) {
     }
 
     selectedFile = file;
+    updateSourcePdfPreview(file);
     selectedFiles = [];
     selectedImages = [];
     isImageMode = false;
@@ -819,7 +901,7 @@ async function handleFileSelect(file) {
     dropText.innerHTML = `已选择: <strong>${file.name}</strong> <span style="color: #888;">(正在检测页数...)</span>`;
     dropText.style.color = 'var(--success-color)';
     
-    optionsSection.style.display = 'block';
+    optionsSection.style.display = 'grid';
     
     // 获取PDF页数
     try {
@@ -843,34 +925,97 @@ function setupConvertButton() {
 }
 
 function collectCommonOptions() {
+    const style = safeStorage.getItem('translationStyle') || '';
+    const customPrompt = document.getElementById('translationPromptInput')?.value?.trim() || '';
     return {
         model: document.getElementById('modelSelect').value,
         template: document.getElementById('templateSelect')?.value || 'article',
         quality_mode: document.getElementById('qualityModeSelect')?.value || 'standard',
-        translation_prompt: document.getElementById('translationPromptInput')?.value?.trim() || ''
+        translation_prompt: [style, customPrompt].filter(Boolean).join('\n'),
+        api_key: sessionApiKey,
+        reasoning_effort: safeStorage.getItem('reasoningEffort') || ''
     };
+}
+
+function setupAppSettings() {
+    const dialog = document.getElementById('appSettingsDialog');
+    const backdrop = document.getElementById('settingsBackdrop');
+    const openBtn = document.getElementById('openAppSettings');
+    const closeBtn = document.getElementById('closeAppSettings');
+    const saveBtn = document.getElementById('saveAppSettings');
+    const resetBtn = document.getElementById('resetAppSettings');
+    const mainModel = document.getElementById('modelSelect');
+    if (!dialog || !backdrop || !openBtn || !closeBtn || !saveBtn || !resetBtn || !mainModel) return;
+
+    const applyTheme = (theme) => document.body.dataset.theme = theme || 'warm';
+    const close = () => { dialog.hidden = true; backdrop.hidden = true; openBtn.focus(); };
+    const open = () => {
+        mainModel.value = safeStorage.getItem('selectedModel') || mainModel.value;
+        document.getElementById('settingsApiKey').value = sessionApiKey;
+        document.getElementById('settingsReasoning').value = safeStorage.getItem('reasoningEffort') || '';
+        document.getElementById('settingsTranslationStyle').value = safeStorage.getItem('translationStyle') || '';
+        document.getElementById('settingsTheme').value = safeStorage.getItem('themeColor') || 'warm';
+        dialog.hidden = false; backdrop.hidden = false;
+        mainModel.focus();
+    };
+    openBtn.addEventListener('click', open);
+    closeBtn.addEventListener('click', close);
+    backdrop.addEventListener('click', close);
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !dialog.hidden) close(); });
+    saveBtn.addEventListener('click', () => {
+        const model = mainModel.value;
+        if (model) { mainModel.value = model; safeStorage.setItem('selectedModel', model); }
+        sessionApiKey = document.getElementById('settingsApiKey').value.trim();
+        safeStorage.setItem('reasoningEffort', document.getElementById('settingsReasoning').value);
+        safeStorage.setItem('translationStyle', document.getElementById('settingsTranslationStyle').value);
+        const theme = document.getElementById('settingsTheme').value;
+        safeStorage.setItem('themeColor', theme); applyTheme(theme);
+        close(); showToast('设置已保存，将用于下一次转换', 'success');
+    });
+    resetBtn.addEventListener('click', () => {
+        sessionApiKey = '';
+        ['selectedModel', 'reasoningEffort', 'translationStyle', 'themeColor'].forEach(key => safeStorage.removeItem(key));
+        mainModel.selectedIndex = 0; applyTheme('warm'); open();
+    });
+    applyTheme(safeStorage.getItem('themeColor') || 'warm');
 }
 
 async function pollAsyncTask(taskId) {
     activeAsyncTask = taskId;
-    const maxRounds = 3600; // 最多轮询 1 小时
+    const maxRounds = 1800; // 每两秒一次，最多轮询一小时
     let rounds = 0;
     while (activeAsyncTask === taskId && rounds < maxRounds) {
         rounds += 1;
         try {
             const res = await fetch(`/api/task/${taskId}`);
             const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || `任务状态查询失败（HTTP ${res.status}）`);
+            }
             if (data.success && data.task) {
                 const status = data.task.status;
+                const progress = data.task.progress || {};
+                const progressSignature = [
+                    status, progress.current, progress.total, progress.message
+                ].join('|');
+                if (progressSignature !== lastPolledProgressSignature) {
+                    lastPolledProgressSignature = progressSignature;
+                    updateProgress({
+                        task_id: taskId,
+                        status,
+                        current: progress.current || 0,
+                        total: progress.total || 0,
+                        percent: progress.percent,
+                        message: progress.message || '任务处理中',
+                    });
+                }
                 if (status === 'completed' && data.task.result) {
                     showResult(data.task.result);
-                    loadTaskCenter();
                     activeAsyncTask = null;
                     return;
                 }
                 if (status === 'failed') {
                     showError(data.task.error || '异步任务失败');
-                    loadTaskCenter();
                     activeAsyncTask = null;
                     return;
                 }
@@ -879,6 +1024,10 @@ async function pollAsyncTask(taskId) {
             console.warn('轮询异步任务失败:', err.message);
         }
         await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    if (activeAsyncTask === taskId) {
+        activeAsyncTask = null;
+        showError('任务状态轮询已超时。转换可能仍在后台运行，可点击“恢复上次任务”继续查询。');
     }
 }
 
@@ -896,6 +1045,7 @@ async function resumeLastAsyncTask() {
             throw new Error(data.error || '恢复失败');
         }
         currentTaskId = taskId;
+        lastPolledProgressSignature = '';
         if (socket) {
             socket.emit('join_task', { task_id: taskId });
         }
@@ -905,7 +1055,6 @@ async function resumeLastAsyncTask() {
         errorSection.style.display = 'none';
         addTerminalLog('info', `已恢复异步任务: ${taskId}`);
         pollAsyncTask(taskId);
-        loadTaskCenter();
     } catch (err) {
         showToast(`恢复失败: ${err.message}`, 'error');
     }
@@ -918,21 +1067,10 @@ async function startConversion() {
         return;
     }
 
-    // 图片模式
-    if (isImageMode) {
-        if (isBatchMode && selectedImages.length > 0) {
-            startBatchImageConversion();
-        } else {
-            startImageConversion();
-        }
-    }
-    // PDF模式
-    else {
-        if (isBatchMode && selectedFiles.length > 0) {
-            startBatchConversion();
-        } else {
-            startSingleConversion();
-        }
+    if (isBatchMode && selectedFiles.length > 0) {
+        startBatchConversion();
+    } else {
+        startSingleConversion();
     }
 }
 
@@ -948,13 +1086,13 @@ async function startSingleConversion() {
     progressSection.style.display = 'block';
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
-    tokenStats.style.display = 'none';
     
     // 生成task_id并提前加入room
     const timestamp = Date.now();
     const taskId = `task_${timestamp}`;
     currentTaskId = taskId;
     currentPhaseRank = 0;
+    lastPolledProgressSignature = '';
     resetPhaseProgress(translate);
     if (socket) {
         socket.emit('join_task', { task_id: taskId });
@@ -998,6 +1136,9 @@ async function startSingleConversion() {
         formData.append('model', options.model);
         formData.append('template', options.template);
         formData.append('quality_mode', options.quality_mode);
+        formData.append('translation_prompt', options.translation_prompt);
+        formData.append('api_key', options.api_key);
+        formData.append('reasoning_effort', options.reasoning_effort);
         formData.append('task_id', taskId);  // 传递task_id
         if (pages) {
             formData.append('pages', pages);
@@ -1061,11 +1202,18 @@ async function startSingleConversion() {
 
         const result = await uploadPromise;
 
+        // A room event can be emitted before Socket.IO has rejoined after an
+        // upload. The completed HTTP response is therefore the fallback.
+        if (!asyncMode) {
+            showResult(result);
+            return;
+        }
+
         if (asyncMode) {
             addTerminalLog('info', `异步任务已提交: ${result.task_id}`);
+            addTerminalLog('info', '文件已上传，正在后台提取与转换；即使实时连接中断也会持续更新。');
             safeStorage.setItem('lastAsyncTaskId', result.task_id);
             pollAsyncTask(result.task_id);
-            loadTaskCenter();
             return;
         }
 
@@ -1104,7 +1252,6 @@ async function startBatchConversion() {
     progressSection.style.display = 'block';
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
-    tokenStats.style.display = 'none';
     
     // 重置并显示终端日志
     const terminalLog = document.getElementById('terminalLog');
@@ -1152,6 +1299,9 @@ async function startBatchConversion() {
         formData.append('model', options.model);
         formData.append('template', options.template);
         formData.append('quality_mode', options.quality_mode);
+        formData.append('translation_prompt', options.translation_prompt);
+        formData.append('api_key', options.api_key);
+        formData.append('reasoning_effort', options.reasoning_effort);
         formData.append('task_id', batchTaskId);
         if (pages) {
             formData.append('pages', pages);
@@ -1236,14 +1386,164 @@ async function startBatchConversion() {
     }
 }
 
+function renderPageQualitySummary(pageDiagnostics = []) {
+    if (!pageQualitySummary || !pageQualityCounts || !pageQualityList) {
+        return;
+    }
+
+    const diagnostics = Array.isArray(pageDiagnostics) ? pageDiagnostics : [];
+    const errors = diagnostics.filter(page => (page.errors_count || 0) > 0).length;
+    const warnings = diagnostics.filter(page =>
+        !(page.errors_count || 0) && (page.warnings_count || 0) > 0
+    ).length;
+    const successful = diagnostics.length - errors - warnings;
+    pageQualityCounts.textContent = `正常 ${successful} · 警告 ${warnings} · 失败 ${errors}`;
+    pageQualityList.replaceChildren();
+
+    if (!diagnostics.length) {
+        pageQualitySummary.style.display = 'none';
+        return;
+    }
+
+    const flagged = diagnostics.filter(page =>
+        (page.errors_count || 0) > 0 || (page.warnings_count || 0) > 0
+    );
+    if (!flagged.length) {
+        const complete = document.createElement('p');
+        complete.className = 'page-quality-empty';
+        complete.textContent = '所有已转换页面均通过基础 LaTeX 检查。';
+        pageQualityList.appendChild(complete);
+    } else {
+        flagged.forEach(page => {
+            const row = document.createElement('article');
+            row.className = `page-quality-item ${page.errors_count ? 'has-error' : 'has-warning'}`;
+
+            const content = document.createElement('div');
+            content.className = 'page-quality-item-content';
+            const title = document.createElement('h5');
+            title.textContent = `第 ${page.page} 页`;
+            const message = document.createElement('p');
+            const items = Array.isArray(page.diagnostics) ? page.diagnostics : [];
+            message.textContent = items.map(item =>
+                item.line ? `第 ${item.line} 行：${item.message}` : item.message
+            ).join('；') || '检测到 LaTeX 风险，请重新检查该页。';
+            content.append(title, message);
+
+            const actions = document.createElement('div');
+            actions.className = 'page-quality-actions';
+            const normalRetry = document.createElement('button');
+            normalRetry.type = 'button';
+            normalRetry.className = 'page-retry-btn';
+            normalRetry.textContent = '重试本页';
+            normalRetry.addEventListener('click', () => retryPage(page.page, 'standard', normalRetry));
+            const highRetry = document.createElement('button');
+            highRetry.type = 'button';
+            highRetry.className = 'page-retry-btn secondary';
+            highRetry.textContent = '高质量重试';
+            highRetry.addEventListener('click', () => retryPage(page.page, 'high', highRetry));
+            actions.append(normalRetry, highRetry);
+            row.append(content, actions);
+            pageQualityList.appendChild(row);
+        });
+    }
+    pageQualitySummary.style.display = 'block';
+}
+
+function formatCost(cost) {
+    if (!cost?.pricing_configured || typeof cost.total_cost !== 'number') {
+        return '未配置';
+    }
+    const currency = cost.currency || 'CNY';
+    return `${currency} ${cost.total_cost.toFixed(4)}`;
+}
+
+function updateCostDisplay(cost) {
+    if (resultCost) resultCost.textContent = formatCost(cost);
+}
+
+async function retryPage(pageNum, qualityMode, button) {
+    if (!selectedFile || isBatchMode) {
+        showToast('仅支持对当前单个 PDF 的页面重试。请重新打开原文件后再试。', 'error');
+        return;
+    }
+    const content = latexEditor?.value || latexContent || '';
+    if (!content) {
+        showToast('当前 LaTeX 内容为空，无法重试单页。', 'error');
+        return;
+    }
+
+    const options = collectCommonOptions();
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('page', String(pageNum));
+    formData.append('latex_content', content);
+    formData.append('model', options.model);
+    formData.append('translate', String(document.getElementById('translateOption')?.checked || false));
+    formData.append('quality_mode', qualityMode);
+    formData.append('translation_prompt', options.translation_prompt);
+
+    const originalLabel = button?.textContent || '重试本页';
+    if (button) {
+        button.disabled = true;
+        button.textContent = '重试中…';
+    }
+    try {
+        const response = await fetch('/api/retry-page', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '单页重试失败');
+        }
+
+        latexContent = data.content;
+        latexFilename = data.filename || latexFilename;
+        downloadUrl = data.download_url || downloadUrl;
+        safeStorage.setItem('latexContent', latexContent);
+        safeStorage.setItem('latexFilename', latexFilename);
+        if (latexEditor) latexEditor.value = latexContent;
+        updateLatexEditorStats(latexContent);
+        updateLatexEditorPreview(latexContent);
+        const index = currentPageDiagnostics.findIndex(page => page.page === pageNum);
+        if (index >= 0) currentPageDiagnostics[index] = data.page_diagnostic;
+        else currentPageDiagnostics.push(data.page_diagnostic);
+        renderPageQualitySummary(currentPageDiagnostics);
+        const retryCost = data.stats?.cost;
+        if (retryCost?.pricing_configured && currentResultStats?.cost?.pricing_configured) {
+            currentResultStats.cost.total_cost = Number(
+                (currentResultStats.cost.total_cost + retryCost.total_cost).toFixed(6)
+            );
+            currentResultStats.total_tokens =
+                (currentResultStats.total_tokens || 0) + (data.stats.total_tokens || 0);
+            document.getElementById('resultTokens').textContent = currentResultStats.total_tokens.toLocaleString();
+            updateCostDisplay(currentResultStats.cost);
+        }
+        downloadBtn.onclick = downloadCurrentLatex;
+        showToast(
+            `第 ${pageNum} 页已重试（本次 ${data.stats?.total_tokens || 0} Tokens，费用 ${formatCost(retryCost)}）。`,
+            'success'
+        );
+    } catch (error) {
+        showToast(`第 ${pageNum} 页重试失败：${error.message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = originalLabel;
+        }
+    }
+}
+
 // 显示结果
-function showResult(result) {
+function showResult(result, showSourcePdf = true) {
     progressSection.style.display = 'none';
     resultSection.style.display = 'block';
 
     downloadUrl = result.download_url;
     latexContent = result.content;
     latexFilename = result.filename || result.output_filename || 'converted.tex';
+    if (showSourcePdf) {
+        updateSourcePdfPreview(selectedFile);
+    } else {
+        clearSourcePdfPreview();
+    }
     safeStorage.setItem('latexContent', latexContent || '');
     safeStorage.setItem('latexFilename', latexFilename || '');
         
@@ -1254,36 +1554,44 @@ function showResult(result) {
     updateLatexEditorStats(result.content || '');
     updateLatexEditorPreview(result.content || '');
 
+    const pageDiagnostics = Array.isArray(result.page_diagnostics)
+        ? result.page_diagnostics : [];
+    currentPageDiagnostics = pageDiagnostics;
+    renderPageQualitySummary(currentPageDiagnostics);
+    const flaggedPages = pageDiagnostics.filter(page =>
+        (page.errors_count || 0) > 0 || (page.warnings_count || 0) > 0
+    );
+    if (flaggedPages.length) {
+        const details = flaggedPages.slice(0, 3).map(page => {
+            const messages = (page.diagnostics || []).map(item => item.message).join('；');
+            return `第 ${page.page} 页：${messages || '检测到 LaTeX 风险'}`;
+        });
+        addTerminalLog('warning', `转换完成，但 ${flaggedPages.length} 页需要检查。${details.join('；')}`);
+        showToast(`已完成：${flaggedPages.length} 页存在公式或排版警告，请查看终端日志。`, 'warning');
+    }
+
     // 显示统计信息
     if (result.stats) {
+        currentResultStats = { ...result.stats, cost: result.stats.cost ? { ...result.stats.cost } : {} };
         // 处理页数显示 - 如果是图片则显示"1 张"，否则显示"x / y"
         const pagesText = isImageMode 
             ? `${result.stats.processed_pages || 1} 张`
             : `${result.stats.processed_pages || 0} / ${result.stats.total_pages || 0}`;
         document.getElementById('resultPages').textContent = pagesText;
-        
-        document.getElementById('resultTokens').textContent = 
+        document.getElementById('resultTokens').textContent =
             (result.stats.total_tokens || 0).toLocaleString();
+        updateCostDisplay(result.stats.cost);
+
         document.getElementById('resultTime').textContent = 
             `${result.stats.processing_time || 0}s`;
-        
-        // 更新Token统计（如果在进度中显示）
-        document.getElementById('promptTokens').textContent = 
-            (result.stats.prompt_tokens || 0).toLocaleString();
-        document.getElementById('completionTokens').textContent = 
-            (result.stats.completion_tokens || 0).toLocaleString();
-        document.getElementById('totalTokens').textContent = 
-            (result.stats.total_tokens || 0).toLocaleString();
     } else {
+        currentResultStats = {};
         // 如果没有stats，显示默认值
         const pagesText = isImageMode ? '1 张' : '0 / 0';
         document.getElementById('resultPages').textContent = pagesText;
         document.getElementById('resultTokens').textContent = '0';
+        updateCostDisplay(null);
         document.getElementById('resultTime').textContent = '0s';
-        
-        document.getElementById('promptTokens').textContent = '0';
-        document.getElementById('completionTokens').textContent = '0';
-        document.getElementById('totalTokens').textContent = '0';
     }
 
     // 设置下载按钮
@@ -1325,9 +1633,6 @@ function renderMathInContainer(container) {
     }
 }
 
-
-
-// 从历史记录运行学术智能体 - 打开新窗口
 
 
 // 显示错误
@@ -1529,6 +1834,7 @@ function showBatchResult(result) {
         : `${stats.total_pages || 0}`;
     document.getElementById('resultPages').textContent = pagesText;
     document.getElementById('resultTokens').textContent = (stats.total_tokens || 0).toLocaleString();
+    updateCostDisplay(stats.cost);
     document.getElementById('resultTime').textContent = `${(stats.total_time || 0).toFixed(1)}s`;
 
     // 显示批量结果列表
@@ -1763,6 +2069,7 @@ async function getPdfPageCount(file) {
 
 // 重置应用
 function resetApp() {
+    clearSourcePdfPreview();
     selectedFile = null;
     selectedFiles = [];
     downloadUrl = null;
@@ -1789,13 +2096,12 @@ function resetApp() {
     const asyncOption = document.getElementById('asyncOption');
     if (templateSelect) templateSelect.value = 'article';
     if (qualityModeSelect) qualityModeSelect.value = 'standard';
-    if (asyncOption) asyncOption.checked = false;
+    if (asyncOption) asyncOption.checked = true;
 
     optionsSection.style.display = 'none';
     progressSection.style.display = 'none';
     resultSection.style.display = 'none';
     errorSection.style.display = 'none';
-    tokenStats.style.display = 'none';
         
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1867,8 +2173,8 @@ async function loadAvailableModels() {
                 option.value = model.id;
                 option.textContent = `${model.name} - ${model.description}`;
                 
-                // 默认选中 deepseek-chat
-                if (model.id === 'deepseek-chat') {
+                // 默认选中 DeepSeek V4 Flash
+                if (model.id === 'deepseek_v4_flash') {
                     option.selected = true;
                 }
                 
@@ -1877,12 +2183,12 @@ async function loadAvailableModels() {
             
             console.log(`已加载 ${data.models.length} 个可用模型`);
         } else {
-            modelSelect.innerHTML = '<option value="deepseek-chat">DeepSeek Chat (默认)</option>';
+            modelSelect.innerHTML = '<option value="deepseek_v4_flash">DeepSeek V4 Flash (默认)</option>';
             console.warn('未找到可用模型，使用默认模型');
         }
     } catch (error) {
         console.error('加载模型列表失败:', error);
-        modelSelect.innerHTML = '<option value="deepseek-chat">DeepSeek Chat (默认)</option>';
+        modelSelect.innerHTML = '<option value="deepseek_v4_flash">DeepSeek V4 Flash (默认)</option>';
     }
 }
 
@@ -2063,7 +2369,7 @@ async function openTaskResult(taskId) {
         if (!response.ok || !data.success || !data.task?.result) {
             throw new Error(data.error || '结果不存在');
         }
-        showResult(data.task.result);
+        showResult(data.task.result, false);
     } catch (error) {
         showToast(`打开任务结果失败: ${error.message}`, 'error');
     }
@@ -2082,7 +2388,6 @@ async function resumeTaskById(taskId) {
         }
         safeStorage.setItem('lastAsyncTaskId', taskId);
         pollAsyncTask(taskId);
-        loadTaskCenter();
         showToast('任务已恢复', 'success');
     } catch (error) {
         showToast(`恢复失败: ${error.message}`, 'error');
@@ -2186,635 +2491,69 @@ async function clearAllHistory() {
     }
 }
 
-// ================================
-// 图片处理功能
-// ================================
-
-// 检查是否为图片文件
-function isImageFile(file) {
-    const imageExtensions = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif'];
-    const ext = file.name.split('.').pop().toLowerCase();
-    return imageExtensions.includes(ext);
-}
-
-// 设置图片输入
-function setupImageInput() {
-    const imageInput = document.getElementById('imageInput');
-    if (imageInput) {
-        imageInput.addEventListener('change', handleImageFileSelect);
-    }
-}
-
-// 处理图片文件选择
-function handleImageFileSelect(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    
-    if (!isImageFile(file)) {
-        alert('请选择有效的图片文件');
-        return;
-    }
-    
-    selectedFile = file;
-    selectedFiles = [];
-    selectedImages = [file];
-    isImageMode = true;
-    isBatchMode = false;
-    
-    // 更新拖放区域提示
-    const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `已选择图片: <strong>${file.name}</strong>`;
-    dropText.style.color = 'var(--success-color)';
-    
-    // 显示图片预览
-    displayImagePreview([file]);
-    
-    // 显示转换选项
-    optionsSection.style.display = 'block';
-    
-    // 显示OCR引擎选择
-    const ocrGroup = document.getElementById('ocrProviderGroup');
-    if (ocrGroup) {
-        ocrGroup.style.display = 'block';
-    }
-    
-    // 隐藏页码选项（图片不需要页码）
-    const pagesGroup = document.querySelector('#pagesInput').closest('.option-group');
-    if (pagesGroup) {
-        pagesGroup.style.display = 'none';
-    }
-}
-
-// 处理批量文件选择（支持图片或PDF，不支持混合）
+// 处理批量 PDF 文件选择。
 function handleBatchFileSelect(eventOrFiles) {
     const files = Array.isArray(eventOrFiles)
         ? eventOrFiles
         : Array.from(eventOrFiles?.target?.files || []);
     if (files.length === 0) return;
-    
-    // 检查文件类型
-    const hasImages = files.some(f => isImageFile(f));
-    const hasPDFs = files.some(f => f.name.toLowerCase().endsWith('.pdf'));
-    
-    if (hasImages && hasPDFs) {
-        alert('批量转换不支持混合PDF和图片，请分别上传');
-        return;
-    }
 
     // PDF 批量限制：最多 5 个，且过滤重复文件。
-    if (hasPDFs) {
-        const maxSize = 50 * 1024 * 1024;
-        const dedupMap = new Map();
-        const invalidFiles = [];
+    const maxSize = 50 * 1024 * 1024;
+    const dedupMap = new Map();
+    const invalidFiles = [];
 
-        for (const file of files) {
-            const isPdf = file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type.includes('pdf'));
-            if (!isPdf) {
-                invalidFiles.push(`${file.name} (不是PDF)`);
-                continue;
-            }
-            if (file.size > maxSize) {
-                invalidFiles.push(`${file.name} (超过50MB)`);
-                continue;
-            }
-            const signature = `${file.name}::${file.size}::${file.lastModified || 0}`;
-            if (!dedupMap.has(signature)) {
-                dedupMap.set(signature, file);
-            }
+    for (const file of files) {
+        const isPdf = file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type.includes('pdf'));
+        if (!isPdf) {
+            invalidFiles.push(`${file.name} (不是PDF)`);
+            continue;
         }
+        if (file.size > maxSize) {
+            invalidFiles.push(`${file.name} (超过50MB)`);
+            continue;
+        }
+        const signature = `${file.name}::${file.size}::${file.lastModified || 0}`;
+        if (!dedupMap.has(signature)) {
+            dedupMap.set(signature, file);
+        }
+    }
 
-        const uniquePdfFiles = Array.from(dedupMap.values());
-        if (uniquePdfFiles.length > MAX_BATCH_PDF_FILES) {
-            showError(`最多支持同时翻译 ${MAX_BATCH_PDF_FILES} 个不同的PDF文件`);
-            return;
-        }
-        if (uniquePdfFiles.length === 0) {
-            showError('请至少选择1个有效PDF文件');
-            return;
-        }
-        if (invalidFiles.length > 0) {
-            showError(`以下文件无效:\n${invalidFiles.join('\n')}`);
-            return;
-        }
-
-        selectedFile = null;
-        selectedImages = [];
-        selectedFiles = uniquePdfFiles;
-        isImageMode = false;
-        isBatchMode = true;
-
-        const dropText = dropZone.querySelector('.drop-text');
-        dropText.innerHTML = `已选择 <strong>${uniquePdfFiles.length}</strong> 个PDF文件（最多${MAX_BATCH_PDF_FILES}个）`;
-        dropText.style.color = 'var(--success-color)';
-
-        // PDF 模式恢复页码选项，隐藏 OCR 图片选项。
-        const ocrGroup = document.getElementById('ocrProviderGroup');
-        if (ocrGroup) {
-            ocrGroup.style.display = 'none';
-        }
-        const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
-        if (pagesGroup) {
-            pagesGroup.style.display = 'block';
-        }
-        const previewSection = document.getElementById('imagePreviewSection');
-        if (previewSection) {
-            previewSection.style.display = 'none';
-        }
-
-        optionsSection.style.display = 'block';
-
-        const batchInfo = document.getElementById('batchInfo');
-        if (batchInfo) {
-            batchInfo.textContent = `已选择 ${uniquePdfFiles.length} 个PDF文件（上限 ${MAX_BATCH_PDF_FILES}）`;
-            batchInfo.style.display = 'block';
-        }
+    const uniquePdfFiles = Array.from(dedupMap.values());
+    if (uniquePdfFiles.length > MAX_BATCH_PDF_FILES) {
+        showError(`最多支持同时翻译 ${MAX_BATCH_PDF_FILES} 个不同的PDF文件`);
         return;
     }
-    
-    selectedFile = null;
-    selectedFiles = files;
-    isImageMode = hasImages;
-    isBatchMode = true;
-    
-    // 更新拖放区域提示
-    const dropText = dropZone.querySelector('.drop-text');
-    dropText.innerHTML = `已选择 <strong>${files.length}</strong> 个${hasImages ? '图片' : 'PDF'}文件`;
-    dropText.style.color = 'var(--success-color)';
-    
-    if (hasImages) {
-        selectedImages = files;
-        displayImagePreview(files);
-        // 显示OCR引擎选择
-        const ocrGroup = document.getElementById('ocrProviderGroup');
-        if (ocrGroup) {
-            ocrGroup.style.display = 'block';
-        }
-        // 隐藏页码选项
-        const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
-        if (pagesGroup) {
-            pagesGroup.style.display = 'none';
-        }
+    if (uniquePdfFiles.length === 0) {
+        showError('请至少选择1个有效PDF文件');
+        return;
     }
-    
-    // 显示转换选项
-    optionsSection.style.display = 'block';
-    
+    if (invalidFiles.length > 0) {
+        showError(`以下文件无效:\n${invalidFiles.join('\n')}`);
+        return;
+    }
+
+    selectedFile = null;
+    selectedImages = [];
+    selectedFiles = uniquePdfFiles;
+    isImageMode = false;
+    isBatchMode = true;
+
+    const dropText = dropZone.querySelector('.drop-text');
+    dropText.innerHTML = `已选择 <strong>${uniquePdfFiles.length}</strong> 个PDF文件（最多${MAX_BATCH_PDF_FILES}个）`;
+    dropText.style.color = 'var(--success-color)';
+
+    const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
+    if (pagesGroup) {
+        pagesGroup.style.display = 'block';
+    }
+
+    optionsSection.style.display = 'grid';
+
     const batchInfo = document.getElementById('batchInfo');
     if (batchInfo) {
-        batchInfo.textContent = `已选择 ${files.length} 个${isImageMode ? '图片' : 'PDF'}文件`;
+        batchInfo.textContent = `已选择 ${uniquePdfFiles.length} 个PDF文件（上限 ${MAX_BATCH_PDF_FILES}）`;
         batchInfo.style.display = 'block';
     }
+    return;
 }
-
-// 显示图片预览
-function displayImagePreview(files) {
-    const previewSection = document.getElementById('imagePreviewSection');
-    const thumbnails = document.getElementById('imageThumbnails');
-    
-    if (!previewSection || !thumbnails) return;
-    
-    thumbnails.innerHTML = '';
-    
-    files.forEach((file, index) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const thumbnail = document.createElement('div');
-            thumbnail.className = 'image-thumbnail';
-            thumbnail.innerHTML = `
-                <img src="${e.target.result}" alt="${file.name}">
-                <div class="image-name">${file.name}</div>
-                <button class="image-remove-btn" onclick="removeImage(${index})" title="删除">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            `;
-            thumbnails.appendChild(thumbnail);
-        };
-        reader.readAsDataURL(file);
-    });
-    
-    previewSection.style.display = 'block';
-}
-
-// 删除图片
-function removeImage(index) {
-    selectedImages.splice(index, 1);
-    
-    if (selectedImages.length === 0) {
-        selectedFile = null;
-        selectedFiles = [];
-        isImageMode = false;
-        const previewSection = document.getElementById('imagePreviewSection');
-        if (previewSection) {
-            previewSection.style.display = 'none';
-        }
-        // 隐藏选项区域
-        optionsSection.style.display = 'none';
-        // 重置拖放区域提示
-        const dropText = dropZone.querySelector('.drop-text');
-        dropText.innerHTML = '拖拽文件到这里';
-        dropText.style.color = '';
-    } else {
-        if (!isBatchMode) {
-            selectedFile = selectedImages[0];
-        } else {
-            selectedFiles = selectedImages;
-        }
-        displayImagePreview(selectedImages);
-        // 更新提示文本
-        const dropText = dropZone.querySelector('.drop-text');
-        dropText.innerHTML = `已选择 <strong>${selectedImages.length}</strong> 个图片`;
-    }
-}
-
-// ===== Tab Switching =====
-
-function showPdfTab() {
-    document.getElementById('docx-tab').style.display = 'none';
-    document.getElementById('fileInput').click();
-}
-
-function showDocxTab() {
-    document.getElementById('docx-tab').style.display = 'block';
-    // Hide PDF-related sections
-    const optionsSection = document.getElementById('optionsSection');
-    const progressSection = document.getElementById('progressSection');
-    const resultSection = document.getElementById('resultSection');
-    const imagePreviewSection = document.getElementById('imagePreviewSection');
-    if (optionsSection) optionsSection.style.display = 'none';
-    if (progressSection) progressSection.style.display = 'none';
-    if (resultSection) resultSection.style.display = 'none';
-    if (imagePreviewSection) imagePreviewSection.style.display = 'none';
-}
-
-// ===== DOCX Upload Handling =====
-
-let selectedDocxFiles = [];
-
-function initDocxUpload() {
-    const dropZone = document.getElementById('docx-drop-zone');
-    const fileInput = document.getElementById('docx-input');
-    const batchInput = document.getElementById('docx-batch-input');
-    const convertBtn = document.getElementById('convert-docx-btn');
-
-    if (!dropZone || !fileInput) return;
-
-    // File selected (single)
-    fileInput.addEventListener('change', (e) => {
-        const files = Array.from(e.target.files).filter(f => f.name.endsWith('.docx'));
-        if (files.length > 0) {
-            handleDocxFilesSelect(files);
-        }
-    });
-
-    // Batch file selected
-    if (batchInput) {
-        batchInput.addEventListener('change', (e) => {
-            const files = Array.from(e.target.files).filter(f => f.name.endsWith('.docx'));
-            if (files.length > 0) {
-                handleDocxFilesSelect(files);
-            }
-        });
-    }
-
-    // Drag and drop
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('drag-over');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('drag-over');
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('drag-over');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.docx'));
-        if (files.length > 0) {
-            handleDocxFilesSelect(files);
-        }
-    });
-
-    // Convert button
-    if (convertBtn) {
-        convertBtn.addEventListener('click', convertDocxToLatex);
-    }
-}
-
-function handleDocxFilesSelect(files) {
-    selectedDocxFiles = files;
-    const dropZone = document.getElementById('docx-drop-zone');
-    const optionsSection = document.getElementById('docxOptionsSection');
-    const dropText = dropZone?.querySelector('.drop-text');
-    const dropSubtitle = dropZone?.querySelector('.drop-text-subtitle');
-
-    if (dropText) {
-        dropText.textContent = files.length === 1
-            ? files[0].name
-            : `已选择 ${files.length} 个文件`;
-    }
-    if (dropSubtitle) {
-        dropSubtitle.textContent = '点击下方"开始转换"按钮进行转换';
-    }
-
-    if (optionsSection) {
-        optionsSection.style.display = 'block';
-    }
-}
-
-function removeDocxFile() {
-    selectedDocxFiles = [];
-    const dropZone = document.getElementById('docx-drop-zone');
-    const optionsSection = document.getElementById('docxOptionsSection');
-    const fileInput = document.getElementById('docx-input');
-    const batchInput = document.getElementById('docx-batch-input');
-    const progressSection = document.getElementById('docx-progress');
-    const dropText = dropZone?.querySelector('.drop-text');
-    const dropSubtitle = dropZone?.querySelector('.drop-text-subtitle');
-
-    if (dropZone) dropZone.style.display = 'block';
-    if (optionsSection) optionsSection.style.display = 'none';
-    if (progressSection) progressSection.style.display = 'none';
-    if (fileInput) fileInput.value = '';
-    if (batchInput) batchInput.value = '';
-    if (dropText) dropText.textContent = '拖拽 Word 文件到此处';
-    if (dropSubtitle) dropSubtitle.textContent = '支持 .docx 格式，可多选';
-}
-
-async function convertDocxToLatex() {
-    if (selectedDocxFiles.length === 0) {
-        showError('请先选择文件');
-        return;
-    }
-
-    const convertBtn = document.getElementById('convert-docx-btn');
-    const progressSection = document.getElementById('docx-progress');
-    const progressText = document.getElementById('docx-progress-text');
-
-    // Disable button and show loading
-    if (convertBtn) {
-        convertBtn.disabled = true;
-        const btnText = convertBtn.querySelector('.btn-text');
-        const btnLoading = convertBtn.querySelector('.btn-loading');
-        if (btnText) btnText.style.display = 'none';
-        if (btnLoading) btnLoading.style.display = 'inline-flex';
-    }
-    if (progressSection) progressSection.style.display = 'block';
-    if (progressText) progressText.textContent = `正在上传和转换 ${selectedDocxFiles.length} 个文件...`;
-
-    const formData = new FormData();
-    selectedDocxFiles.forEach(file => {
-        formData.append('files', file);
-    });
-    formData.append('model', document.getElementById('docx-model-select')?.value || 'deepseek-math');
-    formData.append('template', document.getElementById('docx-template-select')?.value || 'article');
-    formData.append('quality', document.getElementById('docx-quality-select')?.value || 'standard');
-    formData.append('translate', document.getElementById('docx-translate')?.checked ? 'true' : 'false');
-    formData.append('async_mode', document.getElementById('docx-async-option')?.checked ? 'true' : 'false');
-
-    try {
-        const response = await fetch('/api/convert-docx', {
-            method: 'POST',
-            body: formData
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            if (progressText) progressText.textContent = `转换完成！共 ${selectedDocxFiles.length} 个文件`;
-
-            if (result.results && result.results.length > 0) {
-                displayLatexResult(result.results[0].latex, result.results[0].download_url);
-            } else {
-                displayLatexResult(result.latex, result.download_url);
-            }
-
-            setTimeout(() => {
-                removeDocxFile();
-            }, 1500);
-        } else {
-            throw new Error(result.error || '转换失败');
-        }
-    } catch (error) {
-        showError('转换失败: ' + error.message);
-    } finally {
-        // Re-enable button
-        if (convertBtn) {
-            convertBtn.disabled = false;
-            const btnText = convertBtn.querySelector('.btn-text');
-            const btnLoading = convertBtn.querySelector('.btn-loading');
-            if (btnText) btnText.style.display = 'inline-flex';
-            if (btnLoading) btnLoading.style.display = 'none';
-        }
-        if (progressSection) progressSection.style.display = 'none';
-    }
-}
-
-// 设置粘贴图片功能
-function setupPasteImage() {
-    document.addEventListener('paste', handlePaste);
-}
-
-// 处理粘贴事件
-function handlePaste(event) {
-    const items = event.clipboardData?.items;
-    if (!items) return;
-    
-    for (let item of items) {
-        if (item.type.indexOf('image') !== -1) {
-            event.preventDefault();
-            const blob = item.getAsFile();
-            
-            // 创建File对象
-            const timestamp = new Date().getTime();
-            const file = new File([blob], `screenshot_${timestamp}.png`, { type: 'image/png' });
-            
-            selectedFile = file;
-            selectedFiles = [];
-            selectedImages = [file];
-            isImageMode = true;
-            isBatchMode = false;
-            
-            // 更新拖放区域提示
-            const dropText = dropZone.querySelector('.drop-text');
-            dropText.innerHTML = `已粘贴截图: <strong>${file.name}</strong>`;
-            dropText.style.color = 'var(--success-color)';
-            
-            displayImagePreview([file]);
-            
-            // 显示转换选项
-            optionsSection.style.display = 'block';
-            
-            // 显示OCR引擎选择
-            const ocrGroup = document.getElementById('ocrProviderGroup');
-            if (ocrGroup) {
-                ocrGroup.style.display = 'block';
-            }
-            
-            // 隐藏页码选项
-            const pagesGroup = document.querySelector('#pagesInput')?.closest('.option-group');
-            if (pagesGroup) {
-                pagesGroup.style.display = 'none';
-            }
-            
-            // 提示用户
-            const pasteHint = document.getElementById('pasteHint');
-            if (pasteHint) {
-                pasteHint.style.display = 'block';
-                pasteHint.textContent = '截图已粘贴';
-                setTimeout(() => {
-                    pasteHint.style.display = 'none';
-                }, 3000);
-            }
-            
-            break;
-        }
-    }
-}
-
-// 开始图片转换
-async function startImageConversion() {
-    if (!selectedFile) {
-        alert('请先选择图片');
-        return;
-    }
-    
-    // 隐藏结果和错误，显示进度
-    optionsSection.style.display = 'none';
-    progressSection.style.display = 'block';
-    resultSection.style.display = 'none';
-    errorSection.style.display = 'none';
-    tokenStats.style.display = 'none';
-    
-    // 重置并显示终端日志
-    const terminalLog = document.getElementById('terminalLog');
-    const terminalBody = document.getElementById('terminalBody');
-    if (terminalLog) terminalLog.style.display = 'block';
-    if (terminalBody) terminalBody.innerHTML = '';
-    
-    const timestamp = Date.now();
-    currentTaskId = `task_${timestamp}`;
-    currentPhaseRank = 0;
-    resetPhaseProgress(document.getElementById('translateOption').checked);
-    if (socket) {
-        socket.emit('join_task', { task_id: currentTaskId });
-    }
-    addTerminalLog('info', `开始图片转换任务: ${currentTaskId}`);
-    
-    // 初始化进度
-    updateProgress({
-        percent: 0,
-        current: 0,
-        total: 100,
-        message: '准备识别图片...',
-        status: 'preparing'
-    });
-    
-    const formData = new FormData();
-    formData.append('task_id', currentTaskId);
-    formData.append('file', selectedFile);
-    const options = collectCommonOptions();
-    formData.append('model', options.model);
-    formData.append('template', options.template);
-    formData.append('quality_mode', options.quality_mode);
-    formData.append('translate', document.getElementById('translateOption').checked);
-    formData.append('ocr_provider', document.getElementById('ocrProviderSelect')?.value || 'mixed');
-    formData.append('add_document_wrapper', document.getElementById('wrapperOption').checked);
-    
-    try {
-        const response = await fetch('/api/convert-image', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const result = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(result.error || '转换失败');
-        }
-        
-        // 转换成功，等待WebSocket进度完成后再显示结果
-        // showResult 会在 WebSocket 'completed' 状态时调用
-        
-    } catch (error) {
-        console.error('转换失败:', error);
-        showError(error.message);
-    }
-}
-
-// 开始批量图片转换
-async function startBatchImageConversion() {
-    if (!selectedImages || selectedImages.length === 0) {
-        alert('请先选择图片');
-        return;
-    }
-    
-    // 隐藏结果和错误，显示进度
-    optionsSection.style.display = 'none';
-    progressSection.style.display = 'block';
-    resultSection.style.display = 'none';
-    errorSection.style.display = 'none';
-    tokenStats.style.display = 'none';
-    
-    // 重置并显示终端日志
-    const terminalLog = document.getElementById('terminalLog');
-    const terminalBody = document.getElementById('terminalBody');
-    if (terminalLog) terminalLog.style.display = 'block';
-    if (terminalBody) terminalBody.innerHTML = '';
-    
-    const timestamp = Date.now();
-    currentTaskId = `task_${timestamp}`;
-    currentPhaseRank = 0;
-    if (socket) {
-        socket.emit('join_task', { task_id: currentTaskId });
-    }
-    addTerminalLog('info', `开始批量图片转换任务: ${currentTaskId} (共 ${selectedImages.length} 张)`);
-    
-    // 初始化进度
-    updateProgress({
-        percent: 0,
-        current: 0,
-        total: selectedImages.length,
-        message: `准备识别 ${selectedImages.length} 张图片...`,
-        status: 'preparing'
-    });
-    
-    const formData = new FormData();
-    formData.append('task_id', currentTaskId);
-    selectedImages.forEach(file => {
-        formData.append('files', file);
-    });
-    const options = collectCommonOptions();
-    formData.append('model', options.model);
-    formData.append('template', options.template);
-    formData.append('quality_mode', options.quality_mode);
-    formData.append('translate', document.getElementById('translateOption').checked);
-    formData.append('ocr_provider', document.getElementById('ocrProviderSelect')?.value || 'mixed');
-    formData.append('add_document_wrapper', document.getElementById('wrapperOption').checked);
-    
-    try {
-        const response = await fetch('/api/convert-images', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const result = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(result.error || '批量转换失败');
-        }
-        
-        // 批量转换成功
-        addTerminalLog('success', `批量转换完成，共处理 ${result.successful_images} 张图片`);
-        
-    } catch (error) {
-        console.error('批量转换失败:', error);
-        showError(error.message);
-    }
-}
-
-
-

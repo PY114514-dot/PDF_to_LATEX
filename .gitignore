@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 *.egg-info/
 dist/
@@ -31,6 +32,10 @@ task_store.json
 *.swp
 *.swo
 *~
+
+# Local helper scripts and tool settings
+install_tesseract.ps1
+.claude/settings.local.json
 
 # 操作系统
 .DS_Store

@@ -15,6 +15,12 @@ sys.path.insert(0, str(backend_dir))
 from document_parser import PDFDocumentParser
 
 
+def test_normalize_text_removes_unmapped_cid_glyphs():
+    parser = PDFDocumentParser()
+
+    assert parser._normalize_text("Body (cid:4) text") == "Body  text"
+
+
 class TestIsPaginationLine:
     """测试 _is_pagination_line 函数"""
 

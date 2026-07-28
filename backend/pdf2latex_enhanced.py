@@ -16,10 +16,16 @@ from dotenv import load_dotenv
 from document_parser import PDFDocumentParser
 from clients import (
     deepseek_v4_flash,
-    LLMClient
+    deepseek_v4_pro,
+    LLMClient,
+    InsufficientBalanceError,
 )
 from config import settings
-from latex_utils import sanitize_latex_body, wrap_with_template, split_references_section
+from costs import calculate_llm_cost
+from latex_utils import (
+    sanitize_latex_body, split_references_section, validate_latex_page,
+    wrap_with_template, stitch_cross_page_formula_fragments,
+)
 from logger import get_module_logger
 
 load_dotenv()
@@ -30,25 +36,45 @@ logger = get_module_logger(__name__)
 
 class PDF2LaTeXEnhanced:
     """PDF到LaTeX转换器 - 增强版，支持多种LLM模型"""
+    MAX_CHARS_PER_BATCH = 80000
     
     # 模型映射表
     MODEL_MAP = {
-        'deepseek_v4_flash': deepseek_v4_flash
+        'deepseek_v4_flash': deepseek_v4_flash,
+        'deepseek_v4_pro': deepseek_v4_pro,
     }
     
-    def __init__(self, model: str = "deepseek_v4_flash", translation_prompt: str = ""):
+    def __init__(
+        self, model: str = "deepseek_v4_flash", translation_prompt: str = "",
+        api_key: str = "", reasoning_effort: str = "",
+    ):
         """
         初始化PDF2LaTeX转换器
         
         Args:
             model: 模型名称，可选值：
                 - deepseek_v4_flash: DeepSeek V4 Flash 最新模型
+                - deepseek_v4_pro: DeepSeek V4 Pro，高质量模式推荐
         """
         if model not in self.MODEL_MAP:
             raise ValueError(f"不支持的模型: {model}。支持的模型: {list(self.MODEL_MAP.keys())}")
         
         self.model_name = model
-        self.client = self.MODEL_MAP[model]
+        configured_client = self.MODEL_MAP[model]
+        # 用户提供的密钥只用于本次转换。不要写入任务历史、日志或磁盘。
+        if api_key.strip() or reasoning_effort.strip():
+            extra_params = dict(configured_client.default_extra_params)
+            if reasoning_effort.strip():
+                extra_params['reasoning_effort'] = reasoning_effort.strip()
+            self.client = LLMClient(
+                api_key=api_key.strip() or configured_client.api_key,
+                base_url=configured_client.base_url,
+                model=configured_client.model,
+                timeout=configured_client.timeout,
+                default_extra_params=extra_params,
+            )
+        else:
+            self.client = configured_client
         self.translation_prompt = translation_prompt.strip()
         self.document_parser = PDFDocumentParser(
             quality_fn=self._check_text_quality,
@@ -78,7 +104,10 @@ class PDF2LaTeXEnhanced:
             tokens = {
                 'prompt_tokens': self.prompt_tokens,
                 'completion_tokens': self.completion_tokens,
-                'total_tokens': self.total_tokens
+                'total_tokens': self.total_tokens,
+                'cost': calculate_llm_cost(
+                    self.model_name, self.prompt_tokens, self.completion_tokens
+                ),
             }
             self.progress_callback(status, current, total, message, log_type, log_message, tokens)
 
@@ -157,6 +186,28 @@ class PDF2LaTeXEnhanced:
         if text:
             return f"{text}{marker}{page_tables_context}"
         return f"[STRUCTURED_TABLE_CONTEXT]\n{page_tables_context}"
+
+    def _has_algorithm_structure(self, text: str) -> bool:
+        """保守识别论文中的伪代码块，避免把普通编号列表误判为算法。"""
+        if not text:
+            return False
+        normalized = re.sub(r"\s+", " ", text)
+        has_title = bool(re.search(r"\balgorithm\s*\d+\b|算法\s*\d+", normalized, re.IGNORECASE))
+        has_control = bool(re.search(
+            r"\b(?:input|output|require|ensure|initialize|initialise|while|for|if|then|return|end)\b|"
+            r"(?:输入|输出|初始化|当|循环|如果|则|返回|结束)",
+            normalized,
+            re.IGNORECASE,
+        ))
+        # 标题是必要条件；再要求至少一个控制/初始化信号，降低章节列表误判率。
+        return has_title and has_control
+
+    def _attach_algorithm_context(self, page_text: str) -> str:
+        """给算法页加入轻量语义标记，交由 LaTeX 转换阶段恢复伪代码环境。"""
+        text = (page_text or "").strip()
+        if not text or '[ALGORITHM_CONTEXT]' in text or not self._has_algorithm_structure(text):
+            return text
+        return f"[ALGORITHM_CONTEXT]\n{text}"
 
     def _is_pagination_line(self, line: str, page_num: int, total_pages: int) -> bool:
         """判断一行文本是否是页码/页眉页脚中的分页噪声。"""
@@ -238,68 +289,14 @@ class PDF2LaTeXEnhanced:
         display_page_num: Optional[int] = None,
         display_total_pages: Optional[int] = None,
     ) -> str:
-        """翻译文本"""
-        display_page_num = page_num if display_page_num is None else display_page_num
-        display_total_pages = total_pages if display_total_pages is None else display_total_pages
-        main_text, refs_text = split_references_section(text)
-        if not main_text.strip():
-            # 整页为参考文献时保持原文，避免错误翻译作者名/刊名等。
-            return text.strip()
-
-        system_prompt = """你是一个专业的学术翻译助手。将英文学术文档翻译成中文。
-
-    要求：
-    1. 保持学术性和专业性
-    2. 数学公式、符号、变量名保持原样
-    3. 专业术语使用准确的中文翻译
-    4. 保持原文段落结构
-    5. 翻译流畅自然
-    6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
-    7. 如果参考文献在原文已经是中文，保留其中文内容不变
-    8. 只输出翻译后的文本
-    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\\begin{multicols}{2}\n<翻译内容>\n\\end{multicols}"""
-        system_prompt += self._compose_translation_guidance()
-
-        user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
-注意：如果以下文本包含参考文献部分（以 [数字] 编号的条目），请勿翻译这些文献条目，保持英文原样。
-
-{main_text}
-
-参考文献条目必须保持英文，不翻译作者名、标题、期刊名。"""
-
-        try:
-            self._emit_progress(
-                'translating',
-                page_num,
-                total_pages,
-                f'正在翻译第 {display_page_num + 1}/{display_total_pages} 页...'
-            )
-            
-            # 使用异步客户端
-            response = asyncio.run(self.client.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,
-                max_tokens=4000
-            ))
-            
-            # 统计Token
-            if 'usage' in response:
-                usage = response['usage']
-                self.prompt_tokens += usage.get('prompt_tokens', 0)
-                self.completion_tokens += usage.get('completion_tokens', 0)
-                self.total_tokens += usage.get('total_tokens', 0)
-            
-            # 提取内容
-            content = LLMClient.extract_content(response).strip()
-            if refs_text.strip():
-                return f"{content}\n\n{refs_text.strip()}"
-            return content
-            
-        except Exception as e:
-            raise Exception(f"翻译失败: {str(e)}")
+        """Synchronously translate text through the canonical async implementation."""
+        return asyncio.run(self.translate_text_async(
+            text,
+            page_num,
+            total_pages,
+            display_page_num=display_page_num,
+            display_total_pages=display_total_pages,
+        ))
 
     async def translate_batch_async(
         self,
@@ -329,6 +326,19 @@ class PDF2LaTeXEnhanced:
                 chunk_texts, chunk_info, display_total,
             )
             results.extend(chunk_results)
+            translated_pages = {page for page, translated in chunk_results if translated.strip()}
+            missing_indices = [
+                idx for idx, (page, _display_idx) in enumerate(chunk_info)
+                if idx < len(chunk_texts) and chunk_texts[idx].strip() and page not in translated_pages
+            ]
+            if missing_indices:
+                missing_pages = [chunk_info[idx][0] + 1 for idx in missing_indices]
+                logger.warning("批量翻译响应缺页 %s，改为逐页补译", missing_pages)
+                results.extend(await self._fallback_translate_pages(
+                    [chunk_texts[idx] for idx in missing_indices],
+                    [chunk_info[idx] for idx in missing_indices],
+                    display_total,
+                ))
         return results
 
     def _chapter_aware_active(self) -> bool:
@@ -464,7 +474,8 @@ class PDF2LaTeXEnhanced:
 7. 如果参考文献在原文已经是中文，保留其中文内容不变
 8. [PAGE X] 标记表示这是第X页，保留这些标记在输出中
 9. [DUPLICATE_HEADER] 和 [DUPLICATE_FOOTER] 标记的内容是页眉页脚，通常不需要翻译（或只翻译一次）
-10. 只输出翻译后的文本，不要解释"""
+10. [ALGORITHM_CONTEXT] 表示该页含伪代码；必须原样保留此标记，并翻译其自然语言内容
+11. 只输出翻译后的文本，不要解释"""
 
         user_prompt = f"""请将以下多页学术文本翻译成中文（第 {display_total} 页中的 {len(chunk_info)} 页）：
 
@@ -722,11 +733,9 @@ class PDF2LaTeXEnhanced:
         pages_content = re.split(r'\[PAGE\s+(\d+)\]', content)
 
         if len(pages_content) <= 1:
-            # 没有明确的PAGE标记，按双换行分割
-            pages = content.split('\n\n')
-            for idx, (original_page, _display_idx) in enumerate(chunk_info):
-                page_content = pages[idx] if idx < len(pages) else (pages[0] if pages else content)
-                results.append((original_page, page_content.strip()))
+            # 段落数和页数没有可靠对应关系。此前按空行硬切会导致英文原文被
+            # 静默送入后续“已翻译”转换流程；返回空，让调用方逐页补译。
+            logger.warning("批量翻译响应缺少 PAGE 标记，拒绝按段落猜测页映射")
             return results
 
         # pages_content[0]是前缀，[1]=页码1, [2]=内容1, [3]=页码2, [4]=内容2, ...
@@ -740,8 +749,11 @@ class PDF2LaTeXEnhanced:
             page_content = re.sub(r'\[DUPLICATE_HEADER\].*?\[/DUPLICATE_HEADER\]', '', page_content)
             page_content = re.sub(r'\[DUPLICATE_FOOTER\].*?\[/DUPLICATE_FOOTER\]', '', page_content)
 
-            # page_num是1-based，需要转回0-based
-            results.append((page_num - 1, page_content.strip()))
+            # 只接受当前块请求的页，防止模型生成幻觉页码污染映射。
+            original_page = page_num - 1
+            requested_pages = {page for page, _display_idx in chunk_info}
+            if original_page in requested_pages and page_content.strip():
+                results.append((original_page, page_content.strip()))
 
         return results
 
@@ -756,6 +768,8 @@ class PDF2LaTeXEnhanced:
         """异步翻译文本"""
         display_page_num = page_num if display_page_num is None else display_page_num
         display_total_pages = total_pages if display_total_pages is None else display_total_pages
+        # Column markers are extraction metadata, not output-layout commands.
+        text = text.replace('[TWO_COLUMN_PAGE]', '')
         main_text, refs_text = split_references_section(text)
         if not main_text.strip():
             return text.strip()
@@ -771,7 +785,7 @@ class PDF2LaTeXEnhanced:
     6. **绝对禁止翻译参考文献条目**（包括 [10]、[11] 等编号格式的文献），保持英文原样：作者名、论文标题、期刊名、会议名、出版社全部保持原文
     7. 如果参考文献在原文已经是中文，保留其中文内容不变
     8. 只输出翻译后的文本
-    9. 如果文本包含 [TWO_COLUMN_PAGE] 标记，表示这是双栏排版页面，翻译后应输出：\n\\begin{multicols}{2}\n<翻译内容>\n\\end{multicols}"""
+    9. 忽略任何页面布局标记；只翻译文本，不生成任何 LaTeX 排版环境或命令。"""
         system_prompt += self._compose_translation_guidance()
 
         user_prompt = f"""请将以下英文学术文本翻译成中文（第 {display_page_num + 1}/{display_total_pages} 页）：
@@ -822,6 +836,8 @@ class PDF2LaTeXEnhanced:
 3. 不新增解释文字
 4. 仅输出修复后的 LaTeX 正文"""
 
+        system_prompt += "\n\nKeep the output single-column. Do not add, preserve, or rewrite any page-layout command such as \\vspace, \\newpage, \\pagebreak, or multicols."
+
         user_prompt = f"""请修复以下 LaTeX 正文（第 {page_num + 1}/{total_pages} 页）：
 
 {latex_content}
@@ -844,6 +860,246 @@ class PDF2LaTeXEnhanced:
 
         return LLMClient.extract_content(response).strip()
 
+    def _should_use_local_latex(self, quality_mode: str) -> bool:
+        return (
+            getattr(settings, 'ENABLE_LOCAL_LATEX_CONVERSION', True)
+            and quality_mode != 'high'
+        )
+
+    def _escape_latex_text(self, text: str) -> str:
+        replacements = {
+            '\\': r'\textbackslash{}',
+            '&': r'\&',
+            '%': r'\%',
+            '$': r'\$',
+            '#': r'\#',
+            '_': r'\_',
+            '{': r'\{',
+            '}': r'\}',
+            '~': r'\textasciitilde{}',
+            '^': r'\textasciicircum{}',
+        }
+        return ''.join(replacements.get(ch, ch) for ch in text)
+
+    def _escape_text_preserving_inline_math(self, text: str) -> str:
+        r"""Escape prose while preserving complete ``\( ... \)`` expressions."""
+        # A translated paragraph commonly contains small inline expressions such
+        # as ``\(A\)`` or ``\(i^* = 1\)``. Escaping its backslashes turns it
+        # into ``\textbackslash{}(``, which is neither LaTeX nor KaTeX math.
+        # Keep only complete, single-line delimiters; malformed ones remain text
+        # and are safely escaped.
+        parts = re.split(r'(\\\([^\r\n]*?\\\))', text)
+        return ''.join(
+            part if index % 2 else self._escape_latex_text(part)
+            for index, part in enumerate(parts)
+        )
+
+    def _looks_like_latex_or_math(self, line: str) -> bool:
+        s = line.strip()
+        if not s:
+            return False
+
+        # A LaTeX command or an explicit delimiter is an unambiguous signal.
+        # Do not treat every underscore or percent sign as math: they are common
+        # in prose and should be escaped as text instead of put in display math.
+        if re.fullmatch(r'\\\([^\r\n]+?\\\)', s):
+            return True
+        if re.search(r'\\[a-zA-Z]+|\\\[|\\begin\{|\$[^$]+\$', s):
+            return True
+
+        # A sentence containing inline math is still prose. It must remain a
+        # paragraph so the inline delimiter can be rendered in place.
+        if re.search(r'\\\([^\r\n]*?\\\)', s):
+            return False
+
+        # Do not promote a fragment left by PDF extraction (for example ``√``
+        # or ``√ √``) to an equation.  A Unicode symbol needs equation context.
+        if re.fullmatch(r'[√∑∫∏±∓≈≠≤≥=+\-*/·.,:;()\[\]{}|\s]+', s):
+            return False
+        if re.search(r'[∑∫√≤≥≈∞α-ωΑ-Ω]', s):
+            has_equation_context = bool(re.search(r'[A-Za-z0-9]|[_^=+\-*/]', s))
+            if has_equation_context and (len(re.findall(r'[A-Za-z0-9]', s)) >= 2 or '=' in s):
+                return True
+
+        # Recognise compact equations, but never classify a prose sentence just
+        # because it contains an equals sign. PDF extraction often drops spaces,
+        # so this check deliberately requires a small number of word-like terms.
+        compact = re.sub(r'\s+', ' ', s)
+        if re.fullmatch(r'[A-Za-z](?:_[A-Za-z0-9]+)?(?:\^[A-Za-z0-9{}+-]+)?', compact):
+            return True
+        if not re.fullmatch(
+            r'[A-Za-z0-9_{}().,+\-*/^ ]+\s*(?:=|<=|>=|<|>)\s*[A-Za-z0-9_{}().,+\-*/^ ]+',
+            compact,
+        ):
+            return False
+        word_terms = re.findall(r'[A-Za-z]{2,}', compact)
+        return (
+            len(word_terms) <= 2
+            and not any(len(term) > 16 for term in word_terms)
+            and not re.search(r'[;:!?]', compact)
+        )
+
+    def _format_math_line(self, line: str) -> str:
+        s = line.strip()
+        if re.match(r'^(\\begin\{|\\end\{|\\\[|\\\]|\\\(|\\\)|\$)', s):
+            return s
+        if re.fullmatch(r'[√∑∫∏±∓≈≠≤≥=+\-*/·.,:;()\[\]{}|\s]+', s):
+            return ''
+        if re.search(r'[$^_=]|\\[a-zA-Z]+', s):
+            return "\\[\n" + s + "\n\\]"
+        if re.search(r'[∑∫√≤≥≈∞α-ωΑ-Ω]', s) and re.search(r'[A-Za-z0-9]', s):
+            return "\\[\n" + s + "\n\\]"
+        return s
+
+    def _is_formula_line_continuation(self, previous: str, following: str) -> bool:
+        """Recognise a PDF line wrap only when the mathematical join is explicit."""
+        previous = (previous or '').strip()
+        following = (following or '').strip()
+        if not previous or not following:
+            return False
+        unfinished = bool(
+            re.search(r'(?:[=+*/^_({\[]|\\(?:frac|sum|int|prod|left))\s*$', previous)
+            or previous.count('{') > previous.count('}')
+            or previous.count('(') > previous.count(')')
+            or previous.count('[') > previous.count(']')
+        )
+        if not unfinished:
+            return False
+        return bool(re.match(r'^(?:[+*/=,)}\]]|\\[A-Za-z]+|[A-Za-z0-9({[])', following))
+
+    def _format_math_block(self, lines: List[str]) -> str:
+        """Join proven wrapped formulas and break only long top-level expressions."""
+        formula = ' '.join(line.strip() for line in lines if line.strip())
+        if not formula:
+            return ''
+        if len(formula) <= 140:
+            return self._format_math_line(formula)
+
+        # Break only after a top-level binary operator. This keeps braces and
+        # LaTeX commands intact rather than guessing a syntactic reconstruction.
+        breakpoints: List[int] = []
+        brace_depth = paren_depth = bracket_depth = 0
+        for index, char in enumerate(formula):
+            if char == '{':
+                brace_depth += 1
+            elif char == '}':
+                brace_depth = max(0, brace_depth - 1)
+            elif char == '(':
+                paren_depth += 1
+            elif char == ')':
+                paren_depth = max(0, paren_depth - 1)
+            elif char == '[':
+                bracket_depth += 1
+            elif char == ']':
+                bracket_depth = max(0, bracket_depth - 1)
+            elif char in '+-' and brace_depth == paren_depth == bracket_depth == 0:
+                if index > 0 and formula[index - 1] not in '^_':
+                    breakpoints.append(index + 1)
+
+        pieces: List[str] = []
+        start = 0
+        target_width = 110
+        while len(formula) - start > 140:
+            candidates = [point for point in breakpoints if start + 30 <= point <= start + target_width]
+            if not candidates:
+                break
+            point = candidates[-1]
+            pieces.append(formula[start:point].strip())
+            start = point
+        pieces.append(formula[start:].strip())
+        if len(pieces) == 1:
+            return self._format_math_line(formula)
+
+        aligned_lines = ['& ' + pieces[0] + r' \\']
+        aligned_lines.extend(r'&\quad ' + piece + r' \\' for piece in pieces[1:-1])
+        aligned_lines.append(r'&\quad ' + pieces[-1])
+        return '\\[\n\\begin{aligned}\n' + '\n'.join(aligned_lines) + '\n\\end{aligned}\n\\]'
+
+    def _looks_like_heading(self, line: str) -> bool:
+        s = line.strip()
+        if len(s) > 90 or s.endswith(('.', ',', ';', ':')):
+            return False
+        return bool(
+            re.match(r'^(chapter|section)\s+\d+[\s:.-]+\S+', s, re.IGNORECASE)
+            or re.match(r'^\d+(?:\.\d+){0,3}\.?\s+\S+', s)
+            or re.match(r'^(摘要|引言|结论|参考文献|bibliography|references)\b', s, re.IGNORECASE)
+        )
+
+    def _convert_structured_table_context(self, text: str) -> str:
+        rows = []
+        for line in text.splitlines():
+            match = re.match(r'\s*ROW\s+\d+\s*:\s*(.+)$', line, re.IGNORECASE)
+            if not match:
+                continue
+            cells = [self._escape_latex_text(cell.strip() or '--') for cell in match.group(1).split('|')]
+            if cells:
+                rows.append(cells)
+        if not rows:
+            return ''
+
+        max_cols = max(len(row) for row in rows)
+        normalized = [row + ['--'] * (max_cols - len(row)) for row in rows]
+        col_spec = '|' + '|'.join(['l'] * max_cols) + '|'
+        body = ['\\begin{tabular}{' + col_spec + '}', '\\hline']
+        for row in normalized:
+            body.append(' & '.join(row) + r' \\')
+            body.append('\\hline')
+        body.append('\\end{tabular}')
+        return '\n'.join(body)
+
+    def _local_text_to_latex(self, text: str) -> str:
+        text = text.replace('[TWO_COLUMN_PAGE]', '').strip()
+
+        table_latex = ''
+        if '[STRUCTURED_TABLE_CONTEXT]' in text:
+            text, table_context = text.split('[STRUCTURED_TABLE_CONTEXT]', 1)
+            table_latex = self._convert_structured_table_context(table_context)
+
+        blocks = []
+        paragraph = []
+        math_lines: List[str] = []
+
+        def flush_paragraph():
+            if paragraph:
+                blocks.append(' '.join(paragraph).strip())
+                paragraph.clear()
+
+        def flush_math_lines():
+            if math_lines:
+                blocks.append(self._format_math_block(math_lines))
+                math_lines.clear()
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                flush_paragraph()
+                flush_math_lines()
+                continue
+            if line.startswith('[') and line.endswith(']'):
+                continue
+            if self._looks_like_heading(line):
+                flush_paragraph()
+                flush_math_lines()
+                blocks.append(r'\section*{' + self._escape_latex_text(line) + '}')
+            elif self._looks_like_latex_or_math(line) or (
+                math_lines and self._is_formula_line_continuation(math_lines[-1], line)
+            ):
+                flush_paragraph()
+                if math_lines and not self._is_formula_line_continuation(math_lines[-1], line):
+                    flush_math_lines()
+                math_lines.append(line)
+            else:
+                flush_math_lines()
+                paragraph.append(self._escape_text_preserving_inline_math(line))
+
+        flush_paragraph()
+        flush_math_lines()
+        if table_latex:
+            blocks.append(table_latex)
+
+        latex = '\n\n'.join(block for block in blocks if block.strip())
+        return latex
+
     def convert_text_to_latex(
         self,
         text: str,
@@ -851,97 +1107,21 @@ class PDF2LaTeXEnhanced:
         total_pages: int,
         translate: bool = False,
         quality_mode: str = 'standard',
+        force_llm: bool = False,
         display_page_num: Optional[int] = None,
         display_total_pages: Optional[int] = None,
     ) -> str:
-        """转换文本为LaTeX"""
-        display_page_num = page_num if display_page_num is None else display_page_num
-        display_total_pages = total_pages if display_total_pages is None else display_total_pages
-        # 检查文本质量
-        quality = self._check_text_quality(text)
-        logger.info(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
-        
-        # 如果文本为空或质量太低，提示用户
-        if not text.strip():
-            logger.warning(f"第 {page_num + 1} 页没有提取到文本，可能是扫描版PDF")
-            return f"% 警告：第 {page_num + 1} 页无法提取文本\n% 这可能是扫描版PDF，建议使用OCR工具处理\n"
-        
-        if quality < 0.3:
-            logger.warning(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量较低 ({quality:.2f})，可能包含乱码")
-        
-        if translate:
-            text = self.translate_text(
-                text,
-                page_num,
-                total_pages,
-                display_page_num=display_page_num,
-                display_total_pages=display_total_pages,
-            )
-        
-        system_prompt = """你是一个专业的LaTeX转换助手。将文本转换为规范的LaTeX格式。
-
-要求：
-1. 识别数学公式，使用LaTeX数学环境
-2. 识别文本结构，使用对应的LaTeX命令
-3. 对于中文内容，直接使用中文字符
-4. **不要输出\\documentclass, \\begin{document}, \\end{document}等文档结构**
-5. **不要输出\\usepackage等导言区命令**
-    6. **不要输出\\begin{theorem}/\\begin{lemma}/\\begin{proof}等需额外宏包或定理环境的结构，改为普通段落或使用\\textbf{}做标题**
-    7. 若输入中存在 [STRUCTURED_TABLE_CONTEXT] 或 [TABLE n] 片段，必须优先还原为完整表格环境（建议 tabular）
-    8. 每个表格行列数必须一致；缺失单元格用 -- 占位，禁止省略列
-    9. 暂不处理图片内容；遇到 Figure/Fig./图像描述可保留为普通文本，禁止臆造 figure 环境
-    10. 参考文献部分（References/Bibliography/参考文献）必须保持原文语言，不得翻译作者名、标题、刊名
-    11. 只输出正文内容的LaTeX代码
-12. 如果文本包含 [TWO_COLUMN_PAGE] 标记，必须用 \\begin{multicols}{2} 和 \\end{multicols} 包裹正文内容"""
-
-        user_prompt = f"""请将以下文本转换为LaTeX格式（第 {display_page_num + 1}/{display_total_pages} 页）：
-
-{text}
-
-    只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。
-
-    特别要求：如果看到 [STRUCTURED_TABLE_CONTEXT]，请据此还原完整表格，确保每行列数一致。"""
-
-        try:
-            self._emit_progress(
-                'converting',
-                page_num,
-                total_pages,
-                f'正在转换第 {display_page_num + 1}/{display_total_pages} 页为LaTeX...'
-            )
-            
-            # 使用异步客户端
-            response = asyncio.run(self.client.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,
-                max_tokens=4000
-            ))
-            
-            # 统计Token
-            if 'usage' in response:
-                usage = response['usage']
-                self.prompt_tokens += usage.get('prompt_tokens', 0)
-                self.completion_tokens += usage.get('completion_tokens', 0)
-                self.total_tokens += usage.get('total_tokens', 0)
-            
-            # 提取内容
-            content = LLMClient.extract_content(response)
-            latex_content = content.strip()
-            latex_content = self._clean_document_structure(latex_content)
-            latex_content = sanitize_latex_body(latex_content)
-
-            if quality_mode == 'high':
-                latex_content = asyncio.run(self._refine_latex_quality_async(latex_content, page_num, total_pages))
-                latex_content = self._clean_document_structure(latex_content)
-                latex_content = sanitize_latex_body(latex_content)
-
-            return latex_content
-            
-        except Exception as e:
-            raise Exception(f"转换失败: {str(e)}")
+        """Synchronously convert text through the canonical async implementation."""
+        return asyncio.run(self.convert_text_to_latex_async(
+            text,
+            page_num,
+            total_pages,
+            translate=translate,
+            quality_mode=quality_mode,
+            force_llm=force_llm,
+            display_page_num=display_page_num,
+            display_total_pages=display_total_pages,
+        ))
 
     async def convert_text_to_latex_async(
         self,
@@ -950,12 +1130,14 @@ class PDF2LaTeXEnhanced:
         total_pages: int,
         translate: bool = False,
         quality_mode: str = 'standard',
+        force_llm: bool = False,
         display_page_num: Optional[int] = None,
         display_total_pages: Optional[int] = None,
     ) -> str:
         """异步转换文本为LaTeX"""
         display_page_num = page_num if display_page_num is None else display_page_num
         display_total_pages = total_pages if display_total_pages is None else display_total_pages
+        text = text.replace('[TWO_COLUMN_PAGE]', '')
         quality = self._check_text_quality(text)
         logger.info(f"第 {display_page_num + 1}/{display_total_pages} 页文本质量: {quality:.2f}, 长度: {len(text)}")
 
@@ -975,6 +1157,15 @@ class PDF2LaTeXEnhanced:
                 display_total_pages=display_total_pages,
             )
 
+        if self._should_use_local_latex(quality_mode) and not force_llm:
+            self._emit_progress(
+                'converting',
+                page_num,
+                total_pages,
+                f'正在本地转换第 {display_page_num + 1}/{display_total_pages} 页为 LaTeX...'
+            )
+            return sanitize_latex_body(self._local_text_to_latex(text))
+
         system_prompt = """你是一个专业的LaTeX转换助手。将文本转换为规范的LaTeX格式。
 
 要求：
@@ -989,7 +1180,10 @@ class PDF2LaTeXEnhanced:
 9. 暂不处理图片内容；遇到 Figure/Fig./图像描述可保留为普通文本，禁止臆造 figure 环境
 10. 参考文献部分（References/Bibliography/参考文献）必须保持原文语言，不得翻译作者名、标题、刊名
 11. 只输出正文内容的LaTeX代码
-12. 如果文本包含 [TWO_COLUMN_PAGE] 标记，必须用 \\begin{multicols}{2} 和 \\end{multicols} 包裹正文内容"""
+12. 输出必须是单栏正文；禁止使用 \\begin{multicols}、\\vspace、\\newpage 或任何页面布局命令。
+13. 只将纯数学表达式放入 \\[...\\] 或其他数学环境；解释性正文、中文句子、标题和作者信息不得放入数学环境。
+14. 数学环境不得嵌套，且每个 \\[ 必须有一个对应的 \\]。无法可靠恢复的公式碎片保留为普通文本，禁止输出孤立的 √、=、- 等符号。
+15. 若输入含 [ALGORITHM_CONTEXT]，它是论文伪代码，不是普通表格或编号列表。必须输出 `\\begin{algorithm}`、`\\caption{...}`、`\\begin{algorithmic}[1]` 和对应的 `\\end`；用 `\\Require`/`\\Ensure`、`\\State`、`\\While`/`\\EndWhile`、`\\For`/`\\EndFor`、`\\If`/`\\EndIf`、`\\Return` 还原明确的控制结构。看不清的步骤保留为 `\\State` 文本，禁止臆造控制流。"""
 
         user_prompt = f"""请将以下文本转换为LaTeX格式（第 {display_page_num + 1}/{display_total_pages} 页）：
 
@@ -997,7 +1191,7 @@ class PDF2LaTeXEnhanced:
 
 只输出LaTeX内容代码，不要包含文档结构或定理/引理/证明环境。
 
-特别要求：如果看到 [STRUCTURED_TABLE_CONTEXT]，请据此还原完整表格，确保每行列数一致。"""
+特别要求：如果看到 [STRUCTURED_TABLE_CONTEXT]，请据此还原完整表格，确保每行列数一致；如果看到 [ALGORITHM_CONTEXT]，请按 algorithm + algpseudocode 伪代码环境输出。"""
 
         try:
             self._emit_progress(
@@ -1052,7 +1246,34 @@ class PDF2LaTeXEnhanced:
         latex_content = re.sub(r'\n{3,}', '\n\n', latex_content)
         
         return latex_content.strip()
-    
+
+    def _find_formula_dense_pages(self, pdf_path: str, pages: List[int]) -> set[int]:
+        """Choose pages that need LLM formula reconstruction in standard mode."""
+        if not (
+            getattr(settings, 'ENABLE_LOCAL_LATEX_CONVERSION', True)
+            and pages
+        ):
+            return set()
+
+        threshold = max(0.0, min(1.0, getattr(settings, 'LOCAL_MATH_DENSITY_THRESHOLD', 0.20)))
+        try:
+            features = self.document_parser.classify_difficult_pages(pdf_path)
+            dense_pages = {
+                feature.page_num
+                for feature in features
+                if feature.page_num in pages and feature.formula_density >= threshold
+            }
+            if dense_pages:
+                logger.info(
+                    "公式密集页将使用 LLM：%s（阈值 %.0f%%）",
+                    sorted(page + 1 for page in dense_pages),
+                    threshold * 100,
+                )
+            return dense_pages
+        except Exception as exc:
+            logger.warning("公式密度检测失败，回退为本地转换：%s", exc)
+            return set()
+
     def convert_pdf(
         self,
         pdf_path: str,
@@ -1126,10 +1347,30 @@ class PDF2LaTeXEnhanced:
 
         # 只提取需要的页面
         pages_text = self.extract_text_from_pdf(pdf_path, pages)
+        algorithm_pages = {
+            page_num for page_num in pages
+            if page_num < len(pages_text) and self._has_algorithm_structure(pages_text[page_num])
+        }
+        if algorithm_pages:
+            logger.info("检测到伪代码算法页：%s", sorted(page + 1 for page in algorithm_pages))
+
+        # Formula fragments that genuinely cross a page boundary must be kept
+        # together before independent page conversion starts.
+        cross_page_formula_pages = stitch_cross_page_formula_fragments(pages_text, pages)
+        formula_dense_pages = set()
+        if quality_mode != 'high':
+            formula_dense_pages = self._find_formula_dense_pages(pdf_path, pages)
+        formula_dense_pages.update(cross_page_formula_pages)
+        if cross_page_formula_pages:
+            logger.info(
+                "跨页公式相关页将使用 LLM：%s",
+                sorted(page + 1 for page in cross_page_formula_pages),
+            )
 
         # 构建LaTeX正文
         latex_content = []
         failed_pages = []
+        page_diagnostics = []
 
         mode_desc = "翻译并转换" if translate else "转换"
         processed_pages = 0
@@ -1151,7 +1392,11 @@ class PDF2LaTeXEnhanced:
             try:
                 translated_results = asyncio.run(batch_translate_pages())
                 for original_page, translated_text in translated_results:
-                    translated_map[original_page] = translated_text
+                    translated = self._attach_algorithm_context(translated_text)
+                    # 即使翻译模型遗漏了内部标记，也要继承原始页已确认的算法结构。
+                    if original_page in algorithm_pages and '[ALGORITHM_CONTEXT]' not in translated:
+                        translated = f"[ALGORITHM_CONTEXT]\n{translated.strip()}"
+                    translated_map[original_page] = translated
                 logger.info(f"批量翻译完成: {len(translated_map)}/{len(pages)} 页")
             except Exception as e:
                 logger.warning(f"批量翻译失败: {e}，回退到逐页翻译")
@@ -1173,9 +1418,28 @@ class PDF2LaTeXEnhanced:
             )
 
             try:
-                page_text_to_convert = text
-                if translate and page_num in translated_map:
+                page_text_to_convert = self._attach_algorithm_context(text)
+                if translate:
+                    if page_num not in translated_map:
+                        raise Exception(
+                            "该页翻译未返回有效结果；已停止转换以避免把原英文混入中文输出。"
+                        )
                     page_text_to_convert = translated_map[page_num]
+
+                use_llm_for_formula = (
+                    page_num in formula_dense_pages
+                    or '[ALGORITHM_CONTEXT]' in page_text_to_convert
+                )
+                if use_llm_for_formula:
+                    structure_reason = '算法伪代码' if '[ALGORITHM_CONTEXT]' in page_text_to_convert else '公式密度较高'
+                    self._emit_progress(
+                        'converting',
+                        idx,
+                        total_to_process,
+                        f'检测到{structure_reason}，正在调用 LLM 转换第 {idx + 1}/{total_to_process} 页...',
+                        'info',
+                        f'第 {idx + 1} 页{structure_reason}，使用 LLM 重建公式与版式',
+                    )
 
                 latex_page = await self.convert_text_to_latex_async(
                     page_text_to_convert,
@@ -1183,6 +1447,7 @@ class PDF2LaTeXEnhanced:
                     len(pages_text),
                     translate=False,  # 已经翻译过了，不再重复翻译
                     quality_mode=quality_mode,
+                    force_llm=use_llm_for_formula,
                     display_page_num=idx,
                     display_total_pages=total_to_process,
                 )
@@ -1196,6 +1461,9 @@ class PDF2LaTeXEnhanced:
                     f'✓ 第 {idx + 1}/{total_to_process} 页{mode_desc}完成'
                 )
                 return page_num, latex_page, True
+            except InsufficientBalanceError:
+                # Stop the entire job: account-level failures are not page errors.
+                raise
             except Exception as e:
                 err_text = str(e)
                 logger.warning(f"第 {page_num + 1} 页{mode_desc}失败: {err_text}")
@@ -1204,8 +1472,10 @@ class PDF2LaTeXEnhanced:
 
         async def process_all_pages():
             # 控制并发，避免同时发起过多LLM请求导致连接失败。
-            max_concurrency = 4  # 降低并发，因为批量翻译已经减少了API调用次数
-            semaphore = asyncio.Semaphore(max_concurrency)
+            # This limits per-page LLM-to-LaTeX conversions only; translation
+            # batching has an independent request pattern.
+            conversion_concurrency = max(1, settings.LLM_CONVERSION_CONCURRENCY)
+            semaphore = asyncio.Semaphore(conversion_concurrency)
 
             async def _run_with_limit(idx: int, page_num: int):
                 async with semaphore:
@@ -1218,11 +1488,39 @@ class PDF2LaTeXEnhanced:
 
         for page_num, latex_page, ok in results:
             if not ok:
+                error_text = next(
+                    (message for failed_page, message in failed_pages if failed_page == page_num + 1),
+                    '该页未产生 LaTeX 输出。',
+                )
+                page_diagnostics.append({
+                    'page': page_num + 1,
+                    'status': 'error',
+                    'valid': False,
+                    'errors_count': 1,
+                    'warnings_count': 0,
+                    'diagnostics': [{
+                        'code': 'conversion_failed',
+                        'severity': 'error',
+                        'message': error_text,
+                        'line': 1,
+                    }],
+                })
                 latex_content.append(f"% 第 {page_num + 1} 页{mode_desc}失败")
                 latex_content.append("")
                 continue
             if latex_page is None:
                 continue
+            validation = validate_latex_page(latex_page)
+            page_diagnostics.append({
+                'page': page_num + 1,
+                'status': 'warning' if validation['warnings_count'] else 'success',
+                **validation,
+            })
+            if validation['warnings_count'] or validation['errors_count']:
+                logger.warning(
+                    "第 %s 页 LaTeX 校验发现 %s 个错误、%s 个警告",
+                    page_num + 1, validation['errors_count'], validation['warnings_count'],
+                )
             latex_content.append(f"% ===== 第 {page_num + 1} 页 =====")
             latex_content.append(latex_page)
 
@@ -1273,9 +1571,13 @@ class PDF2LaTeXEnhanced:
                 {'page': page_no, 'error': err}
                 for page_no, err in failed_pages
             ],
+            'page_diagnostics': page_diagnostics,
             'total_tokens': self.total_tokens,
             'prompt_tokens': self.prompt_tokens,
             'completion_tokens': self.completion_tokens,
+            'cost': calculate_llm_cost(
+                self.model_name, self.prompt_tokens, self.completion_tokens
+            ),
             'processing_time': round(processing_time, 2),
             'source_text': source_text
         }

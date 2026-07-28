@@ -15,12 +15,14 @@ httpx==0.25.2
 # PDF处理
 PyPDF2==3.0.1
 pdfplumber==0.11.0  # 更强大的PDF文本提取
-pdfminer.six==20221105  # 备用PDF提取库
+pdfminer.six==20231228  # pdfplumber 0.11.0 依赖的 PDF 解析库
 
 # 图片处理和OCR
 Pillow==10.1.0  # 图片读取、格式转换
 pytesseract==0.3.10  # 本地OCR识别（Python封装）
 opencv-python==4.10.0.84  # 图像预处理（已启用）
+# 可选：扫描页/低质量页可用 PaddleOCR；PaddlePaddle 请按 CPU/GPU 平台安装
+paddleocr==2.9.1
 
 # 注意：Tesseract OCR 引擎需要单独安装
 # Windows: 下载安装 https://github.com/UB-Mannheim/tesseract/wiki
@@ -34,3 +36,7 @@ python-dotenv==1.0.0
 
 # 工具库
 werkzeug==3.0.1
+
+# 测试
+pytest==9.1.1
+pytest-asyncio==1.4.0

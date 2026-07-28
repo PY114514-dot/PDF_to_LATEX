@@ -10,9 +10,17 @@ LLM大模型API统一调用管理
 
 import asyncio
 import httpx
+import logging
 import time
+import threading
 from typing import Dict, Any, List, Optional, Callable
 from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class InsufficientBalanceError(RuntimeError):
+    """The provider rejected the request because the account has no usable credit."""
 
 
 class LLMClient:
@@ -57,6 +65,13 @@ class LLMClient:
         self._progress_callback: Optional[Callable[[str, str, int, int], None]] = None
         self._current_page: int = 0
         self._total_pages: int = 0
+        # Limits are isolated per configured client/API key.  Different
+        # providers must not consume each other's quota or semaphore slots.
+        self._request_lock = threading.Lock()
+        self._request_timestamps: List[float] = []
+        self._request_semaphore = threading.BoundedSemaphore(
+            max(1, settings.LLM_MAX_CONCURRENT_REQUESTS)
+        )
 
     def set_progress_callback(self, callback: Callable[[str, str, int, int], None]) -> None:
         """设置进度回调函数 (status_type, message, current_page, total_pages)"""
@@ -94,6 +109,30 @@ class LLMClient:
         return base_msg
 
     # =============================== 基础聊天 ===================================
+    async def _acquire_request_slot(self) -> None:
+        """Apply per-client concurrency and rolling one-minute limits."""
+        await asyncio.to_thread(self._request_semaphore.acquire)
+        try:
+            while True:
+                with self._request_lock:
+                    now = time.monotonic()
+                    self._request_timestamps = [
+                        timestamp for timestamp in self._request_timestamps
+                        if now - timestamp < 60
+                    ]
+                    limit = max(1, settings.LLM_REQUESTS_PER_MINUTE)
+                    if len(self._request_timestamps) < limit:
+                        self._request_timestamps.append(now)
+                        return
+                    wait_seconds = 60 - (now - self._request_timestamps[0])
+                await asyncio.sleep(max(wait_seconds, 0.01))
+        except BaseException:
+            self._request_semaphore.release()
+            raise
+
+    def _release_request_slot(self) -> None:
+        self._request_semaphore.release()
+
     async def chat(
         self,
         messages: List[dict[str, str]],
@@ -133,6 +172,12 @@ class LLMClient:
         self._current_page = page_num
         self._total_pages = total_pages
 
+        if not self.api_key or not self.api_key.strip():
+            raise RuntimeError(
+                f"Model '{self.model}' has no API key configured. "
+                "Set the corresponding key in backend/.env before converting."
+            )
+
         # 合并默认额外参数和传入参数（传入参数优先）
         merged_params = {**self.default_extra_params, **kwargs}
 
@@ -158,20 +203,24 @@ class LLMClient:
 
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient(
-                    timeout=self.timeout,
-                    limits=httpx.Limits(max_keepalive_connections=20, max_connections=50)
-                ) as client:
-                    response = await client.post(
-                        self.base_url,
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json=request_body
-                    )
-                    response.raise_for_status()
-                    return response.json()
+                await self._acquire_request_slot()
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=self.timeout,
+                        limits=httpx.Limits(max_keepalive_connections=20, max_connections=50)
+                    ) as client:
+                        response = await client.post(
+                            self.base_url,
+                            headers={
+                                "Authorization": f"Bearer {self.api_key}",
+                                "Content-Type": "application/json"
+                            },
+                            json=request_body
+                        )
+                        response.raise_for_status()
+                        return response.json()
+                finally:
+                    self._release_request_slot()
 
             except httpx.TimeoutException as e:
                 last_error = e
@@ -216,6 +265,12 @@ class LLMClient:
                 elif status == 401:
                     raise Exception(
                         f"第{page_num + 1}页: HTTP 401 - 认证失败，请检查 API Key 是否正确。"
+                    )
+                elif status == 402:
+                    # Payment-required responses will not succeed on retry.
+                    raise InsufficientBalanceError(
+                        f"API account balance is insufficient for model '{model_name}'. "
+                        "Recharge the provider account or select a model/API key with available quota."
                     )
                 elif status == 429:
                     # 429 错误需要特殊处理，可能有 Retry-After 头
@@ -301,7 +356,7 @@ class LLMClient:
         current_messages = list(messages)
 
         for round_idx in range(max_rounds):
-            print(f"[LLMClient] 开始第 {round_idx + 1}/{max_rounds} 轮续写...")
+            logger.info("LLM continuation round %s/%s started for model %s", round_idx + 1, max_rounds, self.model)
 
             # 构建请求体
             request_body = {
@@ -344,10 +399,10 @@ class LLMClient:
 
             #判断是否需要续写
             if finish_reason != "length":
-                print(f"[LLMClient] 生成完成，finish_reason={finish_reason}")
+                logger.info("LLM continuation finished for model %s, finish_reason=%s", self.model, finish_reason)
                 break
 
-            print(f"[LLMClient] Token 用尽，准备续写...")
+            logger.info("LLM continuation requested for model %s because the token limit was reached", self.model)
 
             # 添加本轮回复到消息历史
             current_messages.append({"role": "assistant", "content": round_text})
@@ -479,6 +534,40 @@ deepseek_v4_flash = LLMClient(
     api_key=settings.DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com/v1/chat/completions",
     model="deepseek-v4-flash",
+    timeout=600.0,
+    default_extra_params={}
+)
+
+deepseek_v4_pro = LLMClient(
+    api_key=settings.DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com/v1/chat/completions",
+    model=settings.DEEPSEEK_V4_PRO_MODEL,
+    timeout=600.0,
+    default_extra_params={}
+)
+deepseek_v4 = deepseek_v4_flash
+
+# Backward-compatible aliases used by older conversion paths and tests.
+deepseek_chat = LLMClient(
+    api_key=settings.DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com/v1/chat/completions",
+    model="deepseek-chat",
+    timeout=600.0,
+    default_extra_params={}
+)
+
+deepseek_reasoner = LLMClient(
+    api_key=settings.DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com/v1/chat/completions",
+    model="deepseek-reasoner",
+    timeout=600.0,
+    default_extra_params={}
+)
+
+doubao = LLMClient(
+    api_key=settings.DOUBAO_API_KEY,
+    base_url="https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    model="doubao-seed-2.0-lite",
     timeout=600.0,
     default_extra_params={}
 )

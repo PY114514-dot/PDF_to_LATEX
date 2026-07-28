@@ -1,232 +1,138 @@
 # PDF2LaTeX Enhanced
 
-<div align="center">
+一个 Flask + 原生前端的 PDF 到 LaTeX 转换工作台，支持单文件转换、批量 PDF 转换、中文翻译、页码选择、实时进度、历史记录和在线预览。
 
-**一个强大的 PDF 到 LaTeX 转换工具，支持多模型、批量处理和中文翻译**
+## 当前可用能力
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)](https://flask.palletsprojects.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+- PDF 转 LaTeX：上传 PDF 后生成 `.tex` 文件。
+- 批量 PDF：最多同时选择 5 个 PDF 文件。
+- 中文翻译：可选择将英文 PDF 翻译为中文 LaTeX。
+- 页码选择：支持 `1-3,5,7-9` 这样的页码范围。
+- 异步任务：长任务可进入任务中心并尝试恢复。
+- 实时进度：通过 Socket.IO 推送阶段进度和处理日志。
+- LaTeX 预览：结果页内置源码编辑与 KaTeX 预览。
+- 历史记录：可查看、下载或清空转换历史。
 
-</div>
-
----
+> 说明：当前主应用没有接通 Word 转换和图片转 LaTeX 路由，前端已隐藏这些入口，避免用户进入不可用流程。
 
 ## 目录结构
 
-```
+```text
 PDF2LATEX/
-├── backend/                    # Flask 后端
-│   ├── app_enhanced.py        # Flask 主应用入口
-│   ├── pdf2latex_enhanced.py  # 核心 PDF→LaTeX 转换逻辑
-│   ├── image2latex_enhanced.py # 图片→LaTeX 流程
-│   ├── document_parser.py     # PDF 文本提取（pdfplumber + PyPDF2）
-│   ├── ocr_client.py          # OCR 引擎封装（Tesseract / Vision）
-│   ├── clients.py             # LLM 客户端（DeepSeek / GPT / GLM / Gemini / Doubao）
-│   ├── config.py              # 配置文件
-│   ├── latex_utils.py        # LaTeX 清洗 / 包装 / 参考文献拆分
-│   ├── latex_syntax.py       # LaTeX 语法检查、自动纠错、质量评分
-│   ├── history_manager.py    # 历史记录管理
-│   ├── task_manager.py       # 异步任务管理
-│   ├── error_handler.py      # 错误分类、重试机制、详细错误报告
-│   ├── knowledge_graph.py    # 论文结构分析、定理依赖关系
-│   ├── bilingual_reader.py   # 原文/译文对照、hover显示原文
-│   └── requirements.txt      # Python 依赖
-│
-├── frontend/                  # 前端资源
+├── backend/
+│   ├── app_enhanced.py        # Flask 主应用入口与 API 路由
+│   ├── pdf2latex_enhanced.py  # PDF 到 LaTeX 核心流程
+│   ├── document_parser.py     # PDF 文本提取与 OCR 降级
+│   ├── ocr_client.py          # OCR 引擎封装
+│   ├── clients.py             # LLM 客户端封装
+│   ├── config.py              # 环境变量与运行配置
+│   ├── latex_utils.py         # LaTeX 清洗、包装与合并
+│   ├── latex_syntax.py        # LaTeX 语法检查、修复与质量评分
+│   ├── history_manager.py     # 历史记录管理
+│   ├── task_manager.py        # 异步任务状态管理
+│   ├── error_handler.py       # 错误分类与报告
+│   └── requirements.txt
+├── frontend/
 │   ├── static/
-│   │   ├── script_enhanced.js  # 前端交互逻辑
-│   │   └── style_enhanced.css  # 样式文件
+│   │   ├── script_enhanced.js
+│   │   └── style_enhanced.css
 │   └── templates/
-│       ├── index_enhanced.html  # 主页面
-│       ├── latex_render.html    # LaTeX 实时预览页
-│       └── paper_agent_view.html # AI 学术阅读页面
-│
-├── uploads/                   # 上传文件临时目录（不提交到 git）
-├── outputs/                  # 输出文件目录（不提交到 git）
-├── .env                      # 环境变量（API 密钥等，勿提交）
-├── .env_example              # 环境变量示例
-├── task_plan.md              # 项目任务规划
-├── progress.md               # 进度日志
-├── findings.md                # 研究发现
-├── PROJECT_FLOW.md           # 项目详细流程文档
-└── README.md
+│       ├── index_enhanced.html
+│       └── latex_render.html
+├── .codex/                   # Harness Engineering：项目护栏与工程记忆
+│   ├── rules.md               # 不变量、敏感信息与修改边界
+│   ├── architecture.md        # 转换链路与跨层约束
+│   ├── workflow.md            # Agent 标准工作流
+│   ├── testing.md             # 验证规范
+│   └── mistakes.md            # 已知问题与处理经验
+├── scripts/
+│   └── verify_harness.ps1     # 一键基线验证
+├── tests/                     # 集成/流程测试
+├── backend/tests/             # 后端单元测试
+├── uploads/                   # 上传文件临时目录，已 gitignore
+├── outputs/                   # 生成结果目录，已 gitignore
+├── cache/                     # 转换缓存，已 gitignore
+└── logs/                      # 运行日志，已 gitignore
 ```
-
----
 
 ## 快速开始
-
-### 1. 安装依赖
 
 ```bash
 cd backend
 pip install -r requirements.txt
-```
-
-### 2. 配置环境变量
-
-在项目根目录创建 `.env` 文件：
-
-```bash
-# DeepSeek（推荐，高性价比）
-DEEPSEEK_API_KEY=your_deepseek_api_key
-
-# OpenAI GPT
-OPENAI_API_KEY=your_openai_api_key
-
-# GLM（智谱清言）
-ZHIPU_API_KEY=your_zhipu_api_key
-
-# Gemini
-GEMINI_API_KEY=your_gemini_api_key
-
-# Doubao（豆包）
-DOUBAO_API_KEY=your_doubao_api_key
-
-# 默认模型（可选，默认 deepseek-chat）
-DEFAULT_MODEL=deepseek-chat
-```
-
-### 3. 启动服务
-
-```bash
-# 从 backend/ 目录启动
-cd backend
 python app_enhanced.py
 ```
 
-访问 **http://localhost:5000** 即可使用。
+然后访问 `http://localhost:5000`。
 
----
+## 环境变量
 
-## 主要特性
+在项目根目录创建 `.env`：
 
-### 多模型支持
-| 模型 | 说明 | 特点 |
-|------|------|------|
-| **DeepSeek** | deepseek-chat / deepseek-reasoner | 高性价比，推荐 |
-| **DeepSeek Math** | deepseek-math | 数学公式专用 |
-| **GLM（智谱）** | glm-4.6 / glm-4.7 | 国产大模型，支持 Thinking 模式 |
-| **Gemini** | gemini-3-pro | Google 大模型 |
-| **Doubao（豆包）** | doubao-seed-2.0-lite | 字节跳动大模型 |
+```env
+DEEPSEEK_API_KEY=your_deepseek_api_key
+OPENAI_API_KEY=your_openai_api_key
+ZHIPU_API_KEY=your_zhipu_api_key
+GEMINI_API_KEY=your_gemini_api_key
+DOUBAO_API_KEY=your_doubao_api_key
+DEFAULT_MODEL=deepseek_v4_flash
+# 可选：DeepSeek V4 Pro 的实际模型/部署名称
+DEEPSEEK_V4_PRO_MODEL=deepseek-v4-pro
+ENABLE_LOCAL_LATEX_CONVERSION=true
+# 公式行占比达到 20% 的页面自动调用 LLM，其余页面保留本地转换
+LOCAL_MATH_DENSITY_THRESHOLD=0.20
+ENABLE_DIFFICULT_DOUBLE_TRANSLATE=false
+OCR_PROVIDER=tesseract
+ENABLE_VISION_OCR_FALLBACK=false
+# 扫描页或低质量文本页使用本地 PaddleOCR（需要安装匹配平台的 PaddlePaddle）
+OCR_PROVIDER=paddle
+PADDLEOCR_LANG=ch
+PADDLEOCR_USE_GPU=false
+ENABLE_PADDLEOCR_FALLBACK=true
+# 可选：费用以当前 API 网关的实际报价为准；未配置时前端会显示“未配置”
+LLM_COST_CURRENCY=CNY
+LLM_PRICING_JSON={"deepseek_v4_flash":{"input_per_million":1.0,"output_per_million":2.0},"deepseek_v4_pro":{"input_per_million":2.0,"output_per_million":4.0}}
+```
 
-### 核心功能
-- **智能 PDF 提取** - 文本层优先，OCR 兜底，保证文本质量
-- **批量转换** - 最多同时处理 5 个 PDF 文件
-- **智能章节识别** (v0.9) - 字号+正则自动检测章节边界，按章节切分翻译，AI 一次看到完整上下文
-- **困难页双次翻译+LLM 评分** (v0.9) - 自动识别公式/表格/图像密集页，调用两次不同 temperature 的翻译，再由 LLM 评分挑选最佳
-- **批量翻译** - 每 4 页（无章节时）或按章节（v0.9）作为一块，保留上下文
-- **中文翻译** - 一键将英文 PDF 翻译为中文 LaTeX
-- **页码选择** - 支持 `1-3,5,7-9` 格式精确选择
-- **实时进度** - WebSocket 实时推送转换进度
-- **历史记录** - 保存转换历史，支持重新下载
-- **表格优先还原** - 结构化表格上下文注入，优先生成完整 `tabular`
-- **参考文献保护** - 自动识别文献区，翻译时保持作者名/题名/刊名原文
-- **双栏版式检测** - 自动检测双栏排版页面，翻译后保留 `multicols` 结构
-- **运行标题过滤** - 自动过滤页眉页脚的章节标题
-- **KaTeX 兼容** - 自动转换 `\eqref` 为 `(\ref)` 确保前端渲染
+至少配置一个可用模型密钥。当前 `config.py` 默认优先暴露 DeepSeek V4 Flash。
+`LLM_PRICING_JSON` 中的单价单位为“每百万 Token”，示例数值仅展示格式；请替换为当前 API 网关的实际价格。
+PaddleOCR 的 Codex MCP 仅供 Codex 开发环境调用；项目运行时使用的是 Python `paddleocr` provider，仍需在运行服务器安装匹配 CPU/GPU 的 PaddlePaddle。
 
-### v0.9 配置项
+## 常用命令
 
-通过环境变量控制（默认值已适合大多数场景）：
+```bash
+# 运行后端测试
+pytest backend/tests
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ENABLE_CHAPTER_AWARE` | `true` | 是否按章节切分；关闭则回退到 4-页固定块 |
-| `MAX_PAGES_PER_CHAPTER` | `8` | 单个章节块最多页数（防 token 超限） |
-| `ENABLE_DIFFICULT_DOUBLE_TRANSLATE` | `true` | 是否对困难页做双次翻译+LLM 评分 |
+# 运行项目级测试
+pytest tests
 
-### AI 学术阅读（仅 PDF）
-在 PDF 转换完成后，点击结果页中的 `AI学术阅读`，调用后端生成摘要、大纲、思维导图与算法解析。
+# 启动服务
+python backend/app_enhanced.py
 
----
+# Harness Engineering 一键验证（推荐，固定使用项目 .venv）
+.\scripts\verify_harness.ps1
+```
 
-## 项目架构
+## Harness Engineering
 
-### 后端（Flask + Python）
-| 文件 | 说明 |
-|------|------|
-| `app_enhanced.py` | Flask 主入口，路由定义，WebSocket 进度推送 |
-| `pdf2latex_enhanced.py` | PDF→LaTeX 核心流程，翻译/转换并发控制 |
-| `document_parser.py` | PDF 文本提取，三级降级（pdfplumber → PyPDF2 → OCR）|
-| `latex_utils.py` | LaTeX 清洗、表格修复、模板包装 |
-| `latex_syntax.py` | LaTeX 语法检查、自动纠错、质量评分（多维度）|
-| `clients.py` | 统一 LLM 客户端，支持多模型 |
-| `ocr_client.py` | OCR 引擎封装（Tesseract / DeepSeek Vision）|
-| `error_handler.py` | 错误分类、重试策略、用户友好错误消息 |
-| `knowledge_graph.py` | 论文结构分析、定理依赖关系图谱 |
-| `bilingual_reader.py` | 原文/译文对照，段落级对齐，hover 显示原文 |
-| `task_manager.py` | 异步任务状态管理 |
-| `history_manager.py` | 转换历史持久化 |
+项目通过 `.codex/` 固化开发规则、架构边界、验证要求和已知问题，避免 AI 或人工
+修改跨层堆叠、绕过页级校验或泄露敏感信息。进行功能开发时应先阅读
+`AGENTS.md`、`docs/DEVELOPMENT_GUIDE.md` 与 `.codex/` 中相应文档。
 
-### 前端（原生 JS + CSS）
-| 文件 | 说明 |
-|------|------|
-| `script_enhanced.js` | 前端交互、WebSocket 进度、实时预览 |
-| `style_enhanced.css` | ChatGPT 风格黑白极简 UI |
-| `index_enhanced.html` | 主页面 |
-| `latex_render.html` | LaTeX 实时渲染预览页（KaTeX）|
-| `paper_agent_view.html` | AI 学术阅读页面 |
+提交前运行 `.\scripts\verify_harness.ps1`。该命令会使用项目虚拟环境运行
+`backend/tests`，并在本机存在 Node.js 时检查前端脚本语法。
 
----
+## 可删除的本地生成内容
 
-## 配置说明
+以下目录或文件属于运行时产物，可按需清理，不影响源码：
 
-### 环境变量
+- `.pytest_cache/`
+- `backend/.pytest_cache/`
+- `__pycache__/`
+- `cache/convert/`
+- `logs/*.log`
+- `uploads/*`
+- `outputs/*`
 
-| 变量名 | 说明 | 默认值 | 必需 |
-|--------|------|--------|------|
-| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | - | 否* |
-| `OPENAI_API_KEY` | OpenAI API 密钥 | - | 否* |
-| `ZHIPU_API_KEY` | GLM API 密钥 | - | 否* |
-| `GEMINI_API_KEY` | Gemini API 密钥 | - | 否* |
-| `DOUBAO_API_KEY` | Doubao API 密钥 | - | 否* |
-| `DEFAULT_MODEL` | 默认模型 ID | `deepseek-chat` | 否 |
-
-> *至少需要配置一个模型的 API 密钥
-
----
-
-## 常见问题
-
-### Q: 表格经常缺列或格式错乱？
-**A:** 系统已内置行列一致性修复，缺失单元格会自动补 `--`。复杂的多行合并/跨列表格建议在 LaTeX 编辑器中手动微调。
-
-### Q: 为什么参考文献没有翻译？
-**A:** 这是默认策略。文献区通过标题识别 + 尾部引用样式启发式检测，翻译阶段默认不翻译作者名、刊名和题名，保持原文准确性。
-
-### Q: 转换速度较慢？
-**A:** 当前页面并发为 8（`max_concurrency=8`），可酌情调高。若遇 API 429 限流错误，请降低并发数。
-
-### Q: 支持扫描版 PDF 吗？
-**A:** 支持。系统会自动检测文本质量，低质量时触发 OCR（需配置 Tesseract 或使用 Vision API）。
-
-### Q: LaTeX 公式在网页上显示不正确？
-**A:** 系统会自动处理常见兼容性问题：
-- `\eqref` → `(\ref)` 自动转换（KaTeX 不支持 `\eqref`）
-- 矩阵转置符号修复（`W.T` → `W^{\mathsf{T}}`）
-- 参考文献区保护
-
----
-
-## 项目文档
-
-- `PROJECT_FLOW.md` - 项目详细流程和技术文档
-- `task_plan.md` - 项目任务规划和里程碑
-- `progress.md` - 开发进度日志
-- `findings.md` - 研究发现和技术决策
-
----
-
-## 开源协议
-
-MIT License
-
----
-
-<div align="center">
-
-**如果这个项目对你有帮助，请给一个 ⭐️ Star！**
-
-</div>
+如果需要保留历史转换结果，不要清理 `outputs/`；如果需要保留可恢复任务，不要清理 `uploads/` 和 `task_store.json`。

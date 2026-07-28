@@ -16,9 +16,13 @@ from latex_utils import (
     fix_matrix_transpose,
     fix_math_notation,
     sanitize_latex_body,
+    validate_latex_page,
+    replace_latex_page_block,
+    stitch_cross_page_formula_fragments,
     normalize_align_environments,
     repair_tabular_consistency,
     strip_document_wrapper,
+    wrap_with_template,
 )
 
 
@@ -147,6 +151,110 @@ class TestSanitizeLatexBody:
         result = sanitize_latex_body("  some content  ")
         assert result == "some content"
 
+    def test_repair_nested_and_escaped_display_delimiters(self):
+        result = sanitize_latex_body(
+            "\\[\\[x_{k+1} = x_k - 1\\]\\textbackslash{}]"
+        )
+        assert result.count(r"\[") == 1
+        assert result.count(r"\]") == 1
+        assert r"\textbackslash{}" not in result
+
+    def test_drop_isolated_math_glyphs(self):
+        result = sanitize_latex_body("before\n\\[\n√    √\n\\]\nafter")
+        assert "√" not in result
+        assert "before" in result and "after" in result
+
+    def test_unwrap_prose_from_display_math(self):
+        result = sanitize_latex_body("\\[\n这是被错误放入数学环境的一整段中文说明文字，其中包含足够多的普通内容。\n\\]")
+        assert r"\[" not in result
+        assert "中文说明" in result
+
+    def test_preserves_page_marker_for_retry(self):
+        result = sanitize_latex_body("% ===== 第 1 页 =====\n正文")
+        assert "% ===== 第 1 页 =====" in result
+
+    def test_preserves_table_hlines(self):
+        result = sanitize_latex_body("\\begin{tabular}{|c|}\n\\hline\nA \\\\\n\\hline\n\\end{tabular}")
+        assert result.count(r"\hline") == 2
+
+    def test_wrapped_document_keeps_page_marker_for_retry(self):
+        result = wrap_with_template("% ===== 第 1 页 =====\n正文")
+        assert "% ===== 第 1 页 =====" in result
+
+    def test_algorithm_body_adds_required_pseudocode_packages(self):
+        result = wrap_with_template(
+            r"\begin{algorithm}\caption{示例}\begin{algorithmic}[1]\State x\end{algorithmic}\end{algorithm}"
+        )
+        assert r"\usepackage{algorithm}" in result
+        assert r"\usepackage{algpseudocode}" in result
+
+
+class TestValidateLatexPage:
+    def test_detects_nested_display_math(self):
+        report = validate_latex_page(r"\[\[x = y\]\]")
+        assert not report['valid']
+        assert any(item['code'] == 'nested_display_math' for item in report['diagnostics'])
+
+    def test_flags_prose_in_display_math(self):
+        report = validate_latex_page(r"\[这是一段被错误放进公式环境的较长中文说明文字，需要提示用户检查。\]")
+        assert report['warnings_count'] == 1
+
+
+class TestReplaceLatexPageBlock:
+    def test_replaces_only_requested_page(self):
+        document = """\\begin{document}
+% ===== 第 1 页 =====
+first
+
+% ===== 第 2 页 =====
+second
+\\end{document}"""
+        result = replace_latex_page_block(document, 2, 'revised')
+        assert 'first' in result
+        assert '% ===== 第 2 页 =====\nrevised' in result
+        assert 'second' not in result
+
+    def test_replaces_failed_page_placeholder(self):
+        document = """\\begin{document}
+% ===== 第 1 页 =====
+first
+
+% 第 2 页转换失败
+
+% ===== 第 3 页 =====
+third
+\\end{document}"""
+        result = replace_latex_page_block(document, 2, 'recovered')
+        assert '% ===== 第 2 页 =====\nrecovered' in result
+        assert '转换失败' not in result
+        assert 'first' in result and 'third' in result
+
+    def test_preserves_adjacent_failed_placeholder(self):
+        document = """% 第 1 页转换失败
+
+% 第 2 页翻译并转换失败
+"""
+        result = replace_latex_page_block(document, 1, 'recovered')
+        assert '% ===== 第 1 页 =====\nrecovered' in result
+        assert '% 第 2 页翻译并转换失败' in result
+
+
+class TestCrossPageFormulaStitching:
+    def test_stitches_strong_formula_continuation(self):
+        pages = [
+            "The equation is\nF(x) = x^2 +",
+            "y^2 = z^2\nThe next paragraph starts here.",
+        ]
+        routed = stitch_cross_page_formula_fragments(pages, [0, 1])
+        assert routed == {0, 1}
+        assert "F(x) = x^2 + y^2 = z^2" in pages[0]
+        assert pages[1].startswith("The next paragraph")
+
+    def test_does_not_join_ordinary_page_breaks(self):
+        pages = ["This paragraph continues", "on the following page."]
+        assert stitch_cross_page_formula_fragments(pages, [0, 1]) == set()
+        assert pages == ["This paragraph continues", "on the following page."]
+
 
 class TestNormalizeAlignEnvironments:
     """测试 normalize_align_environments 函数"""
@@ -182,19 +290,70 @@ class TestNormalizeAlignEnvironments:
         assert r"\begin{equation}" in result
 
 
+
+    def test_multiline_align_adds_row_breaks(self):
+        input_text = "\\begin{align}\na = b\nc = d\n\\end{align}"
+        result = sanitize_latex_body(input_text)
+        assert r"\begin{aligned}" in result
+        assert "a &= b" in result
+        assert r"\\" in result
+        assert "c &= d" in result
+        assert r"\begin{align}" not in result
+
+    def test_nested_display_align(self):
+        input_text = "\\[\\begin{align}a &= b \\\\ c &= d\\end{align}\\]"
+        result = sanitize_latex_body(input_text)
+        assert result.count(r"\[") == 1
+        assert r"\begin{aligned}" in result
+
+    def test_equation_aligned_not_wrapped_again(self):
+        input_text = r"\begin{equation}\begin{aligned}a&=b\end{aligned}\end{equation}"
+        result = sanitize_latex_body(input_text)
+        assert r"\begin{equation}" in result
+        assert r"\[" not in result
+
+    def test_dollar_wrapped_align(self):
+        input_text = r"$$\begin{align}a&=b\end{align}$$"
+        result = sanitize_latex_body(input_text)
+        assert "$$" not in result
+        assert result.count(r"\[") == 1
+        assert r"\begin{aligned}" in result
+
+
 class TestRepairTabularConsistency:
-    """测试 repair_tabular_consistency 函数"""
+    """??? repair_tabular_consistency ???"""
 
     def test_basic_repair(self):
-        """基本表格修复"""
-        input_text = r"\begin{tabular}{|c|c|}\hline a & b \\ c & d \\ \hline\end{tabular}"
+        """?????????"""
+        input_text = r"\begin{tabular}{|c|c|}\hline a & b \ c & d \ \hline\end{tabular}"
         result = repair_tabular_consistency(input_text)
         assert r"\begin{tabular}" in result
 
     def test_empty(self):
-        """空内容"""
+        """?????"""
         assert repair_tabular_consistency("") == ""
         assert repair_tabular_consistency(None) == ""
+
+    def test_add_missing_row_breaks(self):
+        input_text = "\\begin{tabular}{|c|c|}\nA & B\n1 & 2\n\\end{tabular}"
+        result = sanitize_latex_body(input_text)
+        assert "A & B" in result and r"\\" in result
+        assert "1 & 2" in result and r"\\" in result
+
+    def test_pad_short_rows_and_merge_extra_cells(self):
+        input_text = r"""\begin{tabular}{|c|c|c|}
+A & B \\
+1 & 2 & 3 & 4 \\
+\end{tabular}"""
+        result = sanitize_latex_body(input_text)
+        assert "A & B & --" in result
+        assert r"3 \& 4" in result
+
+    def test_close_unclosed_tabular(self):
+        input_text = "\\begin{tabular}{|c|c|}\nA & B"
+        result = sanitize_latex_body(input_text)
+        assert r"\end{tabular}" in result
+        assert "A & B" in result and r"\\" in result
 
 
 class TestStripDocumentWrapper:

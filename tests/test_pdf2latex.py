@@ -195,6 +195,88 @@ class TestTokenLimitEnforcement(unittest.TestCase):
         assert converter.MAX_CHARS_PER_BATCH == 80000, f"MAX_CHARS_PER_BATCH should be 80000, got {converter.MAX_CHARS_PER_BATCH}"
 
 
+class TestLocalLatexConversion(unittest.TestCase):
+    """Ensure the low-cost local conversion keeps prose and math distinct."""
+
+    def setUp(self):
+        from pdf2latex_enhanced import PDF2LaTeXEnhanced
+        self.converter = PDF2LaTeXEnhanced()
+
+    def test_prose_with_special_characters_is_not_display_math(self):
+        result = self.converter._local_text_to_latex(
+            "A short paragraph with 100% of x_y & z."
+        )
+
+        assert r"\[" not in result
+        assert r"100\%" in result
+        assert r"x\_y" in result
+        assert r"\&" in result
+
+    def test_numbered_heading_and_equation_are_recognized(self):
+        result = self.converter._local_text_to_latex(
+            "1. Introduction\n\nThis is body text.\n\nx = y + 1"
+        )
+
+        assert r"\section*{1. Introduction}" in result
+        assert "This is body text." in result
+        assert "\\[\nx = y + 1\n\\]" in result
+
+    def test_prose_with_an_equals_sign_is_not_formula(self):
+        assert not self.converter._looks_like_latex_or_math(
+            "We denote the rows of matrix A by a_i for i = 1, 2, ..., m."
+        )
+        assert not self.converter._looks_like_latex_or_math(
+            "WedenotetherowsofmatrixAbyaTfori = 1,2,...,m."
+        )
+        assert self.converter._looks_like_latex_or_math("x = y + 1")
+        assert not self.converter._looks_like_latex_or_math("√")
+        assert not self.converter._looks_like_latex_or_math("√      √")
+
+    def test_inline_math_stays_in_prose(self):
+        result = self.converter._local_text_to_latex(
+            "The matrix \\(A\\) has \\(m\\) rows."
+        )
+        assert r"\\[" not in result
+        assert r"\\(A\\)" in result
+        assert r"\\textbackslash{}(" not in result
+
+    def test_formula_dense_pages_are_routed_to_llm(self):
+        from document_parser import PageFeatures
+
+        self.converter.document_parser.classify_difficult_pages = lambda _path: [
+            PageFeatures(page_num=0, formula_density=0.05, table_density=0, image_density=0, is_difficult=False),
+            PageFeatures(page_num=1, formula_density=0.35, table_density=0, image_density=0, is_difficult=True),
+        ]
+
+        assert self.converter._find_formula_dense_pages("ignored.pdf", [0, 1]) == {1}
+
+    def test_rejoins_explicitly_wrapped_formula_lines(self):
+        result = self.converter._local_text_to_latex(
+            "F(x) = x^2 +\n"
+            "y^2 + z^2"
+        )
+
+        assert "F(x) = x^2 + y^2 + z^2" in result
+        assert result.count(r"\[") == 1
+
+    def test_long_formula_uses_aligned_line_breaks(self):
+        formula = "x = " + " + ".join(f"a_{index}" for index in range(1, 45))
+        result = self.converter._local_text_to_latex(formula)
+
+        assert r"\begin{aligned}" in result
+        assert r"\end{aligned}" in result
+        assert r"\quad" in result
+
+    def test_does_not_join_prose_after_a_complete_formula(self):
+        result = self.converter._local_text_to_latex(
+            "x = y + 1\n"
+            "This paragraph explains the equation."
+        )
+
+        assert "This paragraph explains the equation." in result
+        assert result.count(r"\[") == 1
+
+
 class TestQualityModeRefinement(unittest.TestCase):
     """测试高质量模式的refinement"""
 

@@ -2,6 +2,7 @@
 配置文件 - 所有API密钥和设置
 """
 import os
+import json
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -34,15 +35,47 @@ class Settings:
     
     # 默认模型（应为前后端统一的模型ID）
     DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek_v4_flash")
+
+    # DeepSeek V4 Pro 的实际部署名称。不同 API 网关可在 .env 中覆盖此值。
+    DEEPSEEK_V4_PRO_MODEL: str = os.getenv("DEEPSEEK_V4_PRO_MODEL", "deepseek-v4-pro")
     
     # 超时设置
     DEFAULT_TIMEOUT: float = float(os.getenv("DEFAULT_TIMEOUT", "600.0"))
+
+    # Global LLM request guardrails for shared API keys during batch work.
+    LLM_REQUESTS_PER_MINUTE: int = int(os.getenv("LLM_REQUESTS_PER_MINUTE", "30"))
+    LLM_MAX_CONCURRENT_REQUESTS: int = int(os.getenv("LLM_MAX_CONCURRENT_REQUESTS", "4"))
+    LLM_CONVERSION_CONCURRENCY: int = int(os.getenv("LLM_CONVERSION_CONCURRENCY", "6"))
+
+    # Cost prices are deliberately supplied by deployment configuration rather
+    # than hard-coded: gateways and model revisions can bill differently.
+    # Example: {"deepseek_v4_flash":{"input_per_million":1.0,"output_per_million":2.0}}
+    LLM_COST_CURRENCY: str = os.getenv("LLM_COST_CURRENCY", "CNY").upper()
+    try:
+        LLM_PRICING: dict = json.loads(os.getenv("LLM_PRICING_JSON", "{}"))
+    except json.JSONDecodeError:
+        LLM_PRICING = {}
     
     # 上传文件大小限制（MB）
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
     
     # 批量处理文件数量限制
     MAX_BATCH_FILES: int = int(os.getenv("MAX_BATCH_FILES", "10"))
+
+    # Web server defaults are intentionally local-only.  LAN deployment must
+    # opt in explicitly through .env after configuring an access boundary.
+    APP_HOST: str = os.getenv("APP_HOST", "127.0.0.1")
+    APP_DEBUG: bool = os.getenv("APP_DEBUG", "false").lower() == "true"
+    CORS_ORIGINS: list = [
+        origin.strip() for origin in os.getenv(
+            "CORS_ORIGINS", "http://127.0.0.1:5000,http://localhost:5000"
+        ).split(",") if origin.strip()
+    ]
+
+    # Persistent async task history is bounded independently from in-memory
+    # progress state so task_store.json cannot grow forever.
+    TASK_STORE_TTL_SECONDS: int = int(os.getenv("TASK_STORE_TTL_SECONDS", "604800"))
+    MAX_PERSISTED_TASKS: int = int(os.getenv("MAX_PERSISTED_TASKS", "200"))
 
     # ==================== 缓存设置 ====================
 
@@ -63,28 +96,36 @@ class Settings:
     # 单个章节块最多包含的页数（防止token超限）
     MAX_PAGES_PER_CHAPTER: int = int(os.getenv("MAX_PAGES_PER_CHAPTER", "8"))
 
-    # 是否对困难页（公式/表格/图像密集）做双次翻译+LLM评分
-    ENABLE_DIFFICULT_DOUBLE_TRANSLATE: bool = os.getenv("ENABLE_DIFFICULT_DOUBLE_TRANSLATE", "true").lower() == "true"
+    # 是否对困难页（公式/表格/图像密集）做双次翻译+LLM评分；成本较高，默认关闭
+    ENABLE_DIFFICULT_DOUBLE_TRANSLATE: bool = os.getenv("ENABLE_DIFFICULT_DOUBLE_TRANSLATE", "false").lower() == "true"
+
+    # 标准模式是否使用本地规则转换 LaTeX，避免每页调用大模型
+    ENABLE_LOCAL_LATEX_CONVERSION: bool = os.getenv("ENABLE_LOCAL_LATEX_CONVERSION", "true").lower() == "true"
+
+    # 标准模式下，当页面公式行占比达到此阈值时，改用 LLM 转换该页。
+    LOCAL_MATH_DENSITY_THRESHOLD: float = float(os.getenv("LOCAL_MATH_DENSITY_THRESHOLD", "0.20"))
 
     # ==================== OCR 和图片识别设置 ====================
     
-    # OCR 引擎选择: 'mixed' | 'deepseek' | 'tesseract'
-    OCR_PROVIDER: str = os.getenv("OCR_PROVIDER", "mixed")
+    # OCR 引擎选择: 'mixed' | 'vision' | 'tesseract' | 'paddle'；默认本地优先，降低云端成本
+    OCR_PROVIDER: str = os.getenv("OCR_PROVIDER", "tesseract")
+
+    # Tesseract 低质量时是否自动回退到 Vision API；成本较高，默认关闭
+    ENABLE_VISION_OCR_FALLBACK: bool = os.getenv("ENABLE_VISION_OCR_FALLBACK", "false").lower() == "true"
+
+    # PaddleOCR is loaded lazily because its model runtime is comparatively
+    # heavy.  It is used for scanned/low-quality pages, not ordinary text PDFs.
+    PADDLEOCR_LANG: str = os.getenv("PADDLEOCR_LANG", "ch")
+    PADDLEOCR_USE_GPU: bool = os.getenv("PADDLEOCR_USE_GPU", "false").lower() == "true"
+    ENABLE_PADDLEOCR_FALLBACK: bool = os.getenv("ENABLE_PADDLEOCR_FALLBACK", "true").lower() == "true"
     
     # Tesseract 可执行文件路径（Windows需要配置）
     TESSERACT_CMD: str = os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
-    
-    # 允许的图片格式
-    ALLOWED_IMAGE_EXTENSIONS: set = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.gif'}
-    
+
     # 图片预处理设置
     IMAGE_MAX_SIZE: int = int(os.getenv("IMAGE_MAX_SIZE", "4096"))  # 最大边长
     IMAGE_QUALITY_THRESHOLD: float = float(os.getenv("IMAGE_QUALITY_THRESHOLD", "0.6"))  # OCR质量阈值（Tesseract低于此值会切换到Vision API）
-    
-    # DeepSeek Vision 模型配置
-    DEEPSEEK_VISION_MODEL: str = "deepseek-chat"  # DeepSeek 支持视觉的模型
-    DEEPSEEK_VISION_DETAIL: str = "high"  # 图片分析详细度: 'low' | 'high' | 'auto'
-    
+
     @classmethod
     def validate(cls) -> bool:
         """验证至少有一个API密钥被配置"""
@@ -108,6 +149,11 @@ class Settings:
                 'id': 'deepseek_v4_flash',
                 'name': 'DeepSeek V4 Flash',
                 'description': 'DeepSeek V4 Flash 最新模型'
+            })
+            available.append({
+                'id': 'deepseek_v4_pro',
+                'name': 'DeepSeek V4 Pro',
+                'description': '更高质量，适合复杂公式、表格和困难页面'
             })
 
         return available

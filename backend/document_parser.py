@@ -1,32 +1,23 @@
-"""通用文档解析器：优先文本层，必要时回退到 OCR。"""
+"""PDF document parser with text-layer extraction and OCR fallback."""
 
 from __future__ import annotations
 
 import asyncio
 import io
 import re
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-
-def _safe_re_sub(pattern: str, replacement: str, text: str) -> str:
-    """
-    安全地执行 re.sub，捕获无效正则表达式错误。
-    如果正则表达式编译失败，返回原文不变。
-    """
-    try:
-        compiled = re.compile(pattern)
-        return compiled.sub(replacement, text)
-    except re.error:
-        # 如果正则表达式无效，返回原文
-        return text
 
 import PyPDF2
 import pdfplumber
 from PIL import Image
 
 from ocr_client import ocr_client
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,26 +29,33 @@ class _ImageRegion:
 
 @dataclass
 class ChapterBoundary:
-    """PDF章节边界信息"""
-    page_num: int           # 起始页 (0-indexed)
-    title: str              # 章节标题文本
+    """PDF绔犺妭杈圭晫淇℃伅"""
+    page_num: int           # 璧峰椤?(0-indexed)
+    title: str              # 绔犺妭鏍囬鏂囨湰
     level: int              # 1=Chapter, 2=Section, 3=Subsection
-    font_size: float        # 标题字号
-    char_count: int         # 标题字符数
+    font_size: float        # 鏍囬瀛楀彿
+    char_count: int         # 鏍囬瀛楃鏁?
 
 
 @dataclass
 class PageFeatures:
-    """单页特征 - 用于困难页判定"""
+    """鍗曢〉鐗瑰緛 - 鐢ㄤ簬鍥伴毦椤靛垽瀹?"""
     page_num: int
-    formula_density: float      # 公式密度 0-1
-    table_density: float        # 表格密度 0-1
-    image_density: float        # 图像密度 0-1
-    is_difficult: bool          # 任一密度超阈值
+    formula_density: float      # 鍏紡瀵嗗害 0-1
+    table_density: float        # 琛ㄦ牸瀵嗗害 0-1
+    image_density: float        # 鍥惧儚瀵嗗害 0-1
+    is_difficult: bool          # 浠讳竴瀵嗗害瓒呴槇鍊?
+
+@dataclass
+class PageExtraction:
+    """鍗曢〉鎻愬彇缁撴灉锛屽吋瀹规棫娴嬭瘯鍜岃繍琛屾爣棰樻娴嬮€昏緫銆?"""
+    page_num: int
+    text: str
+    is_running_header: bool = False
 
 
 class PDFDocumentParser:
-    """PDF 文档解析：文本层优先，扫描页和图片区域走 OCR。"""
+    """PDF 鏂囨。瑙ｆ瀽锛氭枃鏈眰浼樺厛锛屾壂鎻忛〉鍜屽浘鐗囧尯鍩熻蛋 OCR銆?"""
 
     def __init__(
         self,
@@ -105,6 +103,8 @@ class PDFDocumentParser:
 
     def _normalize_text(self, text: str, layout_hint: str = 'text') -> str:
         raw = (text or '').replace('\r\n', '\n').replace('\r', '\n')
+        # cid:N 是 PDF 字体缺少 Unicode 映射时留下的占位符，不是正文或公式。
+        raw = re.sub(r'\(?cid:\d+\)?', '', raw, flags=re.IGNORECASE)
         lines = raw.split('\n')
         if layout_hint in {'table', 'code'}:
             cleaned = [line.rstrip() for line in lines]
@@ -112,63 +112,109 @@ class PDFDocumentParser:
         cleaned = [line.strip() for line in lines]
         return '\n'.join(cleaned).strip()
 
+    def _remove_bottom_small_text(self, page: pdfplumber.page.Page, text: str) -> str:
+        """Remove footer-like small text from the bottom margin without touching body text."""
+        if not text or not getattr(page, 'chars', None):
+            return text
+
+        try:
+            chars = [char for char in page.chars if (char.get('text') or '').strip()]
+            sizes = sorted(float(char.get('size', 0) or 0) for char in chars if char.get('size'))
+            if len(sizes) < 10:
+                return text
+            median_size = sizes[len(sizes) // 2]
+            if median_size <= 0:
+                return text
+
+            page_height = float(page.height or 0)
+            small_limit = median_size * 0.78
+            line_groups = {}
+            for char in chars:
+                top = float(char.get('top', 0) or 0)
+                size = float(char.get('size', median_size) or median_size)
+                if top < page_height * 0.84 or size > small_limit:
+                    continue
+                key = round(top / 2.0) * 2.0
+                line_groups.setdefault(key, []).append(char)
+
+            candidates = []
+            for line_chars in line_groups.values():
+                line_chars.sort(key=lambda char: float(char.get('x0', 0) or 0))
+                candidate = ''.join(char.get('text', '') for char in line_chars).strip()
+                normalized = re.sub(r'\s+', '', candidate).lower()
+                if len(normalized) >= 3:
+                    candidates.append(normalized)
+
+            if not candidates:
+                return text
+
+            kept_lines = []
+            for line in text.splitlines():
+                normalized = re.sub(r'\s+', '', line).lower()
+                if normalized and any(candidate in normalized for candidate in candidates):
+                    continue
+                kept_lines.append(line)
+            return '\n'.join(kept_lines).strip()
+        except Exception:
+            return text
+
     def _fix_math_extraction(self, text: str) -> str:
         """
-        修复 PDF 文本提取时丢失的数学符号。
+        淇 PDF 鏂囨湰鎻愬彇鏃朵涪澶辩殑鏁板绗﹀彿銆?
 
-        PDF 文本层对矩阵转置的上标 T 处理很差：
-        - W^T (上标) → W.T, W T, W•T
-        - A^T B → A.T B, A T B
-        - X_i^T → X_i.T, X_i T
+        PDF 鏂囨湰灞傚鐭╅樀杞疆鐨勪笂鏍?T 澶勭悊寰堝樊锛?
+        - W^T (涓婃爣) 鈫?W.T, W T, W鈥
+        - A^T B 鈫?A.T B, A T B
+        - X_i^T 鈫?X_i.T, X_i T
 
-        这个修复在将文本送给 AI 之前应用，确保 AI 能正确理解数学表达式。
+        杩欎釜淇鍦ㄥ皢鏂囨湰閫佺粰 AI 涔嬪墠搴旂敤锛岀‘淇?AI 鑳芥纭悊瑙ｆ暟瀛﹁〃杈惧紡銆?
         """
         if not text:
             return text
 
         try:
-            # 模式1: W.T, A.T, X_i.T → W^{T}, A^{T}, X_i^{T}
+            # 妯″紡1: W.T, A.T, X_i.T 鈫?W^{T}, A^{T}, X_i^{T}
             text = re.sub(
                 r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\.([T])',
-                r'\1^{\mathsf{T}}',
+                r'\1^{\\mathsf{T}}',
                 text
             )
 
-            # 模式2: W T, A T (空格表示的转置，在数学上下文中)
-            # 只匹配 T 后面不是字母的情况
+            # 妯″紡2: W T, A T (绌烘牸琛ㄧず鐨勮浆缃紝鍦ㄦ暟瀛︿笂涓嬫枃涓?
+            # 鍙尮閰?T 鍚庨潰涓嶆槸瀛楁瘝鐨勬儏鍐?
             text = re.sub(
                 r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\s+([T])(?![a-zA-Z{])',
-                r'\1^{\mathsf{T}}',
+                r'\1^{\\mathsf{T}}',
                 text
             )
 
-            # 模式3: 修复类似 W.t 的情况（小写 t 有时也表示转置）
+            # 妯″紡3: 淇绫讳技 W.t 鐨勬儏鍐碉紙灏忓啓 t 鏈夋椂涔熻〃绀鸿浆缃級
             text = re.sub(
                 r'([A-Z])\.t\b',
-                r'\1^{\mathsf{T}}',
+                r'\1^{\\mathsf{T}}',
                 text
             )
 
-            # 模式4: 修复 ^2, ^3 等上标数字缺失大括号
+            # 妯″紡4: 淇 ^2, ^3 绛変笂鏍囨暟瀛楃己澶卞ぇ鎷彿
             text = re.sub(
                 r'(\w)\^(\d+)(?![}a-zA-Z])',
                 r'\1^{\2}',
                 text
             )
 
-            # 模式5: W\top → W^{\top} (有时 PDF 或 OCR 会产生这个)
+            # 妯″紡5: W\top 鈫?W^{\top} (鏈夋椂 PDF 鎴?OCR 浼氫骇鐢熻繖涓?
             text = re.sub(
                 r'(\w)\s*\\top\b',
                 r'\1^{\\top}',
                 text
             )
 
-            # 模式6: 保留 \tag{xxx} 命令，转换为可渲染格式（在公式后面显示编号）
+            # 妯″紡6: 淇濈暀 \tag{xxx} 鍛戒护锛岃浆鎹负鍙覆鏌撴牸寮忥紙鍦ㄥ叕寮忓悗闈㈡樉绀虹紪鍙凤級
             # \tag{1.15} -> \qquad (1.15)
             text = re.sub(r'\\tag\{([^}]*)\}', r'\\qquad (\\1)', text)
         except re.error as e:
-            # 如果正则表达式错误（如 bad escape），返回原文
-            print(f"[WARNING] _fix_math_extraction failed: {e}")
+            # 濡傛灉姝ｅ垯琛ㄨ揪寮忛敊璇紙濡?bad escape锛夛紝杩斿洖鍘熸枃
+            logger.warning("Math extraction cleanup failed: %s", e)
             return text
 
         return text
@@ -214,7 +260,7 @@ class PDFDocumentParser:
                 return True
 
         cn_page = re.fullmatch(
-            r'第\s*\d{1,4}(?:\s*/\s*\d{1,4})?\s*页(?:\s*/\s*共?\s*\d{1,4}\s*页)?',
+            r'\u7b2c\s*\d{1,4}\s*\u9875(?:\s*(?:/|\u5171)\s*\d{1,4}\s*\u9875?)?',
             s,
             flags=re.IGNORECASE,
         )
@@ -229,20 +275,109 @@ class PDFDocumentParser:
         if en_page:
             return True
 
-        # 删除运行标题模式（如 "1. 不可压缩欧拉方程" 或 "Chapter 1 Introduction"）
-        # 这些通常在页面的顶部或底部，作为章节导航
-        # 关键：只匹配单独出现的简短标题，不匹配包含句子内容的行
+        # 鍒犻櫎杩愯鏍囬妯″紡锛堝 "1. 涓嶅彲鍘嬬缉娆ф媺鏂圭▼" 鎴?"Chapter 1 Introduction"锛?
+        # 杩欎簺閫氬父鍦ㄩ〉闈㈢殑椤堕儴鎴栧簳閮紝浣滀负绔犺妭瀵艰埅
+        # 鍏抽敭锛氬彧鍖归厤鍗曠嫭鍑虹幇鐨勭畝鐭爣棰橈紝涓嶅尮閰嶅寘鍚彞瀛愬唴瀹圭殑琛?
         running_header_patterns = [
-            r'^\d{1,2}\.\s*[一-鿿]{2,10}$',           # 数字. 中文标题 (如 "1. 不可压缩欧拉方程")，后面不能有更多内容
-            r'^第\s*\d+\s*章\s*[一-鿿]{2,10}$',       # 第X章 + 简短标题
-            r'^[一-鿿]{2,8}\s+\d+\.\d+(?:\s+[一-鿿]+)?$',  # 简短中文词 + 数字.数字 (如 "欧拉方程 1.3")
-            r'^\s*\d+\s+\d+\.\s*[一-鿿]',  # 页码 + 空格 + 章节号 + 标题 (如 "6    1. 不可压缩欧拉方程")
+            r'^\d{1,2}\.\s*[\u4e00-\u9fff]{2,20}$',
+            r'^\u7b2c\s*\d+\s*\u7ae0\s*[\u4e00-\u9fff]{2,20}$',
+            r'^[\u4e00-\u9fff]{2,12}\s+\d+\.\d+(?:\s+[\u4e00-\u9fff]{1,12})?$',
+            r'^\s*\d+\s+\d+(?:\.\d+)?\.?\s*[\u4e00-\u9fff]{1,20}$',
+            r'^(?:chapter|section)\s+\d+(?:\.\d+)*\s+.{2,40}$',
         ]
         for pattern in running_header_patterns:
             if re.match(pattern, s, re.IGNORECASE):
                 return True
 
         return False
+
+    def _normalize_margin_candidate(self, line: str) -> str:
+        s = re.sub(r'\s+', ' ', (line or '').strip())
+        s = re.sub(r'\d+', '#', s)
+        return s.lower()
+
+    def _is_margin_noise_candidate(self, line: str) -> bool:
+        s = (line or '').strip()
+        if not s or s.startswith('['):
+            return False
+        if len(s) > 120:
+            return False
+        if re.search(r'[銆傦紒锛?!?]\s*$', s) and len(s) > 40:
+            return False
+        return True
+
+    def _remove_repeated_marginal_lines(self, pages_text: List[str], pages_to_extract: List[int]) -> List[str]:
+        if len(pages_to_extract) < 2:
+            return pages_text
+
+        margin_counts = {}
+        page_lines = {}
+        for page_num in pages_to_extract:
+            lines = (pages_text[page_num] or '').splitlines()
+            nonempty = [(idx, line) for idx, line in enumerate(lines) if line.strip()]
+            edge_lines = nonempty[:3] + nonempty[-3:]
+            seen = set()
+            for _, line in edge_lines:
+                if not self._is_margin_noise_candidate(line):
+                    continue
+                key = self._normalize_margin_candidate(line)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                margin_counts[key] = margin_counts.get(key, 0) + 1
+            page_lines[page_num] = lines
+
+        threshold = max(2, int(len(pages_to_extract) * 0.25 + 0.999))
+        repeated = {key for key, count in margin_counts.items() if count >= threshold}
+        if not repeated:
+            return pages_text
+
+        cleaned = list(pages_text)
+        for page_num in pages_to_extract:
+            lines = page_lines.get(page_num, [])
+            keep = [True] * len(lines)
+            nonempty_indices = [idx for idx, line in enumerate(lines) if line.strip()]
+            removable_indices = set(nonempty_indices[:4] + nonempty_indices[-4:])
+            for idx in removable_indices:
+                line = lines[idx]
+                if (
+                    self._is_margin_noise_candidate(line)
+                    and self._normalize_margin_candidate(line) in repeated
+                ):
+                    keep[idx] = False
+            cleaned[page_num] = '\n'.join(
+                line for idx, line in enumerate(lines) if keep[idx]
+            ).strip()
+        return cleaned
+
+    def _find_running_headers(self, pages: List[PageExtraction], window: int = 5) -> List[PageExtraction]:
+        """鏍规嵁鐩搁偦椤甸潰閲嶅鐨勯琛屾爣璁拌繍琛屾爣棰樸€?"""
+        if not pages:
+            return []
+
+        first_line_counts = {}
+        normalized_by_index = []
+        for page in pages:
+            first_line = ''
+            for line in (page.text or '').splitlines():
+                candidate = line.strip()
+                if candidate:
+                    first_line = candidate
+                    break
+            normalized_by_index.append(first_line)
+            if first_line:
+                first_line_counts[first_line] = first_line_counts.get(first_line, 0) + 1
+
+        result = []
+        for idx, page in enumerate(pages):
+            first_line = normalized_by_index[idx]
+            is_repeated = bool(first_line) and first_line_counts.get(first_line, 0) >= 2
+            result.append(PageExtraction(
+                page_num=page.page_num,
+                text=page.text,
+                is_running_header=is_repeated,
+            ))
+        return result
 
     def _clean_table_cell(self, cell: Optional[str]) -> str:
         if cell is None:
@@ -405,7 +540,7 @@ class PDFDocumentParser:
         return regions
 
     def _extract_primary_pypdf_image(self, pypdf_page) -> Optional[Image.Image]:
-        """从 PyPDF2 的 XObject 中取出面积最大的图片。"""
+        """浠?PyPDF2 鐨?XObject 涓彇鍑洪潰绉渶澶х殑鍥剧墖銆?"""
         best_image: Optional[Image.Image] = None
         best_area = 0.0
         try:
@@ -490,56 +625,10 @@ class PDFDocumentParser:
 
         return 'text'
 
-    def _detect_two_column_layout(self, page: pdfplumber.page.Page, page_width: float) -> bool:
-        """
-        检测页面是否为双栏布局。
-        通过分析文字块的 x 坐标分布，判断是否存在两个明显的文本列。
-        """
-        try:
-            chars = page.chars
-            if not chars:
-                return False
-
-            # 收集所有文字块的 x0（左边缘）坐标
-            x_coords = [c['x0'] for c in chars if c.get('x0') is not None]
-
-            if len(x_coords) < 20:
-                return False
-
-            # 计算中位数 x 坐标
-            sorted_x = sorted(x_coords)
-            mid = len(sorted_x) // 2
-            median_x = sorted_x[mid]
-
-            # 双栏布局时，文字会集中在左右两侧（中间有较大空白）
-            # 左栏文字的 x0 应该在页面宽度的 5%~45% 之间
-            # 右栏文字的 x0 应该在页面宽度的 55%~95% 之间
-            left_threshold = page_width * 0.45
-            right_threshold = page_width * 0.55
-
-            left_chars = sum(1 for x in x_coords if x < left_threshold)
-            right_chars = sum(1 for x in x_coords if x > right_threshold)
-
-            total_chars = len(x_coords)
-            left_ratio = left_chars / total_chars
-            right_ratio = right_chars / total_chars
-
-            # 如果左右两栏各有 > 20% 的文字，认为是双栏布局
-            if left_ratio > 0.2 and right_ratio > 0.2:
-                # 额外检查：中间区域（35%~65%）的文字应该很少
-                mid_chars = sum(1 for x in x_coords if left_threshold <= x <= right_threshold)
-                mid_ratio = mid_chars / total_chars
-                if mid_ratio < 0.15:
-                    return True
-
-            return False
-        except Exception:
-            return False
-
     def _should_use_ocr(self, text: str, quality: float, image_regions: List[_ImageRegion], table_bboxes: List[Tuple[float, float, float, float]]) -> bool:
         if not text.strip():
             return True
-        # 有表格结构但文本层缺少换行符（表格内容可能为图片格式嵌入），强制 OCR
+        # 鏈夎〃鏍肩粨鏋勪絾鏂囨湰灞傜己灏戞崲琛岀锛堣〃鏍煎唴瀹瑰彲鑳戒负鍥剧墖鏍煎紡宓屽叆锛夛紝寮哄埗 OCR
         if table_bboxes and '\n' not in text and quality < 0.5:
             return True
         if quality < 0.28 and (image_regions or table_bboxes):
@@ -568,24 +657,24 @@ class PDFDocumentParser:
             return primary
         if secondary in primary:
             return primary
-        return f"{primary}\n\n[OCR补充]\n{secondary}"
+        return f"{primary}\n\n[OCR琛ュ厖]\n{secondary}"
 
-    # ==================== v0.9 章节检测与困难页分类 ====================
+    # ==================== v0.9 绔犺妭妫€娴嬩笌鍥伴毦椤靛垎绫?====================
 
     def detect_chapter_boundaries(self, pdf_path: str) -> List[ChapterBoundary]:
         """
-        检测PDF的章节边界。
+        妫€娴婸DF鐨勭珷鑺傝竟鐣屻€?
 
-        算法:
-        1. 用pdfplumber读取每页所有chars
-        2. 按y坐标聚类成行
-        3. 计算每页的「正文基线字号」= 中位数
-        4. 字号 > 基线*1.25 且 < 基线*3.0 的行 → 候选标题
-        5. 正则二次确认（中英文）
-        6. 过滤过短（<2字）和过长（>80字）的标题
+        绠楁硶:
+        1. 鐢╬dfplumber璇诲彇姣忛〉鎵€鏈塩hars
+        2. 鎸墆鍧愭爣鑱氱被鎴愯
+        3. 璁＄畻姣忛〉鐨勩€屾鏂囧熀绾垮瓧鍙枫€? 涓綅鏁?
+        4. 瀛楀彿 > 鍩虹嚎*1.25 涓?< 鍩虹嚎*3.0 鐨勮 鈫?鍊欓€夋爣棰?
+        5. 姝ｅ垯浜屾纭锛堜腑鑻辨枃锛?
+        6. 杩囨护杩囩煭锛?2瀛楋級鍜岃繃闀匡紙>80瀛楋級鐨勬爣棰?
 
         Returns:
-            按页码排序的 ChapterBoundary 列表
+            鎸夐〉鐮佹帓搴忕殑 ChapterBoundary 鍒楄〃
         """
         boundaries: List[ChapterBoundary] = []
         try:
@@ -595,12 +684,12 @@ class PDFDocumentParser:
                     if not chars or len(chars) < 10:
                         continue
 
-                    # 1. 计算每行字号（按y坐标聚类）
+                    # 1. 璁＄畻姣忚瀛楀彿锛堟寜y鍧愭爣鑱氱被锛?
                     lines = self._group_chars_into_lines(chars)
                     if not lines:
                         continue
 
-                    # 2. 找正文基线字号（页面字号中位数）
+                    # 2. 鎵炬鏂囧熀绾垮瓧鍙凤紙椤甸潰瀛楀彿涓綅鏁帮級
                     sizes = [ln['size'] for ln in lines if ln['size'] > 0]
                     if not sizes:
                         continue
@@ -609,24 +698,24 @@ class PDFDocumentParser:
                     if median_size <= 0:
                         continue
 
-                    # 3. 找候选标题行：字号 > 基线*1.25 且 < 基线*3.0
+                    # 3. 鎵惧€欓€夋爣棰樿锛氬瓧鍙?> 鍩虹嚎*1.25 涓?< 鍩虹嚎*3.0
                     for line in lines:
                         if not (median_size * 1.25 < line['size'] < median_size * 3.0):
                             continue
                         text = line['text'].strip()
                         if not text or len(text) < 2 or len(text) > 80:
                             continue
-                        # 跳过纯数字（页码/章节编号后面没标题的）
-                        if not any(c.isalpha() or '一' <= c <= '鿿' for c in text):
+                        # 璺宠繃绾暟瀛楋紙椤电爜/绔犺妭缂栧彿鍚庨潰娌℃爣棰樼殑锛?
+                        if not any(c.isalpha() or '\u4e00' <= c <= '\u9fff' for c in text):
                             continue
-                        # 正则二次确认
+                        # 姝ｅ垯浜屾纭
                         if not self._looks_like_heading(text):
                             continue
-                        # 过滤页眉/页脚区域（前5%或后5%）
+                        # 杩囨护椤电湁/椤佃剼鍖哄煙锛堝墠5%鎴栧悗5%锛?
                         page_height = page.height or 792
                         if line['y0'] < page_height * 0.05 or line['y0'] > page_height * 0.95:
                             continue
-                        # 判断标题级别
+                        # 鍒ゆ柇鏍囬绾у埆
                         level = self._classify_heading_level(text, line['size'], median_size)
                         boundaries.append(ChapterBoundary(
                             page_num=page_idx,
@@ -636,11 +725,11 @@ class PDFDocumentParser:
                             char_count=len(text),
                         ))
         except Exception as exc:
-            # 任何异常都返回空列表，调用方回退到4-页块
-            print(f"[章节检测] 失败: {exc}")
+            # 浠讳綍寮傚父閮借繑鍥炵┖鍒楄〃锛岃皟鐢ㄦ柟鍥為€€鍒?-椤靛潡
+            logger.warning("Chapter detection failed: %s", exc)
             return []
 
-        # 去重：相邻页出现相同标题 → 保留字号更大的
+        # 鍘婚噸锛氱浉閭婚〉鍑虹幇鐩稿悓鏍囬 鈫?淇濈暀瀛楀彿鏇村ぇ鐨?
         deduped: List[ChapterBoundary] = []
         for b in boundaries:
             if deduped and deduped[-1].title == b.title and abs(deduped[-1].page_num - b.page_num) <= 1:
@@ -651,10 +740,10 @@ class PDFDocumentParser:
         return deduped
 
     def _group_chars_into_lines(self, chars: List[dict]) -> List[dict]:
-        """把chars按y坐标聚类成行，返回 [{text, size, y0, x0}, ...]"""
+        """鎶奵hars鎸墆鍧愭爣鑱氱被鎴愯锛岃繑鍥?[{text, size, y0, x0}, ...]"""
         if not chars:
             return []
-        # 按top(y0)排序
+        # 鎸塼op(y0)鎺掑簭
         sorted_chars = sorted(chars, key=lambda c: (c.get('top', c.get('y0', 0)), c.get('x0', 0)))
         lines: List[dict] = []
         current: List[dict] = []
@@ -675,7 +764,7 @@ class PDFDocumentParser:
         return lines
 
     def _chars_to_line_dict(self, chars: List[dict]) -> dict:
-        """一行chars → {text, size, y0, x0}"""
+        """涓€琛宑hars 鈫?{text, size, y0, x0}"""
         text = ''.join(c.get('text', '') for c in chars).strip()
         sizes = [c.get('size', 0) for c in chars if c.get('size', 0) > 0]
         avg_size = sum(sizes) / len(sizes) if sizes else 0
@@ -684,74 +773,63 @@ class PDFDocumentParser:
         return {'text': text, 'size': avg_size, 'y0': y0, 'x0': x0}
 
     def _looks_like_heading(self, text: str) -> bool:
-        """正则确认是否像标题（中英文）"""
+        """Return True when a line looks like a Chinese or English heading."""
         patterns = [
-            # 英文: Chapter N, Section N, N. Title, N.M Title, Abstract, References
             r'^(Chapter|CHAPTER|Section|SECTION|Part|PART)\s+[\dIVX]+',
             r'^(Abstract|ABSTRACT|Introduction|INTRODUCTION|Conclusion|CONCLUSION|References|REFERENCES|Bibliography|Acknowledgement|Appendix)\b',
             r'^\d+(\.\d+){0,3}\.?\s+[A-Z][\w\s\-:,\(\)]{2,60}$',
             r'^\d+\.\s+[A-Z][a-zA-Z]+',
-            # 中文: 第X章/节, 摘要, 结论, 参考文献
-            r'^第\s*[一二三四五六七八九十\d]+\s*[章节]\s*[一-鿿]',
-            r'^(摘要|Abstract|引言|前言|背景|相关工作|方法|实验|结果|讨论|结论|总结|参考文献|致谢|附录)\b',
+            r'^\u7b2c\s*[\u4e00-\u9fff\d]+\s*[\u7ae0\u8282]\s*[\u4e00-\u9fff]*',
+            r'^(\u6458\u8981|\u5f15\u8a00|\u524d\u8a00|\u80cc\u666f|\u76f8\u5173\u5de5\u4f5c|\u65b9\u6cd5|\u5b9e\u9a8c|\u7ed3\u679c|\u8ba8\u8bba|\u7ed3\u8bba|\u603b\u7ed3|\u53c2\u8003\u6587\u732e|\u81f4\u8c22|\u9644\u5f55)\b',
         ]
-        for p in patterns:
-            if re.match(p, text):
-                return True
-        return False
+        return any(re.match(p, text) for p in patterns)
 
     def _classify_heading_level(self, text: str, font_size: float, median_size: float) -> int:
-        """根据字号和文本模式判断标题级别"""
+        """Classify heading level from font size and heading pattern."""
         ratio = font_size / median_size if median_size > 0 else 1.0
-        # 字号 > 2x 基线 → Chapter (level 1)
         if ratio > 2.0:
             return 1
-        # 含 Chapter/第X章 → level 1
-        if re.match(r'^(Chapter|CHAPTER|第\s*[一二三四五六七八九十\d]+\s*章)', text):
+        if re.match(r'^(Chapter|CHAPTER|\u7b2c\s*[\u4e00-\u9fff\d]+\s*\u7ae0)', text):
             return 1
-        # 含 Section/第X节 → level 2
-        if re.match(r'^(Section|SECTION|第\s*[一二三四五六七八九十\d]+\s*节)', text):
+        if re.match(r'^(Section|SECTION|\u7b2c\s*[\u4e00-\u9fff\d]+\s*\u8282)', text):
             return 2
-        # 数字编号 N.M(.K) → 推测 level (深度 = 点数+1)
         m = re.match(r'^(\d+)(\.\d+)+', text)
         if m:
             depth = m.group(0).count('.') + 1
             return min(3, depth)
-        # 纯 N. → level 2
         if re.match(r'^\d+\.', text):
             return 2
-        # 中等字号 → level 2
         if ratio > 1.6:
             return 1
         return 2
 
     def classify_difficult_pages(self, pdf_path: str) -> List[PageFeatures]:
         """
-        分类每页难度：公式密度/表格密度/图像密度。
+        鍒嗙被姣忛〉闅惧害锛氬叕寮忓瘑搴?琛ㄦ牸瀵嗗害/鍥惧儚瀵嗗害銆?
 
         Returns:
-            PageFeatures 列表
+            PageFeatures 鍒楄〃
         """
         results: List[PageFeatures] = []
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 for page_idx, page in enumerate(pdf.pages):
                     text = page.extract_text() or ''
-                    # 公式密度
+                    # 鍏紡瀵嗗害
                     formula_lines = self._count_formula_lines(text)
                     total_lines = max(1, len([l for l in text.split('\n') if l.strip()]))
                     formula_density = formula_lines / total_lines
-                    # 表格密度（多列结构：同行含多个 ≥2 空格的序列）
+                    # 琛ㄦ牸瀵嗗害锛堝鍒楃粨鏋勶細鍚岃鍚涓?鈮? 绌烘牸鐨勫簭鍒楋級
                     table_lines = sum(1 for l in text.split('\n') if re.search(r'\S\s{2,}\S\s{2,}\S', l))
                     table_density = table_lines / total_lines
-                    # 图像密度
+                    # 鍥惧儚瀵嗗害
                     image_area = sum(
                         (img.get('x1', 0) - img.get('x0', 0)) * (img.get('bottom', img.get('y1', 0)) - img.get('top', img.get('y0', 0)))
                         for img in page.images
                     )
                     page_area = (page.width or 612) * (page.height or 792)
                     image_density = image_area / page_area if page_area > 0 else 0.0
-                    # 判定困难
+                    # 鍒ゅ畾鍥伴毦
                     is_difficult = (
                         formula_density > 0.30
                         or table_density > 0.20
@@ -765,12 +843,12 @@ class PDFDocumentParser:
                         is_difficult=is_difficult,
                     ))
         except Exception as exc:
-            print(f"[困难页分类] 失败: {exc}")
+            logger.warning("Difficult-page classification failed: %s", exc)
             return []
         return results
 
     def _count_formula_lines(self, text: str) -> int:
-        """统计含数学公式的行数"""
+        """缁熻鍚暟瀛﹀叕寮忕殑琛屾暟"""
         if not text:
             return 0
         formula_patterns = [
@@ -780,11 +858,11 @@ class PDFDocumentParser:
             r'\\begin\{equation',        # \begin{equation}
             r'\\begin\{align',           # \begin{align}
             r'\\frac\b',                 # \frac
-            r'\\sum\b|\\int\b|\\prod\b',  # 求和/积分/乘积
-            r'\\partial\b|\\nabla\b',    # 偏导/梯度
+            r'\\sum\b|\\int\b|\\prod\b',  # 姹傚拰/绉垎/涔樼Н
+            r'\\partial\b|\\nabla\b',    # 鍋忓/姊害
             r'\\alpha|\\beta|\\gamma|\\theta|\\lambda|\\mu|\\sigma|\\omega',
-            r'\^[_a-zA-Z0-9\{\(]',        # 上标
-            r'[_a-zA-Z0-9\}]\^',         # 上标（在前）
+            r'\^[_a-zA-Z0-9\{\(]',        # 涓婃爣
+            r'[_a-zA-Z0-9\}]\^',         # 涓婃爣锛堝湪鍓嶏級
         ]
         count = 0
         for line in text.split('\n'):
@@ -797,12 +875,12 @@ class PDFDocumentParser:
         return count
 
     def extract_text_from_pdf(self, pdf_path: str, pages: Optional[List[int]] = None) -> List[str]:
-        """提取 PDF 的每页文本，优先文本层，必要时 OCR 兜底。"""
+        """鎻愬彇 PDF 鐨勬瘡椤垫枃鏈紝浼樺厛鏂囨湰灞傦紝蹇呰鏃?OCR 鍏滃簳銆?"""
         pdf_file = Path(pdf_path)
         if not pdf_file.exists():
-            raise FileNotFoundError(f'PDF文件不存在: {pdf_path}')
+            raise FileNotFoundError(f'PDF鏂囦欢涓嶅瓨鍦? {pdf_path}')
 
-        print(f"\n[PDF提取] 开始提取文件: {pdf_path}")
+        logger.info("PDF text extraction started: %s", pdf_path)
         try:
             with pdfplumber.open(pdf_path) as pdf, open(pdf_path, 'rb') as pdf_handle:
                 reader = PyPDF2.PdfReader(pdf_handle)
@@ -817,9 +895,9 @@ class PDFDocumentParser:
                     'extracting',
                     0,
                     len(pages_to_extract),
-                    '正在使用增强解析器提取PDF文本...',
+                    '姝ｅ湪浣跨敤澧炲己瑙ｆ瀽鍣ㄦ彁鍙朠DF鏂囨湰...',
                     'info',
-                    '📄 开始解析PDF文本层、表格和OCR回退',
+                    '馃搫 寮€濮嬭В鏋怭DF鏂囨湰灞傘€佽〃鏍煎拰OCR鍥為€€',
                 )
 
                 for idx, page_num in enumerate(pages_to_extract):
@@ -827,6 +905,7 @@ class PDFDocumentParser:
                     pypdf_page = reader.pages[page_num]
 
                     text_layer = self._extract_page_text_layer(page)
+                    text_layer = self._remove_bottom_small_text(page, text_layer)
                     table_context, table_bboxes = self._extract_table_regions(page)
                     image_regions = [
                         _ImageRegion(
@@ -843,16 +922,12 @@ class PDFDocumentParser:
                     ]
                     quality = self.quality_fn(text_layer)
 
-                    # 检测双栏布局
-                    try:
-                        page_width = page.width if hasattr(page, 'width') else 0
-                        is_two_column = self._detect_two_column_layout(page, page_width) if page_width > 0 else False
-                        if is_two_column:
-                            print(f"[PDF提取] 第 {page_num + 1} 页: 检测到双栏布局")
-                    except Exception:
-                        is_two_column = False
+                    # Column geometry is not reliable enough to infer document
+                    # semantics: titles, formulas and wide tables routinely
+                    # resemble two columns. Keep extracted reading order only.
+                    is_two_column = False
 
-                    print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页 - 文本层长度: {len(text_layer)}, 质量: {quality:.2f}")
+                    logger.info("Page %d/%d text layer: %d chars, quality %.2f", page_num + 1, total_pages, len(text_layer), quality)
 
                     extracted_text = text_layer
                     ocr_used = False
@@ -873,9 +948,9 @@ class PDFDocumentParser:
                                         ocr_text, ocr_quality = self._run_ocr(crop, 'table')
                                         if ocr_text:
                                             table_texts.append(f'[OCR_TABLE {t_idx}]\n{ocr_text}')
-                                        print(f"[PDF提取] 第 {page_num + 1} 页表格区域 {t_idx} OCR 质量: {ocr_quality:.2f}")
+                                        logger.info("Page %d table region %d OCR quality: %.2f", page_num + 1, t_idx, ocr_quality)
                                     except Exception as crop_err:
-                                        print(f"[PDF提取] 第 {page_num + 1} 页表格区域 OCR 失败: {crop_err}")
+                                        logger.warning("Page %d table OCR failed: %s", page_num + 1, crop_err)
 
                                 if table_texts:
                                     ocr_text = '\n\n'.join(table_texts)
@@ -883,7 +958,7 @@ class PDFDocumentParser:
                                     ocr_text, _ = self._run_ocr(page_image, layout_hint)
                             else:
                                 ocr_text, ocr_quality = self._run_ocr(page_image, layout_hint)
-                                print(f"[PDF提取] 第 {page_num + 1} 页 OCR 质量: {ocr_quality:.2f}, 模式: {layout_hint}")
+                                logger.info("Page %d OCR quality: %.2f, layout: %s", page_num + 1, ocr_quality, layout_hint)
 
                             ocr_text = self._normalize_text(ocr_text, layout_hint=layout_hint)
                             if ocr_text:
@@ -900,14 +975,14 @@ class PDFDocumentParser:
                         else:
                             extracted_text = f"[STRUCTURED_TABLE_CONTEXT]\n{table_context}"
 
-                    # 双栏布局提示
+                    # 鍙屾爮甯冨眬鎻愮ず
                     if is_two_column:
                         extracted_text = f"[TWO_COLUMN_PAGE]\n{extracted_text}"
 
                     extracted_text = self._cleanup_pagination(extracted_text, page_num, total_pages)
                     extracted_text = self._normalize_text(extracted_text)
 
-                    # 修复 PDF 提取时丢失的数学符号
+                    # 淇 PDF 鎻愬彇鏃朵涪澶辩殑鏁板绗﹀彿
                     extracted_text = self._fix_math_extraction(extracted_text)
 
                     if not extracted_text.strip():
@@ -920,20 +995,21 @@ class PDFDocumentParser:
 
                     page_quality = self.quality_fn(extracted_text)
                     source_label = 'OCR' if ocr_used else 'text-layer'
-                    print(f"[PDF提取] 第 {page_num + 1}/{total_pages} 页完成 - 来源: {source_label}, 长度: {len(extracted_text)}, 质量: {page_quality:.2f}")
+                    logger.info("Page %d/%d complete: source=%s, chars=%d, quality=%.2f", page_num + 1, total_pages, source_label, len(extracted_text), page_quality)
 
                     pages_text[page_num] = extracted_text
                     self._emit_progress(
                         'extracting',
                         idx + 1,
                         len(pages_to_extract),
-                        f'已解析 {idx + 1}/{len(pages_to_extract)} 页',
+                        f'Parsed {idx + 1}/{len(pages_to_extract)} pages',
                         'success',
-                        f'✓ 第 {page_num + 1} 页解析完成 (来源: {source_label}, 质量: {page_quality:.0%})',
+                        f'Page {page_num + 1} parsed (source: {source_label}, quality: {page_quality:.0%})',
                     )
 
-                print(f"[PDF提取] 完成！共解析 {len(pages_to_extract)}/{total_pages} 页")
+                logger.info("PDF extraction complete: %d/%d pages", len(pages_to_extract), total_pages)
+                pages_text = self._remove_repeated_marginal_lines(pages_text, pages_to_extract)
         except Exception as exc:
-            raise Exception(f"PDF解析失败: {exc}")
+            raise Exception(f"PDF瑙ｆ瀽澶辫触: {exc}")
 
         return pages_text

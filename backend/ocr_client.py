@@ -6,6 +6,8 @@ OCR 客户端 - 支持多种OCR引擎
 import os
 import base64
 import re
+import logging
+import threading
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
@@ -15,6 +17,11 @@ import httpx
 
 from config import settings
 
+logger = logging.getLogger(__name__)
+
+_paddle_engine = None
+_paddle_engine_lock = threading.Lock()
+
 # OpenCV 是可选的，用于高级图像处理
 try:
     import cv2
@@ -22,7 +29,7 @@ try:
     HAS_OPENCV = True
 except ImportError:
     HAS_OPENCV = False
-    print("⚠️  OpenCV 未安装，将使用 Pillow 进行图像预处理")
+    logger.info("OpenCV is unavailable; OCR image preprocessing will use Pillow")
 
 
 class OCRClient:
@@ -46,7 +53,13 @@ class OCRClient:
         # 检查是否有可用的 Vision API
         self.has_vision_api = bool(settings.OPENAI_API_KEY or settings.GEMINI_API_KEY)
     
-    def preprocess_image(self, image: Image.Image, enhance: bool = True, layout_hint: Optional[str] = None) -> Image.Image:
+    def preprocess_image(
+        self,
+        image: Image.Image,
+        enhance: bool = True,
+        layout_hint: Optional[str] = None,
+        skip_resize: bool = False,
+    ) -> Image.Image:
         """
         图片预处理，提高OCR识别率
         
@@ -60,6 +73,11 @@ class OCRClient:
         # 转换为RGB模式
         if image.mode != 'RGB':
             image = image.convert('RGB')
+
+        # Vision models receive the original raster dimensions unless the
+        # caller explicitly asks for local-OCR preprocessing.
+        if skip_resize:
+            return image
         
         # 确保图片足够清晰 - 提高最小尺寸以改善识别率
         min_size = 800  # 最小边长
@@ -110,7 +128,7 @@ class OCRClient:
                 
                 return enhanced_image
             except Exception as e:
-                print(f"OpenCV 处理失败，使用 Pillow 替代: {e}")
+                logger.warning("OpenCV preprocessing failed; falling back to Pillow: %s", e)
         
         # 使用Pillow进行基础增强（备选方案）
         # 转灰度
@@ -184,7 +202,7 @@ class OCRClient:
             else:
                 return 'text'
         except Exception as e:
-            print(f"内容类型检测失败: {str(e)}")
+            logger.warning("OCR content-type detection failed: %s", e)
             return 'mixed'
     
     def tesseract_ocr(
@@ -223,7 +241,61 @@ class OCRClient:
             return self._normalize_ocr_text(text, layout_hint=layout_hint), quality_score
             
         except Exception as e:
-            print(f"Tesseract OCR 失败: {str(e)}")
+            logger.warning("Tesseract OCR failed: %s", e)
+            return "", 0.0
+
+    def _get_paddle_engine(self):
+        """Load PaddleOCR only if a scanned page actually needs it."""
+        global _paddle_engine
+        if _paddle_engine is not None:
+            return _paddle_engine
+        with _paddle_engine_lock:
+            if _paddle_engine is not None:
+                return _paddle_engine
+            try:
+                from paddleocr import PaddleOCR
+                _paddle_engine = PaddleOCR(
+                    use_angle_cls=True,
+                    lang=settings.PADDLEOCR_LANG,
+                    use_gpu=settings.PADDLEOCR_USE_GPU,
+                    show_log=False,
+                )
+            except Exception as exc:
+                logger.warning("PaddleOCR is unavailable: %s", exc)
+                raise RuntimeError("PaddleOCR 不可用，请检查 PaddleOCR/PaddlePaddle 运行环境。") from exc
+        return _paddle_engine
+
+    def paddle_ocr(
+        self,
+        image: Image.Image,
+        layout_hint: Optional[str] = None,
+    ) -> Tuple[str, float]:
+        """Recognize a page with local PaddleOCR and return text plus confidence."""
+        try:
+            import numpy as np
+            processed = self.preprocess_image(image, layout_hint=layout_hint)
+            result = self._get_paddle_engine().ocr(np.array(processed), cls=True)
+            lines = []
+            confidences = []
+            for block in result or []:
+                for item in block or []:
+                    if not isinstance(item, (list, tuple)) or len(item) < 2:
+                        continue
+                    recognition = item[1]
+                    if not isinstance(recognition, (list, tuple)) or not recognition:
+                        continue
+                    text = str(recognition[0] or '').strip()
+                    if text:
+                        lines.append(text)
+                    if len(recognition) > 1:
+                        try:
+                            confidences.append(float(recognition[1]))
+                        except (TypeError, ValueError):
+                            pass
+            quality = sum(confidences) / len(confidences) if confidences else 0.0
+            return self._normalize_ocr_text('\n'.join(lines), layout_hint=layout_hint), quality
+        except Exception as exc:
+            logger.warning("PaddleOCR failed: %s", exc)
             return "", 0.0
     
     def image_to_base64(self, image: Image.Image, format: str = 'PNG') -> str:
@@ -243,6 +315,27 @@ class OCRClient:
         img_base64 = base64.b64encode(img_bytes).decode('utf-8')
         return f"data:image/{format.lower()};base64,{img_base64}"
     
+    @staticmethod
+    def _estimate_vision_quality(text: str) -> float:
+        """Conservative readability score; API token usage is not OCR confidence."""
+        if not text or not text.strip():
+            return 0.0
+
+        compact = re.sub(r'\s+', '', text)
+        length_score = min(len(compact) / 120, 1.0) * 0.25
+        readable = sum(char.isalnum() or '\u4e00' <= char <= '\u9fff' for char in compact)
+        score = 0.35 + length_score + min(readable / max(len(compact), 1), 0.9) * 0.35
+        if re.search(r'\ufffd|\(cid:\s*\d+\)|cid:\s*\d+', text, re.IGNORECASE):
+            score -= 0.30
+        if re.search(r'(.)\1{5,}', compact):
+            score -= 0.20
+        symbol_ratio = sum(not (char.isalnum() or char.isspace()) for char in compact) / max(len(compact), 1)
+        if symbol_ratio > 0.45 and not re.search(r'\\[a-zA-Z]+|\$|\\begin\{', text):
+            score -= 0.20
+        if re.search(r'\\[a-zA-Z]+|\$[^$]+\$', text):
+            score += 0.04
+        return max(0.0, min(round(score, 3), 0.92))
+
     async def vision_api_ocr(
         self,
         image: Image.Image,
@@ -264,7 +357,12 @@ class OCRClient:
         
         try:
             # 预处理图片（不增强，保持原样）
-            processed_image = self.preprocess_image(image, enhance=False)
+            processed_image = self.preprocess_image(
+                image,
+                enhance=False,
+                layout_hint=layout_hint,
+                skip_resize=True,
+            )
             
             # 转换为Base64
             image_base64 = self.image_to_base64(processed_image)
@@ -320,6 +418,10 @@ class OCRClient:
 图片：det(G) = 3
 输出：$$\\det(G) = 3$$"""
             
+            # OCR must transcribe evidence, not infer mathematical structure
+            # from ordinary prose, page furniture, or isolated punctuation.
+            prompt += "\n\nOnly mark a span as LaTeX math when the image clearly contains a mathematical expression. Do not invent display delimiters (\\[...\\], $$...$$), formulas, or page-layout commands for ordinary text."
+
             # 构建请求
             headers = {
                 "Authorization": f"Bearer {self.vision_api_key}",
@@ -389,10 +491,11 @@ class OCRClient:
                     # Vision API通常质量较高，给予基础加成
                     quality_score = min(quality_score * 1.05, 1.0)
                 
-                return self._normalize_ocr_text(text, layout_hint=layout_hint), quality_score
+                normalized_text = self._normalize_ocr_text(text, layout_hint=layout_hint)
+                return normalized_text, self._estimate_vision_quality(normalized_text)
                 
         except Exception as e:
-            print(f"Vision API OCR 失败 ({self.vision_model}): {str(e)}")
+            logger.warning("Vision API OCR failed for model %s: %s", self.vision_model, e)
             return "", 0.0
     
     # 保留旧方法名作为别名
@@ -422,8 +525,9 @@ class OCRClient:
                 'confidence': float    # 置信度
             }
         """
-        # 检测内容类型
-        content_type = self.detect_content_type(image)
+        # Only mixed mode needs a preliminary Tesseract pass for routing.
+        # A forced Paddle request should not first do duplicate OCR work.
+        content_type = self.detect_content_type(image) if not force_provider and self.provider == 'mixed' else 'mixed'
         
         # 强制指定引擎
         if force_provider:
@@ -432,9 +536,11 @@ class OCRClient:
             provider = 'tesseract'
         elif self.provider == 'vision':
             provider = 'vision'
+        elif self.provider == 'paddle':
+            provider = 'paddle'
         else:  # 'mixed' 混合方案
             # 根据内容类型智能选择
-            if content_type == 'formula':
+            if content_type == 'formula' and settings.ENABLE_VISION_OCR_FALLBACK:
                 # 数学公式优先用 Vision API
                 provider = 'vision' if self.has_vision_api else 'tesseract'
             else:
@@ -446,10 +552,20 @@ class OCRClient:
             text, quality = self.tesseract_ocr(image, layout_hint=layout_hint)
             
             # 如果 Tesseract 质量低，降级到 Vision API
-            if quality < settings.IMAGE_QUALITY_THRESHOLD and self.has_vision_api:
-                print(f"Tesseract 质量较低 ({quality:.2f})，切换到 Vision API ({self.vision_model})")
+            if (
+                settings.ENABLE_VISION_OCR_FALLBACK
+                and quality < settings.IMAGE_QUALITY_THRESHOLD
+                and self.has_vision_api
+            ):
+                logger.info("Tesseract quality %.2f is low; switching to Vision API model %s", quality, self.vision_model)
                 text, quality = await self.vision_api_ocr(image, layout_hint=layout_hint)
                 provider = 'vision'
+        elif provider == 'paddle':
+            text, quality = self.paddle_ocr(image, layout_hint=layout_hint)
+            if not text and settings.ENABLE_PADDLEOCR_FALLBACK:
+                logger.info("PaddleOCR returned no text; falling back to Tesseract")
+                text, quality = self.tesseract_ocr(image, layout_hint=layout_hint)
+                provider = 'tesseract'
         else:
             # 直接使用 Vision API
             if not self.has_vision_api:
@@ -466,5 +582,25 @@ class OCRClient:
         }
 
 
-# 创建全局OCR客户端实例
-ocr_client = OCRClient()
+_ocr_client: Optional[OCRClient] = None
+_ocr_client_lock = threading.Lock()
+
+
+
+def get_ocr_client() -> OCRClient:
+    """Create the OCR client only when OCR is actually requested."""
+    global _ocr_client
+    if _ocr_client is None:
+        with _ocr_client_lock:
+            if _ocr_client is None:
+                _ocr_client = OCRClient()
+    return _ocr_client
+
+
+class _LazyOCRClient:
+    def __getattr__(self, name: str):
+        return getattr(get_ocr_client(), name)
+
+
+# Backwards-compatible lazy proxy for existing imports.
+ocr_client = _LazyOCRClient()

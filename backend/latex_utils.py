@@ -5,7 +5,7 @@ LaTeX 模板与内容处理工具
 """
 
 import re
-from typing import List
+from typing import Any, Dict, List
 
 
 def fix_matrix_transpose(text: str) -> str:
@@ -39,7 +39,7 @@ def fix_matrix_transpose(text: str) -> str:
     # 匹配: 字母/下标 + 空格 + T + 非字母
     # 使用负向先行断言确保 T 后面不是字母
     text = re.sub(
-        r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\s+([T])(?![a-zA-Z])',
+        r'([A-Za-z](?:_[a-zA-Z0-9]+)?)\s+([T])(?![a-zA-Z.])',
         lambda m: m.group(1) + r'^{\mathsf{T}}',
         text
     )
@@ -56,6 +56,11 @@ def fix_matrix_transpose(text: str) -> str:
     # 但保留已经是 W^{\top} 的形式
     text = re.sub(
         r'(\w)\s*\\top\b',
+        lambda m: m.group(1) + r'^{\top}',
+        text
+    )
+    text = re.sub(
+        r'(\w)\top\b',
         lambda m: m.group(1) + r'^{\top}',
         text
     )
@@ -113,7 +118,15 @@ def fix_math_notation(text: str) -> str:
     # 修复下划线形式的下标 (x_i → x_{i}) 但保持 x_i 格式
     # 这个只修复已经是 LaTeX 格式的情况
 
-    # 修复常见的特殊符号文字表示
+    command_replacements = {
+        r'\\le\b': r'\leq',
+        r'\\ge\b': r'\geq',
+        r'\\ne\b': r'\neq',
+    }
+    for old, new in command_replacements.items():
+        text = re.sub(old, lambda _, rep=new: rep, text, flags=re.IGNORECASE)
+
+    # 修复常见的特殊符号文字表示；避免替换已有 LaTeX 命令和连字符词。
     replacements = {
         r'\binfinity\b': r'\infty',
         r'\ble\b': r'\leq',
@@ -139,8 +152,10 @@ def fix_math_notation(text: str) -> str:
     }
 
     for old, new in replacements.items():
-        # 使用单词边界确保不替换变量名
-        text = re.sub(old, new, text, flags=re.IGNORECASE)
+        guarded = old.replace(r'\b', r'(?<![\\-])\b', 1)
+        if guarded.endswith(r'\b'):
+            guarded = guarded[:-2] + r'\b(?!-)'
+        text = re.sub(guarded, lambda _, rep=new: rep, text, flags=re.IGNORECASE)
 
     return text
 
@@ -149,6 +164,244 @@ def strip_document_wrapper(latex_content: str) -> str:
     """去除完整文档包装，仅保留正文。"""
     # 不做任何清理，因为 AI 在 prompt 里已经被要求不要输出文档结构命令
     return latex_content or ""
+
+
+def _is_math_fragment(fragment: str) -> bool:
+    """Return whether a display-math fragment is substantial enough to keep."""
+    compact = re.sub(r"\s+", "", fragment or "")
+    if not compact:
+        return False
+
+    # PDF extraction occasionally leaves a line containing only a glyph from a
+    # split formula (most commonly ``√``).  Rendering such a fragment is both
+    # misleading and useless, so remove it instead of creating a broken block.
+    if re.fullmatch(r"[√∑∫∏±∓≈≠≤≥=+\-*/·.,:;()\[\]{}|]+", compact):
+        return False
+
+    # A lone variable or command is normally another piece of a split formula;
+    # keeping it as display math produces the isolated symbols seen in previews.
+    if re.fullmatch(r"(?:[A-Za-z0-9]|\\[A-Za-z]+)", compact):
+        return False
+    return True
+
+
+def _is_prose_in_display_math(fragment: str) -> bool:
+    """Detect explanatory prose that was incorrectly wrapped in ``\\[...\\]``."""
+    text = (fragment or "").strip()
+    if not text:
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    ascii_words = re.findall(r"[A-Za-z]{3,}", text)
+    # A normal equation can contain a short \text{} annotation.  Only unwrap a
+    # block when it is clearly sentence-like rather than mathematical.
+    return (cjk_count >= 8 and len(text) >= 24) or (
+        len(ascii_words) >= 6 and len(text) >= 60 and not re.search(r"\\(?:frac|sum|int|begin|left|right)", text)
+    )
+
+
+def repair_display_math_delimiters(content: str) -> str:
+    """Repair malformed display-math delimiters emitted by OCR or an LLM.
+
+    The parser deliberately keeps only properly paired ``\\[ ... \\]`` blocks,
+    flattens accidental nesting, and turns prose blocks back into ordinary text.
+    This prevents a single malformed delimiter from making the rest of a page
+    invalid LaTeX/KaTeX.
+    """
+    if not content:
+        return content
+
+    # An escaped backslash followed by a bracket is a common local-conversion
+    # residue (``\\textbackslash{}]``), not literal text that should reach TeX.
+    content = re.sub(r"\\textbackslash\{\}\s*\\?([\[\]])", "", content)
+
+    output: List[str] = []
+    math_parts: List[str] = []
+    in_display_math = False
+    cursor = 0
+    for match in re.finditer(r"\\[\[\]]", content):
+        segment = content[cursor:match.start()]
+        token = match.group(0)
+        cursor = match.end()
+
+        if token == r"\[":
+            if in_display_math:
+                # Nested display math is invalid; retain its intervening text
+                # in the already-open block and ignore the redundant opener.
+                math_parts.append(segment)
+            else:
+                output.append(segment)
+                math_parts = []
+                in_display_math = True
+            continue
+
+        if not in_display_math:
+            # Drop unmatched closers.  They are always malformed LaTeX here.
+            output.append(segment)
+            continue
+
+        math_parts.append(segment)
+        body = "".join(math_parts).strip()
+        if _is_math_fragment(body):
+            if _is_prose_in_display_math(body):
+                output.append(body)
+            else:
+                output.append("\\[\n" + body + "\n\\]")
+        in_display_math = False
+        math_parts = []
+
+    tail = content[cursor:]
+    if in_display_math:
+        # An opener without a matching closer must not swallow the remainder of
+        # the document into math mode.  Preserve its text as ordinary content.
+        output.append("".join(math_parts) + tail)
+    else:
+        output.append(tail)
+    return "".join(output)
+
+
+def validate_latex_page(latex_content: str) -> Dict[str, Any]:
+    """Return lightweight, page-scoped diagnostics for generated LaTeX.
+
+    This deliberately complements (rather than replaces) a full TeX compiler:
+    it is fast enough to run for every converted PDF page and reports problems
+    in terms that the conversion UI can display before a user downloads a file.
+    """
+    text = latex_content or ""
+    diagnostics: List[Dict[str, Any]] = []
+
+    def add(code: str, severity: str, message: str, line: int) -> None:
+        diagnostics.append({
+            'code': code,
+            'severity': severity,
+            'message': message,
+            'line': line,
+        })
+
+    display_opens = [match.start() for match in re.finditer(r"\\\[", text)]
+    display_closes = [match.start() for match in re.finditer(r"\\\]", text)]
+    if len(display_opens) != len(display_closes):
+        add(
+            'unbalanced_display_math', 'error', '显示公式定界符 \\[ 与 \\] 数量不匹配。', 1
+        )
+
+    inline_opens = [match.start() for match in re.finditer(r"\\\(", text)]
+    inline_closes = [match.start() for match in re.finditer(r"\\\)", text)]
+    if len(inline_opens) != len(inline_closes):
+        add(
+            'unbalanced_inline_math', 'error', '行内公式定界符 \\( 与 \\) 数量不匹配。', 1
+        )
+
+    for match in re.finditer(r"\\\[\s*\\\[", text):
+        add(
+            'nested_display_math', 'error', '检测到嵌套显示公式，KaTeX 无法渲染。',
+            text.count('\n', 0, match.start()) + 1,
+        )
+    for match in re.finditer(r"\\textbackslash\{\}\s*\\?[]]", text):
+        add(
+            'escaped_math_delimiter', 'error', '检测到被错误转义的公式结束符。',
+            text.count('\n', 0, match.start()) + 1,
+        )
+    for match in re.finditer(r"\\\[\s*([√∑∫∏±∓≈≠≤≥=+\-*/·.,:;()\[\]{}|\s]+)\s*\\\]", text):
+        add(
+            'isolated_math_fragment', 'warning', '检测到疑似被拆分的孤立公式符号。',
+            text.count('\n', 0, match.start()) + 1,
+        )
+    for match in re.finditer(r"\\\[([\s\S]*?)\\\]", text):
+        body = match.group(1)
+        if len(body) >= 24 and len(re.findall(r"[\u4e00-\u9fff]", body)) >= 8:
+            add(
+                'prose_in_display_math', 'warning', '检测到较长的中文正文被放入显示公式。',
+                text.count('\n', 0, match.start()) + 1,
+            )
+
+    errors = sum(item['severity'] == 'error' for item in diagnostics)
+    warnings = sum(item['severity'] == 'warning' for item in diagnostics)
+    return {
+        'valid': errors == 0,
+        'errors_count': errors,
+        'warnings_count': warnings,
+        'diagnostics': diagnostics,
+    }
+
+
+def replace_latex_page_block(document: str, page_num: int, replacement: str) -> str:
+    """Replace one generated ``% ===== 第 N 页 =====`` block in a document.
+
+    Keeping page replacement here makes a later retry endpoint safe: it can
+    update one page without rebuilding or losing every other converted page.
+    """
+    if page_num < 1:
+        raise ValueError('page_num must be 1-based')
+    marker = rf"% ===== 第 {page_num} 页 ====="
+    # Failed pages deliberately use a compact placeholder instead of a normal
+    # page block.  A retry must be able to replace that placeholder too.
+    failed_marker = rf"% 第 {page_num} 页(?:转换|翻译并转换)失败"
+    next_boundary = (
+        r"(?=^% ===== 第 \d+ 页 =====|"
+        r"^% 第 \d+ 页(?:转换|翻译并转换)失败|"
+        r"^\\end\{document\}|\Z)"
+    )
+    pattern = re.compile(
+        rf"^(?:{re.escape(marker)}|{failed_marker})\n.*?{next_boundary}",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(document or '')
+    if not match:
+        raise ValueError(f'找不到第 {page_num} 页的 LaTeX 内容块')
+
+    clean_replacement = (replacement or '').strip()
+    if clean_replacement.startswith(marker):
+        clean_replacement = clean_replacement[len(marker):].lstrip('\r\n')
+    return (document[:match.start()] + marker + '\n' + clean_replacement.rstrip() + '\n\n' + document[match.end():])
+
+
+def _boundary_formula_lines(text: str, at_end: bool) -> tuple[List[str], int]:
+    lines = (text or '').splitlines()
+    indices = [
+        index for index, line in enumerate(lines)
+        if line.strip() and not (line.strip().startswith('[') and line.strip().endswith(']'))
+    ]
+    if not indices:
+        return lines, -1
+    return lines, indices[-1] if at_end else indices[0]
+
+
+def stitch_cross_page_formula_fragments(
+    pages_text: List[str], selected_pages: List[int]
+) -> set[int]:
+    """Conservatively retain a formula split across two consecutive pages.
+
+    Both sides must exhibit math-specific continuation evidence.  This avoids
+    joining normal prose that happens to cross a PDF page break.
+    """
+    routed_pages: set[int] = set()
+    for previous, following in zip(selected_pages, selected_pages[1:]):
+        if following != previous + 1:
+            continue
+        previous_lines, tail_index = _boundary_formula_lines(pages_text[previous], at_end=True)
+        following_lines, head_index = _boundary_formula_lines(pages_text[following], at_end=False)
+        if tail_index < 0 or head_index < 0:
+            continue
+        tail, head = previous_lines[tail_index].strip(), following_lines[head_index].strip()
+        tail_unfinished = bool(
+            re.search(r'(?:[=+*/^_({\[]|\\(?:frac|sum|int|prod|left|begin\{[^}]+\}))\s*$', tail)
+            or tail.count('{') > tail.count('}')
+            or tail.count('(') > tail.count(')')
+            or tail.count('[') > tail.count(']')
+        )
+        head_math = (
+            head.startswith(('+', '*', '/', '=', ',', ')', ']', '}'))
+            or head.startswith(('\\frac', '\\sum', '\\int', '\\prod', '\\sqrt', '\\right', '\\end{'))
+            or bool(re.match(r'^[A-Za-z]\s*(?:[_^=]|\()', head))
+        )
+        if not (tail_unfinished and head_math):
+            continue
+        previous_lines[tail_index] = f"{tail} {head}"
+        following_lines.pop(head_index)
+        pages_text[previous] = '\n'.join(previous_lines).strip()
+        pages_text[following] = '\n'.join(following_lines).strip()
+        routed_pages.update({previous, following})
+    return routed_pages
 
 
 def sanitize_latex_body(latex_content: str) -> str:
@@ -162,11 +415,17 @@ def sanitize_latex_body(latex_content: str) -> str:
         pass
 
     content = content.replace("\\ begin", "\\begin").replace("\\ end", "\\end")
+    content = re.sub(r'\\(begin|end)\s+\{', r'\\\1{', content)
+
+    try:
+        content = repair_display_math_delimiters(content)
+    except re.error:
+        pass
 
     try:
         # 修复 \\eqref 不兼容 KaTeX 的问题
         # KaTeX 不支持 \\eqref，转为 (\\ref{...}) 格式
-        content = re.sub(r'\\eqref\{([^}]+)\}', r'(\ref{\1})', content)
+        content = re.sub(r'\\eqref\{([^}]+)\}', lambda m: r'(\ref{' + m.group(1) + '})', content)
     except re.error:
         pass
 
@@ -205,6 +464,12 @@ def sanitize_latex_body(latex_content: str) -> str:
     # 移除残留的 [TWO_COLUMN_PAGE] 标记（LLM 未处理时清理）
     try:
         content = re.sub(r'\[TWO_COLUMN_PAGE\]', '', content)
+        # Output is deliberately single-column.  Source-PDF column detection
+        # helps reading order, but must not force a page-layout environment.
+        content = re.sub(r'\\begin\{multicols\}\{\d+\}\s*', '', content)
+        content = re.sub(r'\\end\{multicols\}\s*', '', content)
+        content = re.sub(r'\\vspace(?:\*?)\{[^{}]*\}\s*', '', content)
+        content = re.sub(r'\\(?:newpage|pagebreak|clearpage)\s*', '', content)
         content = re.sub(r"\n{3,}", "\n\n", content)
     except re.error:
         pass
@@ -225,15 +490,13 @@ def remove_standalone_page_numbers(content: str) -> str:
         # 如果一行只有数字（2-4位），很可能是页码
         if re.match(r'^\d{2,4}\s*$', stripped):
             continue
-        # 移除内部的页码注释行（如 % ===== 第 19 页 =====）
-        if re.match(r'^\s*%+\s*={3,}\s*第\s*\d+\s*页\s*={3,}\s*$', stripped):
-            continue
+        # 页级标记是单页重试定位所需的元数据，不能作为页码噪声删除。
         filtered_lines.append(line)
     return '\n'.join(filtered_lines)
 
 
 def remove_excessive_hrules(content: str) -> str:
-    r"""移除文中多余的 \hrule 命令（连续多个 \hrule 或孤立的 \hrule）。"""
+    r"""移除文中多余的 \hrule 命令，同时保留表格的 \hline。"""
     if not content:
         return content
     # 移除孤立的 \hrule（前后是空行的单行 \hrule）
@@ -242,9 +505,8 @@ def remove_excessive_hrules(content: str) -> str:
     filtered = []
     for line in lines:
         stripped = line.strip()
-        # 跳过单独的 \hrule 或 \hrule 前后只有空行的情况
-        if stripped in (r'\hrule', r'\hline', r'\HRule'):
-            # 计数周围空行，避免误删正常表格中的 \hline
+        # \hline 是 tabular 的合法行分隔符，不能在全局清理阶段删除。
+        if stripped in (r'\hrule', r'\HRule'):
             continue
         filtered.append(line)
     result = '\n'.join(filtered)
@@ -254,22 +516,99 @@ def remove_excessive_hrules(content: str) -> str:
 
 
 def normalize_align_environments(content: str) -> str:
-    r"""将 align/align* 转换为支持多行的 aligned 环境，保留 \quad 等间距命令。"""
+    r"""Convert fragile align/align* output to display math with aligned."""
     text = content or ""
 
-    def _replace(match: re.Match) -> str:
-        body = (match.group("body") or "").strip()
+    text = re.sub(
+        r"\\\[\s*(\\begin\{align\*?\})",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(\\end\{align\*?\})\s*\\\]",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\$\$\s*(\\begin\{align\*?\})",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(\\end\{align\*?\})\s*\$\$",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    def _normalize_align_body(body: str) -> str:
+        body = (body or "").strip()
         if not body:
             return ""
-        # aligned 环境支持 \\ 分行，\quad 等间距命令可正常使用
+
+        lines = [line.strip() for line in body.splitlines() if line.strip()]
+        if len(lines) > 1:
+            normalized_lines = []
+            for idx, line in enumerate(lines):
+                if idx < len(lines) - 1 and not line.rstrip().endswith(r"\\"):
+                    line = line.rstrip() + r" \\"
+                normalized_lines.append(line)
+            body = "\n".join(normalized_lines)
+
+        fixed_lines = []
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped and "&" not in stripped and "=" in stripped and not stripped.startswith("\\"):
+                line = re.sub(r"\s*=\s*", r" &= ", line, count=1)
+            fixed_lines.append(line)
+        body = "\n".join(fixed_lines).strip()
+        return re.sub(r"\\\\\s*$", "", body)
+
+    def _replace(match: re.Match) -> str:
+        body = _normalize_align_body(match.group("body") or "")
+        if not body:
+            return ""
         return "\\[\n\\begin{aligned}\n" + body + "\n\\end{aligned}\n\\]"
 
     pattern = re.compile(
         r"\\begin\{align\*?\}(?P<body>[\s\S]*?)\\end\{align\*?\}",
         flags=re.IGNORECASE,
     )
-    return pattern.sub(_replace, text)
+    text = pattern.sub(_replace, text)
 
+    aligned_pattern = re.compile(
+        r"\\begin\{aligned\}[\s\S]*?\\end\{aligned\}",
+        flags=re.IGNORECASE,
+    )
+
+    def _wrap_bare_aligned(match: re.Match) -> str:
+        prefix = text[:match.start()]
+        suffix = text[match.end():]
+        if prefix.rstrip().endswith(r"\[") and suffix.lstrip().startswith(r"\]"):
+            return match.group(0)
+        if prefix.rstrip().endswith("$$") and suffix.lstrip().startswith("$$"):
+            return match.group(0)
+
+        begin_equation = max(
+            prefix.rfind(r"\begin{equation}"),
+            prefix.rfind(r"\begin{equation*}"),
+            prefix.rfind(r"\begin{displaymath}"),
+        )
+        end_equation = max(
+            prefix.rfind(r"\end{equation}"),
+            prefix.rfind(r"\end{equation*}"),
+            prefix.rfind(r"\end{displaymath}"),
+        )
+        if begin_equation > end_equation:
+            return match.group(0)
+
+        return "\n\\[\n" + match.group(0).strip() + "\n\\]\n"
+
+    text = aligned_pattern.sub(_wrap_bare_aligned, text)
+    return text
 
 def split_references_section(text: str) -> tuple[str, str]:
     """拆分正文与参考文献部分，参考文献部分将保持原样不翻译。"""
@@ -423,6 +762,45 @@ def _count_tabular_columns(spec: str) -> int:
     return len(re.findall(r"[clrXSPQ]", text))
 
 
+def _is_tabular_rule_line(line: str) -> bool:
+    stripped = (line or "").strip()
+    return bool(re.match(r"^\\(hline|toprule|midrule|bottomrule|cmidrule|cline)", stripped))
+
+
+def _looks_like_tabular_data_line(line: str) -> bool:
+    stripped = (line or "").strip()
+    if not stripped or stripped.startswith("%"):
+        return False
+    if _is_tabular_rule_line(stripped):
+        return False
+    if stripped.startswith("\\multicolumn") or stripped.startswith("\\multirow"):
+        return True
+    return "&" in stripped
+
+
+def _repair_tabular_row(line: str, cols: int) -> str:
+    raw = (line or "").rstrip()
+    stripped = raw.strip()
+    if not _looks_like_tabular_data_line(stripped):
+        return line
+
+    if stripped.endswith(r"\\"):
+        raw = re.sub(r"\\\\\s*$", "", raw).rstrip()
+
+    raw = re.sub(r"(?<!\\)&\s*$", "", raw).rstrip()
+
+    if cols > 1 and "\\multicolumn" not in stripped and "\\multirow" not in stripped:
+        parts = re.split(r"(?<!\\)&", raw)
+        if len(parts) < cols:
+            parts.extend([" -- "] * (cols - len(parts)))
+        elif len(parts) > cols:
+            extra = " \\& ".join(part.strip() for part in parts[cols - 1:])
+            parts = parts[:cols - 1] + [extra]
+        raw = " & ".join(part.strip() for part in parts)
+
+    return raw.rstrip() + r" \\"
+
+
 def repair_tabular_consistency(content: str) -> str:
     """修复 tabular 中行列数缺失导致的编译错误。"""
     text = content or ""
@@ -457,26 +835,13 @@ def repair_tabular_consistency(content: str) -> str:
             if stripped.startswith("%"):
                 fixed_lines.append(line)
                 continue
-            if "\\\\" not in raw:
+            if _is_tabular_rule_line(stripped):
                 fixed_lines.append(line)
                 continue
-            if re.match(r"^\\(hline|toprule|midrule|bottomrule|cmidrule)", stripped):
-                fixed_lines.append(line)
-                continue
-            if "\\multicolumn" in stripped or "\\multirow" in stripped:
-                fixed_lines.append(line)
-                continue
+            fixed_lines.append(_repair_tabular_row(raw, cols))
 
-            parts = re.split(r"(?<!\\)&", raw)
-            if len(parts) < cols:
-                parts.extend([" -- "] * (cols - len(parts)))
-            elif len(parts) > cols:
-                parts = parts[:cols - 1] + [" \\& ".join(parts[cols - 1:])]
-
-            fixed_lines.append(" & ".join(part.strip() for part in parts))
-
-        new_body = "\n".join(fixed_lines)
-        return f"{begin}{new_body}{end}"
+        new_body = "\n".join(fixed_lines).strip()
+        return f"{begin}\n{new_body}\n{end}"
 
     return pattern.sub(_fix_block, text)
 
@@ -509,8 +874,8 @@ def repair_latex_tables(content: str) -> str:
         stripped = re.sub(r'\s+', '', body)
         if not stripped or stripped.count('&') < 2:
             # 从 begin 中提取列格式 spec
-            spec_match = re.search(r'\{([^}]*)\}', begin)
-            spec = spec_match.group(1) if spec_match else '||'
+            spec_matches = re.findall(r'\{([^{}]*)\}', begin)
+            spec = spec_matches[-1] if spec_matches else '||'
             col_count = _count_tabular_columns(spec)
             placeholder = " & ".join([" " * 8] * max(col_count, 2))
             return f"{begin}\n{placeholder}\n{end}"
@@ -522,6 +887,7 @@ def repair_latex_tables(content: str) -> str:
     lines = content.split('\n')
     fixed_lines: List[str] = []
     in_tabular = False
+    current_cols = 0
     skip_blank_count = 0
 
     for line in lines:
@@ -530,11 +896,14 @@ def repair_latex_tables(content: str) -> str:
 
         if is_begin:
             in_tabular = True
+            spec_match = re.search(r'\{([^{}]*)\}\s*$', line)
+            current_cols = _count_tabular_columns(spec_match.group(1)) if spec_match else 0
             skip_blank_count = 0
             fixed_lines.append(line)
             continue
         if is_end:
             in_tabular = False
+            current_cols = 0
             skip_blank_count = 0
             fixed_lines.append(line)
             continue
@@ -553,16 +922,13 @@ def repair_latex_tables(content: str) -> str:
                 fixed_lines.append(line)
                 continue
 
-            # 检测被截断的短行：只含少量字符 + 以 & 结尾
-            if re.match(r'^[^&]*&\s*$', stripped) or (len(stripped) < 15 and stripped.count('&') == 1 and stripped.endswith('&')):
-                # 可能是截断行，检查下一行是否 & 开头（继续了同一行）
-                fixed_lines.append(line)
-                continue
-
             skip_blank_count = 0
-            fixed_lines.append(line)
+            fixed_lines.append(_repair_tabular_row(line, current_cols))
         else:
             fixed_lines.append(line)
+
+    if in_tabular:
+        fixed_lines.append(r"\end{tabular}")
 
     return '\n'.join(fixed_lines)
 
@@ -610,10 +976,15 @@ def wrap_with_template(body: str, template_name: str = "article", use_chinese: b
         r"\usepackage{amsmath,amssymb,amsthm}",
         r"\usepackage{graphicx}",
         r"\usepackage{hyperref}",
-        r"\usepackage{multicol}",
     ]
     if use_chinese:
         base_packages.append(r"\usepackage{xeCJK}")
+    if re.search(r"\\begin\{algorithm(?:ic)?\}", clean_body):
+        # algorithm 提供浮动体/caption，algpseudocode 提供 algorithmic 伪代码命令。
+        base_packages.extend([
+            r"\usepackage{algorithm}",
+            r"\usepackage{algpseudocode}",
+        ])
 
     if template_name == "report":
         docclass = r"\documentclass[12pt]{report}"

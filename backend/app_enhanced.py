@@ -10,6 +10,12 @@ import time
 import threading
 import asyncio
 import json
+import shutil
+import subprocess
+import tempfile
+import uuid
+import logging
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List
 from flask import Flask, request, jsonify, send_file, render_template
@@ -17,25 +23,26 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename as werkzeug_secure_filename
 from pdf2latex_enhanced import PDF2LaTeXEnhanced
-from image2latex_enhanced import Image2LaTeXEnhanced
-from docx2latex_converter import Docx2LaTeXConverter
 from clients import LLMClient
 from config import settings
+
+# API Key 必须不落入持久任务 JSON；仅供当前进程正在执行的任务使用。
+_transient_task_api_keys = {}
 from history_manager import history_manager, preference_learner
 from task_manager import async_task_manager
-from latex_utils import merge_tex_contents
+from latex_utils import merge_tex_contents, replace_latex_page_block, validate_latex_page
 from latex_syntax import check_latex_syntax, fix_latex_syntax, validate_latex, score_latex_quality
 from error_handler import DetailedErrorCollector, create_error_context
-from knowledge_graph import analyze_paper_structure, get_core_theorems
+from costs import calculate_llm_cost
 import re
 import unicodedata
 
 app = Flask(__name__, template_folder='../frontend/templates', static_folder='../frontend/static')
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'pdf2latex-secret-key')
-CORS(app)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or secrets.token_urlsafe(32)
+CORS(app, origins=settings.CORS_ORIGINS)
 socketio = SocketIO(
     app, 
-    cors_allowed_origins="*",
+    cors_allowed_origins=settings.CORS_ORIGINS,
     ping_timeout=300,  # 5分钟ping超时
     ping_interval=25,  # 25秒ping间隔
     async_mode='threading'
@@ -55,12 +62,63 @@ app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'pdf'}
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif'}
-ALLOWED_DOCX_EXTENSIONS = {'docx'}
 MAX_BATCH_PDF_FILES = 5
 
 # 存储转换任务的状态
 conversion_tasks = {}
+conversion_tasks_lock = threading.RLock()
+CONVERSION_TASK_TTL_SECONDS = 60 * 60
+MAX_CONVERSION_TASKS = 200
+logger = logging.getLogger(__name__)
+
+if not settings.validate():
+    logger.warning(
+        "No LLM API key is configured. Local text conversion remains available, "
+        "but translation and LLM formula reconstruction will be unavailable."
+    )
+
+
+def _cleanup_conversion_tasks() -> None:
+    """Retain active tasks and bound completed task metadata in memory."""
+    now = time.time()
+    with conversion_tasks_lock:
+        expired = [
+            task_id for task_id, task in conversion_tasks.items()
+            if task.get('status') in {'completed', 'error', 'failed'}
+            and now - task.get('completed_at', task.get('updated_at', now)) > CONVERSION_TASK_TTL_SECONDS
+        ]
+        for task_id in expired:
+            conversion_tasks.pop(task_id, None)
+
+        if len(conversion_tasks) > MAX_CONVERSION_TASKS:
+            terminal = sorted(
+                (
+                    (task.get('completed_at', task.get('updated_at', 0)), task_id)
+                    for task_id, task in conversion_tasks.items()
+                    if task.get('status') in {'completed', 'error', 'failed'}
+                )
+            )
+            for _, task_id in terminal[:len(conversion_tasks) - MAX_CONVERSION_TASKS]:
+                conversion_tasks.pop(task_id, None)
+
+
+def _create_conversion_task(task_id: str, **data: Any) -> None:
+    _cleanup_conversion_tasks()
+    now = time.time()
+    with conversion_tasks_lock:
+        conversion_tasks[task_id] = {
+            **data, 'created_at': now, 'updated_at': now,
+        }
+
+
+def _finish_conversion_task(task_id: str, status: str) -> None:
+    """Mark terminal task state so TTL/capacity cleanup can reclaim it."""
+    now = time.time()
+    with conversion_tasks_lock:
+        task = conversion_tasks.get(task_id)
+        if task is not None:
+            task.update(status=status, updated_at=now, completed_at=now)
+    _cleanup_conversion_tasks()
 
 PAPER_AGENT_REQUIRED_INSTRUCTIONS = []
 
@@ -68,16 +126,6 @@ PAPER_AGENT_REQUIRED_INSTRUCTIONS = []
 def allowed_file(filename):
     """检查文件扩展名是否允许"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def allowed_image_file(filename):
-    """检查图片文件扩展名是否允许"""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
-
-
-def allowed_docx_file(filename):
-    """检查DOCX文件扩展名"""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_DOCX_EXTENSIONS
 
 
 def secure_filename(filename):
@@ -153,6 +201,69 @@ def build_output_filename(source_filename: str, translate: bool = False, index: 
     return candidate
 
 
+def _latex_compile_errors(log: str) -> List[Dict[str, Any]]:
+    """Extract actionable compiler errors without exposing temporary paths."""
+    errors: List[Dict[str, Any]] = []
+    current_line = None
+    raw_lines = (log or '').splitlines()
+    lines: List[str] = []
+    index = 0
+    while index < len(raw_lines):
+        raw_line = raw_lines[index]
+        # TeX wraps long diagnostics at its print-width. Join the continuation
+        # before parsing so a Windows temporary path cannot truncate messages.
+        if re.search(r'\.tex:\d+:', raw_line):
+            joined = raw_line.strip()
+            while index + 1 < len(raw_lines):
+                next_line = raw_lines[index + 1].strip()
+                if not next_line or re.search(r'\.tex:\d+:|^! |^l\.', next_line):
+                    break
+                joined += next_line
+                index += 1
+            lines.append(joined)
+        else:
+            lines.append(raw_line)
+        index += 1
+
+    for raw_line in lines:
+        clean_line = raw_line.replace('\r', '').strip()
+        file_line_match = re.search(r'\.tex:(\d+):\s*(.+)', clean_line)
+        if file_line_match:
+            message = file_line_match.group(2).strip()
+            if 'Fatal error' in message:
+                continue
+            errors.append({
+                'line': int(file_line_match.group(1)),
+                'message': message,
+            })
+            current_line = int(file_line_match.group(1))
+            continue
+        line_match = re.search(r'^l\.(\d+)\s*(.*)$', raw_line.strip())
+        if line_match:
+            current_line = int(line_match.group(1))
+            if errors and errors[-1]['line'] is None:
+                errors[-1]['line'] = current_line
+            continue
+        if raw_line.startswith('! '):
+            errors.append({
+                'line': current_line,
+                'message': raw_line[2:].strip(),
+            })
+
+    return errors[:10]
+
+
+def _select_latex_compiler(latex_content: str, template_name: str) -> str | None:
+    """Prefer XeLaTeX for Chinese documents; otherwise use the faster pdfLaTeX."""
+    needs_unicode = (
+        template_name == 'cn-article'
+        or 'xeCJK' in latex_content
+        or bool(re.search(r'[\u4e00-\u9fff]', latex_content))
+    )
+    candidates = ('xelatex', 'pdflatex') if needs_unicode else ('pdflatex', 'xelatex')
+    return next((compiler for compiler in candidates if shutil.which(compiler)), None)
+
+
 def parse_pages_input(pages_str, max_pages: int = None):
     """
     解析页码输入，支持格式: 1,3,5 或 1-3,5,7-9。
@@ -176,6 +287,10 @@ def parse_pages_input(pages_str, max_pages: int = None):
         return None
 
     for part in parts:
+        if re.fullmatch(r'-\d+', part):
+            raise ValueError(f"页码必须大于0: {part}")
+        if re.fullmatch(r'\d+\s*-\s*-\d+', part):
+            raise ValueError(f"页码必须大于0: {part}")
         if '-' in part:
             chunks = [chunk.strip() for chunk in part.split('-')]
             if len(chunks) != 2 or not all(chunk.isdigit() for chunk in chunks):
@@ -205,144 +320,12 @@ def parse_pages_input(pages_str, max_pages: int = None):
     return sorted(pages)
 
 
-def _extract_algorithm_blocks_from_latex(latex_content: str, max_blocks: int = 6) -> List[str]:
-    """提取 LaTeX 中与算法相关的大段内容，供智能体重点参考。"""
-    text = (latex_content or '').strip()
-    if not text:
-        return []
+def _get_pdf_page_count(pdf_path: Path) -> int:
+    """Read the page count once so page-specific operations can validate input."""
+    import PyPDF2
+    with pdf_path.open('rb') as pdf_file:
+        return len(PyPDF2.PdfReader(pdf_file).pages)
 
-    blocks: List[str] = []
-
-    # 1) 优先匹配 algorithm / algorithm* 环境
-    env_pattern = re.compile(
-        r"\\begin\{algorithm\*?\}[\s\S]*?\\end\{algorithm\*?\}",
-        re.IGNORECASE
-    )
-    for m in env_pattern.finditer(text):
-        snippet = m.group(0).strip()
-        if snippet:
-            blocks.append(snippet[:2500])
-        if len(blocks) >= max_blocks:
-            return blocks
-
-    # 2) 匹配 algorithmic 环境
-    algic_pattern = re.compile(
-        r"\\begin\{algorithmic\}[\s\S]*?\\end\{algorithmic\}",
-        re.IGNORECASE
-    )
-    for m in algic_pattern.finditer(text):
-        snippet = m.group(0).strip()
-        if snippet and snippet not in blocks:
-            blocks.append(snippet[:2500])
-        if len(blocks) >= max_blocks:
-            return blocks
-
-    # 3) 回退：按段落抓取包含 Algorithm 关键词的长段
-    paragraphs = re.split(r"\n\s*\n", text)
-    for para in paragraphs:
-        if re.search(r"algorithm|algo\.|procedure|pseudo", para, flags=re.IGNORECASE):
-            cleaned = para.strip()
-            if len(cleaned) >= 120:
-                blocks.append(cleaned[:2500])
-        if len(blocks) >= max_blocks:
-            break
-
-    return blocks[:max_blocks]
-
-
-def _latex_to_text(latex_content: str, max_chars: int = 120000) -> tuple[str, bool]:
-    """将 LaTeX 内容转换为可读的纯文本，供学术智能体分析。"""
-    text = latex_content or ''
-    if not text:
-        return '', False
-
-    # 移除注释
-    text = re.sub(r'%[^\n]*', '', text)
-
-    # 移除文档结构和导言区命令
-    text = re.sub(r'\\documentclass(\[[^\]]*\])?\{[^}]+\}', '', text)
-    text = re.sub(r'\\usepackage(\[[^\]]*\])?\{[^}]+\}', '', text)
-    text = re.sub(r'\\begin\{document\}', '', text)
-    text = re.sub(r'\\end\{document\}', '', text)
-    text = re.sub(r'\\title\{[^}]*\}', '', text)
-    text = re.sub(r'\\author\{[^}]*\}', '', text)
-    text = re.sub(r'\\date\{[^}]*\}', '', text)
-    text = re.sub(r'\\maketitle', '', text)
-    text = re.sub(r'\\centering', '', text)
-    text = re.sub(r'\\newpage', '\n\n', text)
-    text = re.sub(r'\\pagebreak', '\n\n', text)
-
-    # 将 equation 等数学环境转为文本描述
-    text = re.sub(r'\\begin\{equation\*?\}([\s\S]*?)\\end\{equation\*?\}',
-                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
-    text = re.sub(r'\\begin\{align\*?\}([\s\S]*?)\\end\{align\*?\}',
-                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
-    text = re.sub(r'\\begin\{gather\*?\}([\s\S]*?)\\end\{gather\*?\}',
-                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
-    text = re.sub(r'\$\$([\s\S]*?)\$\$',
-                  lambda m: f'[数学公式: {m.group(1).strip()}]', text)
-    text = re.sub(r'\$([^$]+)\$', r'\1', text)
-    text = re.sub(r'\\\[([\s\S]*?)\\\\]', r'\1', text)
-    text = re.sub(r'\\\(([\s\S]*?)\\\)', r'\1', text)
-
-    # 移除表格（保留 caption）
-    text = re.sub(r'\\begin\{table\*?\}([\s\S]*?)\\end\{table\*?\}',
-                  lambda m: re.sub(r'\\caption\{([^}]*)\}', r'表: \1', m.group(0)), text)
-    text = re.sub(r'\\begin\{tabular\*?\}\{[^}]*\}([\s\S]*?)\\end\{tabular\*?\}', '', text)
-
-    # 将 itemize/enumerate 转换为列表符号
-    text = re.sub(r'\\begin\{itemize\}', '', text)
-    text = re.sub(r'\\end\{itemize\}', '\n', text)
-    text = re.sub(r'\\begin\{enumerate\}', '', text)
-    text = re.sub(r'\\end\{enumerate\}', '\n', text)
-    text = re.sub(r'\\item\s+', '• ', text)
-
-    # 转换章节标题
-    text = re.sub(r'\\section\{([^}]+)\}', r'\n\n=== \1 ===\n\n', text)
-    text = re.sub(r'\\subsection\{([^}]+)\}', r'\n\n== \1 ==\n\n', text)
-    text = re.sub(r'\\subsubsection\{([^}]+)\}', r'\n\n= \1 =\n\n', text)
-
-    # 移除图片引用
-    text = re.sub(r'\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}', '', text)
-    text = re.sub(r'\\includegraphics(\[[^\]]*\])?\{[^}]*\}', '', text)
-
-    # 移除字体和样式命令
-    text = re.sub(r'\\textbf\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\textit\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\emph\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\mathrm\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\mathbf\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\mathsf\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\texttt\{([^}]*)\}', r'\1', text)
-
-    # 移除其他常用命令
-    text = re.sub(r'\\label\{[^}]*\}', '', text)
-    text = re.sub(r'\\ref\{[^}]*\}', '', text)
-    text = re.sub(r'\\cite\{[^}]*\}', '', text)
-    text = re.sub(r'\\footnote\{[^}]*\}', '', text)
-    text = re.sub(r'\\thanks\{[^}]*\}', '', text)
-    text = re.sub(r'\\hspace\*?\{[^}]*\}', ' ', text)
-    text = re.sub(r'\\vspace\*?\{[^}]*\}', '\n', text)
-    text = re.sub(r'\\newline', '\n', text)
-    text = re.sub(r'\\quad', ' ', text)
-    text = re.sub(r'\\qquad', '  ', text)
-    text = re.sub(r'\\hfill', '', text)
-    text = re.sub(r'\\dotfill', '', text)
-
-    # 移除 LaTeX 命令符号（保留大括号内的内容）
-    text = re.sub(r'\\[a-zA-Z]+\s*', '', text)
-    text = re.sub(r'\\\\\s*', '\n', text)
-
-    # 清理多余空白
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = text.strip()
-
-    truncated = len(text) > max_chars
-    if truncated:
-        text = text[:max_chars]
-
-    return text, truncated
 
 
 def progress_callback(task_id, status, current, total, message, log_type='info', log_message=None, tokens=None):
@@ -362,12 +345,21 @@ def progress_callback(task_id, status, current, total, message, log_type='info',
     if tokens:
         progress_data['tokens'] = tokens
     
-    print(f"[进度回调] task_id={task_id}, status={status}, {current}/{total}, log_msg={log_message}, tokens={tokens}")
+    logger.info(
+        "Task progress task_id=%s status=%s current=%s total=%s message=%s tokens=%s",
+        task_id, status, current, total, log_message or message, tokens,
+    )
     socketio.emit('progress', progress_data, room=task_id)
     
     # 更新任务状态
-    if task_id in conversion_tasks:
-        conversion_tasks[task_id].update(progress_data)
+    with conversion_tasks_lock:
+        if task_id in conversion_tasks:
+            task = conversion_tasks[task_id]
+            task.update(progress_data)
+            task['updated_at'] = time.time()
+            if status in {'completed', 'error', 'failed'}:
+                task['completed_at'] = time.time()
+    _cleanup_conversion_tasks()
 
     # 更新可恢复任务状态
     async_task_manager.update_progress(task_id, status, current, total, message, tokens=tokens)
@@ -385,6 +377,7 @@ def _save_async_pdf_history(filename, model, translate, pages_str, output_path, 
             'total_pages': result.get('total_pages', 0),
             'processed_pages': result.get('processed_pages', 0),
             'total_tokens': result.get('total_tokens', 0),
+            'cost': result.get('cost', {}),
             'processing_time': result.get('processing_time', 0)
         }
     })
@@ -407,6 +400,9 @@ def _run_async_pdf_task(task_id: str):
     add_wrapper = payload.get('add_wrapper', True)
     template_name = payload.get('template_name', 'article')
     quality_mode = payload.get('quality_mode', 'standard')
+    translation_prompt = payload.get('translation_prompt', '')
+    api_key = _transient_task_api_keys.pop(task_id, '')
+    reasoning_effort = payload.get('reasoning_effort', '')
 
     try:
         if not pdf_path or not Path(pdf_path).exists():
@@ -414,7 +410,10 @@ def _run_async_pdf_task(task_id: str):
 
         async_task_manager.update_task(task_id, status='processing', error=None)
 
-        converter = PDF2LaTeXEnhanced(model=model)
+        converter = PDF2LaTeXEnhanced(
+            model=model, translation_prompt=translation_prompt,
+            api_key=api_key, reasoning_effort=reasoning_effort,
+        )
 
         def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
             progress_callback(task_id, status, current, total, message, log_type, log_message, tokens)
@@ -438,6 +437,7 @@ def _run_async_pdf_task(task_id: str):
             'filename': Path(output_path).name,
             'content': latex_content,
             'source_text': result.get('source_text', ''),
+            'page_diagnostics': result.get('page_diagnostics', []),
             'download_url': f"/api/download/{Path(output_path).name}",
             'stats': {
                 'total_pages': result.get('total_pages', 0),
@@ -445,6 +445,7 @@ def _run_async_pdf_task(task_id: str):
                 'total_tokens': result.get('total_tokens', 0),
                 'prompt_tokens': result.get('prompt_tokens', 0),
                 'completion_tokens': result.get('completion_tokens', 0),
+                'cost': result.get('cost', {}),
                 'processing_time': result.get('processing_time', 0)
             }
         }
@@ -541,12 +542,10 @@ def convert_pdf():
         file.save(filepath)
         
         # 初始化任务状态
-        conversion_tasks[task_id] = {
-            'status': 'processing',
-            'current': 0,
-            'total': 100,
-            'percent': 0
-        }
+        _create_conversion_task(
+            task_id,
+            status='processing', current=0, total=100, percent=0,
+        )
         
         # 创建转换器（支持模型选择）
         try:
@@ -592,6 +591,7 @@ def convert_pdf():
                 'total_pages': result.get('total_pages', 0),
                 'processed_pages': result.get('processed_pages', 0),
                 'total_tokens': result.get('total_tokens', 0),
+                'cost': result.get('cost', {}),
                 'processing_time': result.get('processing_time', 0)
             }
         })
@@ -609,6 +609,7 @@ def convert_pdf():
             'filename': output_filename,
             'content': latex_content,
             'source_text': result.get('source_text', ''),
+            'page_diagnostics': result.get('page_diagnostics', []),
             'download_url': f'/api/download/{output_filename}',
             'stats': {
                 'total_pages': result.get('total_pages', 0),
@@ -616,6 +617,7 @@ def convert_pdf():
                 'total_tokens': result.get('total_tokens', 0),
                 'prompt_tokens': result.get('prompt_tokens', 0),
                 'completion_tokens': result.get('completion_tokens', 0),
+                'cost': result.get('cost', {}),
                 'processing_time': result.get('processing_time', 0)
             }
         }
@@ -635,9 +637,12 @@ def convert_pdf():
         }, room=task_id)
         
         # 返回结果
+        _finish_conversion_task(task_id, 'completed')
         return jsonify(result_data)
     
     except Exception as e:
+        logger.exception("PDF conversion failed for task %s", task_id)
+        progress_callback(task_id, 'error', 0, 1, str(e), 'error', str(e))
         return jsonify({'error': str(e)}), 500
     
     finally:
@@ -645,16 +650,17 @@ def convert_pdf():
         try:
             if filepath and filepath.exists():
                 os.remove(filepath)
-        except:
-            pass
+        except OSError as exc:
+            logger.warning("Failed to remove temporary upload %s: %s", filepath, exc)
 
 
 @app.route('/api/download/<path:filename>')
 def download_file(filename):
     """下载生成的LaTeX文件"""
     try:
-        filepath = app.config['OUTPUT_FOLDER'] / filename
-        if not filepath.exists():
+        output_folder = app.config['OUTPUT_FOLDER'].resolve()
+        filepath = (output_folder / filename).resolve()
+        if filepath.parent != output_folder or not filepath.is_file() or filepath.suffix.lower() != '.tex':
             return jsonify({'error': '文件不存在'}), 404
 
         # 使用 RFC 2231 编码中文文件名
@@ -732,12 +738,11 @@ def batch_convert_pdf():
         batch_id = request.form.get('task_id', '').strip() or f"batch_{timestamp}"
         
         # 初始化批量任务状态
-        conversion_tasks[batch_id] = {
-            'status': 'processing',
-            'total_files': len(files),
-            'completed_files': 0,
-            'results': []
-        }
+        _create_conversion_task(
+            batch_id,
+            status='processing', total_files=len(files),
+            completed_files=0, results=[],
+        )
         
         results = []
         
@@ -808,6 +813,7 @@ def batch_convert_pdf():
                         'total_tokens': result.get('total_tokens', 0),
                         'prompt_tokens': result.get('prompt_tokens', 0),
                         'completion_tokens': result.get('completion_tokens', 0),
+                        'cost': result.get('cost', {}),
                         'processing_time': result.get('processing_time', 0)
                     },
                     'success': True
@@ -828,6 +834,7 @@ def batch_convert_pdf():
                         'total_pages': result.get('total_pages', 0),
                         'processed_pages': result.get('processed_pages', 0),
                         'total_tokens': result.get('total_tokens', 0),
+                        'cost': result.get('cost', {}),
                         'processing_time': result.get('processing_time', 0)
                     }
                 })
@@ -853,6 +860,18 @@ def batch_convert_pdf():
             'total_tokens': sum(r.get('stats', {}).get('total_tokens', 0) for r in results if r.get('success', False)),
             'total_time': sum(r.get('stats', {}).get('processing_time', 0) for r in results if r.get('success', False))
         }
+        successful_costs = [
+            r.get('stats', {}).get('cost', {})
+            for r in results if r.get('success', False)
+        ]
+        if successful_costs and all(cost.get('pricing_configured') for cost in successful_costs):
+            total_stats['cost'] = {
+                'pricing_configured': True,
+                'currency': successful_costs[0].get('currency', 'CNY'),
+                'total_cost': round(sum(cost.get('total_cost', 0) for cost in successful_costs), 6),
+            }
+        else:
+            total_stats['cost'] = {'pricing_configured': False}
         
         # 清理孤立文件
         history_manager.clean_orphan_files(
@@ -881,9 +900,12 @@ def batch_convert_pdf():
             'result': batch_result
         }, room=batch_id)
         
+        _finish_conversion_task(batch_id, 'completed')
         return jsonify(batch_result)
     
     except Exception as e:
+        logger.exception("Batch PDF conversion failed for task %s", batch_id)
+        _finish_conversion_task(batch_id, 'error')
         return jsonify({'error': str(e)}), 500
     
     finally:
@@ -892,8 +914,8 @@ def batch_convert_pdf():
             try:
                 if filepath.exists():
                     os.remove(filepath)
-            except:
-                pass
+            except OSError as exc:
+                logger.warning("Failed to remove temporary upload %s: %s", filepath, exc)
 
 
 @app.route('/api/download-batch/<batch_id>')
@@ -1085,404 +1107,112 @@ def get_pdf_pages():
         try:
             if filepath and filepath.exists():
                 os.remove(filepath)
-        except:
-            pass
+        except OSError as exc:
+            logger.warning("Failed to remove temporary upload %s: %s", filepath, exc)
 
 
-@app.route('/api/convert-image', methods=['POST'])
-def convert_image():
-    """单张图片转LaTeX"""
+@app.route('/api/retry-page', methods=['POST'])
+def retry_pdf_page():
+    """Reconvert one selected PDF page and replace only its LaTeX block."""
+    filepath = None
     try:
-        # 获取参数
-        task_id = request.form.get('task_id')
-        if not task_id:
-            timestamp = int(time.time())
-            task_id = f"task_{timestamp}"
-        
-        # 注意：客户端已通过 socket.emit('join_task') 加入房间
-        # 不需要在这里再次加入（request.sid 在HTTP请求中不可用）
-        
-        # 检查文件
         if 'file' not in request.files:
-            return jsonify({'error': '没有上传文件'}), 400
-        
+            return jsonify({'error': '请重新选择原始 PDF 后再重试该页。'}), 400
+
         file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': '文件名为空'}), 400
-        
-        if not allowed_image_file(file.filename):
-            return jsonify({'error': '不支持的图片格式'}), 400
-        
-        # 保存上传的图片
+        if not file.filename or not allowed_file(file.filename):
+            return jsonify({'error': '重试时只支持原始 PDF 文件。'}), 400
+
+        try:
+            page_num = int(request.form.get('page', '0'))
+        except ValueError:
+            return jsonify({'error': '重试页码无效。'}), 400
+        if page_num < 1:
+            return jsonify({'error': '重试页码必须大于 0。'}), 400
+
+        document = request.form.get('latex_content', '')
+        if not document.strip():
+            return jsonify({'error': '当前 LaTeX 内容为空，无法仅重试单页。'}), 400
+
+        model = request.form.get('model', settings.DEFAULT_MODEL)
+        translate = request.form.get('translate', 'false').lower() == 'true'
+        quality_mode = request.form.get('quality_mode', 'standard')
+        translation_prompt = request.form.get('translation_prompt', '').strip()
+        api_key = request.form.get('api_key', '').strip()
+        reasoning_effort = request.form.get('reasoning_effort', '').strip()
+        if quality_mode not in {'standard', 'high'}:
+            return jsonify({'error': '重试质量模式无效。'}), 400
+
         filename = secure_filename(file.filename)
-        timestamp = int(time.time())
-        unique_filename = f"{timestamp}_{filename}"
-        filepath = UPLOAD_FOLDER / unique_filename
+        filepath = app.config['UPLOAD_FOLDER'] / f"retry_{uuid.uuid4().hex}_{filename}"
         file.save(filepath)
-        
-        # 获取其他参数
-        model = request.form.get('model', settings.DEFAULT_MODEL)
-        translate_raw = request.form.get('translate', 'false')
-        translate = translate_raw.lower() == 'true'
-        ocr_provider = request.form.get('ocr_provider', 'mixed')  # 'mixed' | 'tesseract' | 'vision'
-        add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
-        template_name = request.form.get('template', 'article')
-        quality_mode = request.form.get('quality_mode', 'standard')
-        translation_prompt = request.form.get('translation_prompt', '').strip()
-        
-        # 调试日志
-        print(f"[图片转换] 原始参数: translate_raw='{translate_raw}' (type={type(translate_raw)})")
-        print(f"[图片转换] 解析后参数: model={model}, translate={translate}, ocr_provider={ocr_provider}, add_wrapper={add_wrapper}")
-        
-        # 创建进度回调
-        def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
-            progress_callback(task_id, status, current, total, message, log_type, log_message, tokens)
-        
-        # 创建转换器
-        converter = Image2LaTeXEnhanced(
-            model_name=model,
+        total_pages = _get_pdf_page_count(filepath)
+        if page_num > total_pages:
+            return jsonify({'error': f'第 {page_num} 页不存在；该 PDF 共 {total_pages} 页。'}), 400
+
+        converter = PDF2LaTeXEnhanced(model=model, translation_prompt=translation_prompt)
+        page_index = page_num - 1
+        page_text = converter.extract_text_from_pdf(str(filepath), [page_index])[page_index]
+        if not page_text.strip():
+            return jsonify({
+                'error': f'第 {page_num} 页未提取到可转换文本。请改用 OCR 或保留原文。'
+            }), 422
+
+        latex_page = converter.convert_text_to_latex(
+            page_text,
+            page_index,
+            total_pages,
             translate=translate,
-            translation_prompt=translation_prompt,
-            progress_callback=callback
+            quality_mode=quality_mode,
+            force_llm=quality_mode == 'high',
         )
-        
-        # 执行转换（同步包装异步）
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        output_filename = build_output_filename(filename, translate=False)
-        output_path = OUTPUT_FOLDER / output_filename
-        
-        result = loop.run_until_complete(
-            converter.convert_image(
-                str(filepath),
-                output_path=str(output_path),
-                ocr_provider=ocr_provider if ocr_provider != 'mixed' else None,
-                add_document_wrapper=add_wrapper,
-                template_name=template_name,
-                quality_mode=quality_mode
-            )
+        validation = validate_latex_page(latex_page)
+        page_diagnostic = {
+            'page': page_num,
+            'status': 'warning' if validation['warnings_count'] else 'success',
+            **validation,
+        }
+        updated_document = replace_latex_page_block(document, page_num, latex_page)
+
+        retry_source_name = f"{Path(filename).stem}_retry_p{page_num}.pdf"
+        output_filename = build_output_filename(retry_source_name, translate=translate)
+        output_path = app.config['OUTPUT_FOLDER'] / output_filename
+        output_path.write_text(updated_document, encoding='utf-8')
+
+        logger.info(
+            "Page retry completed page=%s model=%s quality_mode=%s tokens=%s",
+            page_num, model, quality_mode, converter.total_tokens,
         )
-        
-        loop.close()
-        
-        # 清理上传文件
-        try:
-            os.remove(filepath)
-        except:
-            pass
-        
-        if not result['success']:
-            return jsonify(result), 400
-        
-        # 读取生成的LaTeX内容
-        latex_content = Path(result['output_file']).read_text(encoding='utf-8')
-        
-        # 保存到历史记录
-        history_entry = {
-            'timestamp': timestamp,
-            'filename': filename,
-            'model': model,
-            'ocr_provider': result['ocr_result']['provider'],
-            'ocr_quality': result['ocr_result']['quality'],
-            'content_type': result['ocr_result']['content_type'],
-            'translate': translate,
-            'output_file': output_filename,
-            'tokens': result['usage_stats'].get('total_tokens', 0),
-            'elapsed_time': result['elapsed_time']
-        }
-        history_manager.add_entry(history_entry)
-        
-        usage = result['usage_stats']
-        
-        # 构建统一的stats结构
-        stats = {
-            'processed_pages': 1,  # 图片按1页计
-            'total_pages': 1,
-            'prompt_tokens': usage.get('prompt_tokens', 0),
-            'completion_tokens': usage.get('completion_tokens', 0),
-            'total_tokens': usage.get('total_tokens', 0),
-            'processing_time': round(result['elapsed_time'], 2)
-        }
-        
-        # 构建结果数据
-        image_result = {
+        return jsonify({
             'success': True,
-            'task_id': task_id,
+            'content': updated_document,
             'filename': output_filename,
-            'content': latex_content,
             'download_url': f'/api/download/{output_filename}',
-            'latex_content': latex_content,
-            'output_file': output_filename,
-            'ocr_result': result['ocr_result'],
-            'source_text': result.get('source_text', ''),
-            'stats': stats,  # 使用统一的stats结构
-            'usage_stats': usage,  # 保留原始usage_stats
-            'elapsed_time': result['elapsed_time']
-        }
-        
-        # 发送完成状态到前端（通过WebSocket）
-        socketio.emit('progress', {
-            'task_id': task_id,
-            'status': 'completed',
-            'current': 1,
-            'total': 1,
-            'percent': 100,
-            'message': f'✅ 图片转换完成！',
-            'log_type': 'success',
-            'log_message': f'✅ 图片转换完成！OCR引擎: {result["ocr_result"]["provider"]}, 质量: {result["ocr_result"]["quality"]:.1%}',
-            'result': image_result
-        }, room=task_id)
-        
-        return jsonify(image_result)
-    
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/convert-images', methods=['POST'])
-def convert_images():
-    """批量图片转LaTeX"""
-    try:
-        # 获取参数
-        task_id = request.form.get('task_id')
-        if not task_id:
-            timestamp = int(time.time())
-            task_id = f"task_{timestamp}"
-        
-        # 注意：客户端已通过 socket.emit('join_task') 加入房间
-        # 不需要在这里再次加入（request.sid 在HTTP请求中不可用）
-        
-        # 检查文件
-        if 'files' not in request.files:
-            return jsonify({'error': '没有上传文件'}), 400
-        
-        files = request.files.getlist('files')
-        if not files or all(f.filename == '' for f in files):
-            return jsonify({'error': '文件列表为空'}), 400
-        
-        # 保存所有上传的图片
-        uploaded_paths = []
-        timestamp = int(time.time())
-        
-        for file in files:
-            if file and allowed_image_file(file.filename):
-                filename = secure_filename(file.filename)
-                unique_filename = f"{timestamp}_{filename}"
-                filepath = UPLOAD_FOLDER / unique_filename
-                file.save(filepath)
-                uploaded_paths.append(str(filepath))
-        
-        if not uploaded_paths:
-            return jsonify({'error': '没有有效的图片文件'}), 400
-        
-        # 获取其他参数
-        model = request.form.get('model', settings.DEFAULT_MODEL)
-        translate = request.form.get('translate', 'false').lower() == 'true'
-        ocr_provider = request.form.get('ocr_provider', 'mixed')
-        add_wrapper = request.form.get('add_document_wrapper', 'true').lower() == 'true'
-        template_name = request.form.get('template', 'article')
-        quality_mode = request.form.get('quality_mode', 'standard')
-        merge = request.form.get('merge', 'true').lower() == 'true'
-        translation_prompt = request.form.get('translation_prompt', '').strip()
-
-        # 创建进度回调
-        def callback(status, current, total, message, log_type='info', log_message=None, tokens=None):
-            progress_callback(task_id, status, current, total, message, log_type, log_message, tokens)
-        
-        # 创建转换器
-        converter = Image2LaTeXEnhanced(
-            model_name=model,
-            translate=translate,
-            translation_prompt=translation_prompt,
-            progress_callback=callback
-        )
-        
-        # 执行批量转换
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        result = loop.run_until_complete(
-            converter.batch_convert_images(
-                uploaded_paths,
-                output_dir=str(OUTPUT_FOLDER),
-                ocr_provider=ocr_provider if ocr_provider != 'mixed' else None,
-                add_document_wrapper=add_wrapper,
-                template_name=template_name,
-                quality_mode=quality_mode
-            )
-        )
-        
-        loop.close()
-        
-        # 清理上传文件
-        for filepath in uploaded_paths:
+            'page_diagnostic': page_diagnostic,
+            'stats': {
+                'prompt_tokens': converter.prompt_tokens,
+                'completion_tokens': converter.completion_tokens,
+                'total_tokens': converter.total_tokens,
+                'cost': calculate_llm_cost(
+                    converter.model_name,
+                    converter.prompt_tokens,
+                    converter.completion_tokens,
+                ),
+            },
+        })
+    except ValueError as exc:
+        logger.info("Page retry rejected: %s", exc)
+        return jsonify({'error': str(exc)}), 400
+    except Exception:
+        logger.exception("Page retry failed")
+        return jsonify({'error': '重试该页失败。请检查模型配置或稍后再试。'}), 500
+    finally:
+        if filepath:
             try:
-                os.remove(filepath)
-            except:
-                pass
-        
-        # 汇总统计信息（不再计算成本）
-        total_tokens = 0
-        total_time = 0.0
-        
-        # 处理每个结果，添加统一的stats结构
-        processed_results = []
-        for res in result.get('results', []):
-            if res.get('success'):
-                usage = res.get('usage_stats', {})
-                total_tokens += usage.get('total_tokens', 0)
-                total_time += res.get('elapsed_time', 0)
-                
-                # 添加统一的stats结构
-                res['stats'] = {
-                    'processed_pages': 1,
-                    'total_pages': 1,
-                    'prompt_tokens': usage.get('prompt_tokens', 0),
-                    'completion_tokens': usage.get('completion_tokens', 0),
-                    'total_tokens': usage.get('total_tokens', 0),
-                    'processing_time': round(res.get('elapsed_time', 0), 2)
-                }
-                
-                # 添加下载URL
-                if res.get('output_file'):
-                    filename = Path(res['output_file']).name
-                    res['download_url'] = f'/api/download/{filename}'
-            
-            processed_results.append(res)
-        
-        # 构建批量结果
-        batch_result = {
-            'success': True,
-            'total_images': result.get('total_images', 0),
-            'successful_images': result.get('successful_images', 0),
-            'failed_images': result.get('failed_images', 0),
-            'results': processed_results,
-            'total_stats': {
-                'total_files': result.get('total_images', 0),
-                'successful_files': result.get('successful_images', 0),
-                'total_pages': result.get('successful_images', 0),  # 图片按成功数量计
-                'total_tokens': total_tokens,
-                'total_time': round(total_time, 2)
-            }
-        }
-        
-        # 发送完成状态到前端（通过WebSocket）
-        socketio.emit('progress', {
-            'task_id': task_id,
-            'status': 'completed',
-            'current': len(uploaded_paths),
-            'total': len(uploaded_paths),
-            'percent': 100,
-            'message': f'✅ 批量转换完成！成功 {result.get("successful_images", 0)}/{result.get("total_images", 0)} 张图片',
-            'log_type': 'success',
-            'log_message': f'✅ 批量转换完成！成功 {result.get("successful_images", 0)}/{result.get("total_images", 0)} 张图片',
-            'result': batch_result
-        }, room=task_id)
+                filepath.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Failed to remove page retry upload %s: %s", filepath, exc)
 
-        # If merge is requested and we have multiple images, create merged output
-        if merge and len(uploaded_paths) > 1:
-            from image_batch_merger import ImageBatchMerger
-            merger = ImageBatchMerger()
-
-            # Get LaTeX content from each successful result
-            merged_latex = merger.merge_to_latex(uploaded_paths, include_filenames=True)
-
-            # Save merged result
-            merged_filename = f"batch_merged_{timestamp}.tex"
-            merged_path = OUTPUT_FOLDER / merged_filename
-            merged_path.write_text(merged_latex, encoding='utf-8')
-
-            # Override batch_result for merged output
-            batch_result = {
-                'success': True,
-                'total_images': len(uploaded_paths),
-                'successful_images': result.get('successful_images', 0),
-                'failed_images': result.get('failed_images', 0),
-                'latex': merged_latex,
-                'download_url': f'/api/download/{merged_filename}',
-                'count': len(uploaded_paths),
-                'merged': True
-            }
-
-        return jsonify(batch_result)
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/convert-docx', methods=['POST'])
-def convert_docx():
-    """Convert Word (.docx) to LaTeX."""
-    # Handle both single 'file' and multiple 'files' upload
-    files_list = request.files.getlist('files')
-    if not files_list or all(f.filename == '' for f in files_list):
-        # Try single file upload (legacy)
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'error': '没有上传文件'}), 400
-        file = request.files['file']
-        files_list = [file]
-
-    results = []
-    for file in files_list:
-        if file.filename == '':
-            continue
-        if not allowed_docx_file(file.filename):
-            continue
-
-        # Get parameters
-        model = request.form.get('model', 'deepseek_v4_flash')
-        translate = request.form.get('translate', 'false').lower() == 'true'
-
-        # Save uploaded file
-        timestamp = int(time.time() * 1000)
-        task_id = build_task_id('docx', file.filename, timestamp)
-        filename = secure_filename(file.filename)
-        docx_path = UPLOAD_FOLDER / f"{task_id}_{filename}"
-        file.save(str(docx_path))
-
-        try:
-            # Create converter
-            converter = Docx2LaTeXConverter(
-                model_name=model,
-                translate=translate
-            )
-
-            # Output path
-            output_filename = build_output_filename(filename, translate=translate)
-            output_path = OUTPUT_FOLDER / output_filename
-
-            # Convert
-            result = converter.convert(
-                str(docx_path),
-                str(output_path),
-                add_document_wrapper=True
-            )
-
-            results.append({
-                'filename': filename,
-                'latex': result,
-                'download_url': f'/downloads/{output_filename}'
-            })
-        except Exception as e:
-            results.append({
-                'filename': filename,
-                'error': str(e)
-            })
-        finally:
-            # Cleanup uploaded file
-            docx_path.unlink(missing_ok=True)
-
-    if results:
-        return jsonify({'success': True, 'results': results})
-    else:
-        return jsonify({'success': False, 'error': '没有有效的文件'}), 400
 
 
 @app.route('/api/convert-async', methods=['POST'])
@@ -1504,6 +1234,7 @@ def convert_pdf_async():
         model = request.form.get('model', settings.DEFAULT_MODEL)
         template_name = request.form.get('template', 'article')
         quality_mode = request.form.get('quality_mode', 'standard')
+        translation_prompt = request.form.get('translation_prompt', '').strip()
 
         pages = None
         if pages_str:
@@ -1533,8 +1264,12 @@ def convert_pdf_async():
             'pages': pages,
             'add_wrapper': add_wrapper,
             'template_name': template_name,
-            'quality_mode': quality_mode
+            'quality_mode': quality_mode,
+            'translation_prompt': translation_prompt,
+            'reasoning_effort': reasoning_effort,
         }
+        if api_key:
+            _transient_task_api_keys[task_id] = api_key
         async_task_manager.create_task(task_id, payload)
         _start_async_pdf_task(task_id)
 
@@ -1722,7 +1457,97 @@ def validate_latex_api():
             'fix_suggestions': report['fix_suggestions']
         })
     except Exception as e:
+        logger.exception("Batch PDF conversion failed for task %s", batch_id)
+        _finish_conversion_task(batch_id, 'error')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/latex/compile', methods=['POST'])
+def compile_latex_api():
+    """Compile editor content and return a short, line-aware diagnostic report."""
+    try:
+        data = request.get_json(silent=True) or {}
+        latex_content = (data.get('latex') or '').strip()
+        template_name = (data.get('template') or 'article').lower()
+        if not latex_content:
+            return jsonify({'error': '请提供 LaTeX 内容'}), 400
+        if len(latex_content) > 2_000_000:
+            return jsonify({'error': 'LaTeX 内容过大，最大支持 2 MB'}), 413
+
+        compiler = _select_latex_compiler(latex_content, template_name)
+        if not compiler:
+            return jsonify({
+                'success': False,
+                'error': '未找到 LaTeX 编译器。请安装 TeX Live 或 MiKTeX 后重试。',
+                'errors': [],
+            }), 503
+
+        source = latex_content
+        if not re.search(r'\\documentclass(?:\[[^\]]*\])?\{', source):
+            from latex_utils import wrap_with_template
+            source = wrap_with_template(
+                source,
+                template_name=template_name,
+                use_chinese=template_name == 'cn-article',
+            )
+
+        with tempfile.TemporaryDirectory(prefix='pdf2latex_compile_') as temp_dir:
+            workdir = Path(temp_dir)
+            tex_path = workdir / 'document.tex'
+            tex_path.write_text(source, encoding='utf-8')
+            command = [
+                compiler,
+                '-interaction=nonstopmode',
+                '-halt-on-error',
+                '-file-line-error',
+                '-no-shell-escape',
+                '-output-directory', str(workdir),
+                str(tex_path),
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=90,
+            )
+            log = (completed.stdout or '') + '\n' + (completed.stderr or '')
+            pdf_path = workdir / 'document.pdf'
+            if completed.returncode != 0 or not pdf_path.exists():
+                errors = _latex_compile_errors(log)
+                return jsonify({
+                    'success': False,
+                    'compiler': compiler,
+                    'errors': errors,
+                    'error': errors[0]['message'] if errors else 'LaTeX 编译失败，请检查日志和语法。',
+                }), 422
+
+            output_filename = f'preview_{uuid.uuid4().hex}.pdf'
+            output_path = app.config['OUTPUT_FOLDER'] / output_filename
+            shutil.copyfile(pdf_path, output_path)
+            return jsonify({
+                'success': True,
+                'compiler': compiler,
+                'filename': output_filename,
+                'pdf_url': f'/api/latex/preview/{output_filename}',
+            })
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': '编译超时（90 秒）', 'errors': []}), 408
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/latex/preview/<filename>', methods=['GET'])
+def preview_compiled_latex(filename):
+    """Serve a generated preview PDF inline, with filename traversal blocked."""
+    if Path(filename).name != filename or not filename.endswith('.pdf'):
+        return jsonify({'error': '无效的预览文件名'}), 400
+    filepath = app.config['OUTPUT_FOLDER'] / filename
+    if not filepath.is_file():
+        return jsonify({'error': '预览文件不存在'}), 404
+    return send_file(filepath, mimetype='application/pdf', as_attachment=False)
 
 
 # ==================== 用户偏好管理 API ====================
@@ -1872,52 +1697,6 @@ def get_conversion_error_detail():
 
 # ==================== 论文结构知识图谱 API ====================
 
-@app.route('/api/paper/knowledge-graph', methods=['POST'])
-def get_knowledge_graph():
-    """
-    分析论文结构，构建知识图谱
-    返回定理、引理及其依赖关系，用于可视化
-    """
-    try:
-        data = request.get_json(silent=True) or {}
-        latex_content = data.get('latex', '')
-
-        if not latex_content:
-            return jsonify({'error': '请提供 LaTeX 内容'}), 400
-
-        graph_data = analyze_paper_structure(latex_content)
-
-        return jsonify({
-            'success': True,
-            'graph': graph_data,
-            'core_theorems': get_core_theorems(latex_content, top_n=5)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/paper/core-theorems', methods=['POST'])
-def get_paper_core_theorems():
-    """获取论文的核心定理（被引用最多的）"""
-    try:
-        data = request.get_json(silent=True) or {}
-        latex_content = data.get('latex', '')
-        top_n = data.get('top_n', 5)
-
-        if not latex_content:
-            return jsonify({'error': '请提供 LaTeX 内容'}), 400
-
-        theorems = get_core_theorems(latex_content, top_n=top_n)
-
-        return jsonify({
-            'success': True,
-            'core_theorems': theorems
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ==================== 转换质量评分 API ====================
 
 @app.route('/api/latex/quality', methods=['POST'])
 def get_latex_quality_score():
@@ -1988,20 +1767,7 @@ def get_latex_quality_full():
 
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("PDF2LaTeX + Image2LaTeX 增强版启动中...")
-    print("=" * 60)
-    print(f"上传目录: {UPLOAD_FOLDER.absolute()}")
-    print(f"输出目录: {OUTPUT_FOLDER.absolute()}")
-    print("=" * 60)
-    print("访问地址: http://localhost:5000")
-    print("新功能:")
-    print("  ✓ 实时进度显示")
-    print("  ✓ Token用量统计")
-    print("  ✓ 美化代码展示")
-    print("  ✓ 图片OCR识别 (DeepSeek Vision + Tesseract)")
-    print("  ✓ 截图粘贴支持")
-    print("按 Ctrl+C 停止服务器")
-    print("=" * 60)
-    
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
+    logger.info("PDF2LaTeX starting at http://%s:5000", settings.APP_HOST)
+    logger.info("Upload directory: %s | Output directory: %s", UPLOAD_FOLDER.absolute(), OUTPUT_FOLDER.absolute())
+    socketio.run(app, debug=settings.APP_DEBUG, host=settings.APP_HOST, port=5000)

@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF2LaTeX - 智能PDF转LaTeX</title>
+    <title>PDF2LaTeX - PDF 转 LaTeX 工作台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Crimson+Pro:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+SC:wght@400;500;600&family=Playfair+Display:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
     <!-- KaTeX for LaTeX rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -23,8 +23,10 @@
 <body>
     <div class="container">
         <header class="header">
+            <button class="app-settings-btn" id="openAppSettings" type="button" aria-haspopup="dialog" aria-controls="appSettingsDialog">设置</button>
+            <p class="eyebrow">PDF TO LATEX WORKBENCH</p>
             <h1>PDF2LaTeX</h1>
-            <p class="subtitle">智能PDF转LaTeX工具</p>
+            <p class="subtitle">将论文 PDF 转为可编辑、可预览、可下载的 LaTeX 文稿。</p>
         </header>
 
         <main class="main-content">
@@ -36,8 +38,8 @@
                             <polyline points="17 8 12 3 7 8"></polyline>
                             <line x1="12" y1="3" x2="12" y2="15"></line>
                         </svg>
-                        <p class="drop-text">拖拽文件到这里</p>
-                        <p class="drop-text-subtitle">支持 PDF 和图片文件</p>
+                        <p class="drop-text">拖拽 PDF 到这里</p>
+                        <p class="drop-text-subtitle">支持单个 PDF 或最多 5 个 PDF 批量转换</p>
                         <p class="drop-text-or">或</p>
                         <div class="button-group">
                             <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
@@ -47,14 +49,6 @@
                                 </svg>
                                 选择 PDF
                             </button>
-                            <button class="browse-btn-secondary" onclick="document.getElementById('imageInput').click()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                                    <polyline points="21 15 16 10 5 21"></polyline>
-                                </svg>
-                                选择图片
-                            </button>
                             <button class="browse-btn-image" onclick="document.getElementById('batchFileInput').click()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <rect x="3" y="3" width="7" height="7"></rect>
@@ -62,197 +56,52 @@
                                     <rect x="14" y="14" width="7" height="7"></rect>
                                     <rect x="3" y="14" width="7" height="7"></rect>
                                 </svg>
-                                批量选择
-                            </button>
-                            <button class="browse-btn-secondary" onclick="showDocxTab()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                    <polyline points="14 2 14 8 20 8"></polyline>
-                                    <line x1="16" y1="13" x2="8" y2="13"></line>
-                                    <line x1="16" y1="17" x2="8" y2="17"></line>
-                                </svg>
-                                Word
+                                批量 PDF
                             </button>
                         </div>
                         <input type="file" id="fileInput" accept=".pdf" style="display: none;">
-                        <input type="file" id="imageInput" accept=".png,.jpg,.jpeg,.webp,.bmp,.tiff,.gif" style="display: none;">
-                        <input type="file" id="batchFileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display: none;">
-                        <p class="file-hint">支持 Ctrl+V 粘贴截图</p>
-                        <p class="paste-hint" id="pasteHint" style="display: none;">检测到剪贴板图片</p>
-                    </div>
-                </div>
-
-                <div id="imagePreviewSection" style="display: none;">
-                    <h3>已选图片</h3>
-                    <div class="image-thumbnails" id="imageThumbnails"></div>
-                </div>
-
-                <!-- Word Upload Tab -->
-                <div class="upload-tab" id="docx-tab" style="display: none;">
-                    <div class="file-drop-zone" id="docx-drop-zone">
-                        <div class="drop-zone-content">
-                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                <polyline points="14 2 14 8 20 8"></polyline>
-                                <line x1="16" y1="13" x2="8" y2="13"></line>
-                                <line x1="16" y1="17" x2="8" y2="17"></line>
-                                <polyline points="10 9 9 9 8 9"></polyline>
-                            </svg>
-                            <p class="drop-text">拖拽 Word 文件到此处</p>
-                            <p class="drop-text-subtitle">支持 .docx 格式，可多选</p>
-                            <p class="drop-text-or">或</p>
-                            <div class="button-group">
-                                <button class="browse-btn" onclick="document.getElementById('docx-input').click()">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                        <polyline points="14 2 14 8 20 8"></polyline>
-                                    </svg>
-                                    选择 Word
-                                </button>
-                                <button class="browse-btn-secondary" onclick="document.getElementById('docx-batch-input').click()">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                        <rect x="3" y="3" width="7" height="7"></rect>
-                                        <rect x="14" y="3" width="7" height="7"></rect>
-                                        <rect x="14" y="14" width="7" height="7"></rect>
-                                        <rect x="3" y="14" width="7" height="7"></rect>
-                                    </svg>
-                                    批量选择
-                                </button>
-                            </div>
-                            <input type="file" id="docx-input" accept=".docx" multiple style="display: none;">
-                            <input type="file" id="docx-batch-input" accept=".docx" multiple style="display: none;">
-                            <p class="file-hint">可多选文件批量转换</p>
-                        </div>
-                    </div>
-
-                    <div class="options-section" id="docxOptionsSection" style="display: none;">
-                        <h3>转换选项</h3>
-
-                        <div class="option-group">
-                            <label>选择模型</label>
-                            <select id="docx-model-select" class="select-input">
-                                <option value="deepseek_v4" selected>DeepSeek V4</option>
-                                <option value="gpt4o">GPT-4o</option>
-                                <option value="glm47">GLM-4.7</option>
-                            </select>
-                        </div>
-
-                        <div class="option-group">
-                            <label>文档模板</label>
-                            <select id="docx-template-select" class="select-input">
-                                <option value="article">Article（默认）</option>
-                                <option value="report">Report</option>
-                                <option value="book">Book</option>
-                                <option value="beamer">Beamer</option>
-                                <option value="cn-article">中文 Article</option>
-                            </select>
-                        </div>
-
-                        <div class="option-group">
-                            <label>质量模式</label>
-                            <select id="docx-quality-select" class="select-input">
-                                <option value="standard">标准</option>
-                                <option value="high">高质量</option>
-                            </select>
-                        </div>
-
-                        <div class="option-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="docx-translate">
-                                <span>翻译为中文</span>
-                            </label>
-                        </div>
-
-                        <div class="option-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="docx-async-option">
-                                <span>异步任务模式（可恢复）</span>
-                            </label>
-                        </div>
-
-                        <button id="convert-docx-btn" class="convert-btn">
-                            <span class="btn-text">开始转换</span>
-                            <span class="btn-loading" style="display: none;">
-                                <span class="spinner"></span>
-                                转换中...
-                            </span>
-                        </button>
-                    </div>
-
-                    <div id="docx-progress" class="progress-section" style="display: none;">
-                        <div class="progress-content">
-                            <div class="spinner"></div>
-                            <p class="progress-text" id="docx-progress-text">准备开始...</p>
-                        </div>
+                        <input type="file" id="batchFileInput" accept=".pdf" multiple style="display: none;">
+                        <p class="file-hint">单文件可指定页码；批量模式会逐个生成 LaTeX 输出。</p>
                     </div>
                 </div>
 
                 <div class="options-section" id="optionsSection" style="display: none;">
-                    <h3>转换选项</h3>
-
-                    <div class="option-group">
-                        <label>选择模型</label>
-                        <select id="modelSelect" class="select-input">
-                            <option value="">加载中...</option>
-                        </select>
+                    <div class="options-heading">
+                        <div>
+                            <p class="section-kicker">CONVERSION SETTINGS</p>
+                            <h3>转换设置</h3>
+                        </div>
+                        <p>设置输出格式与处理方式，然后开始转换。</p>
                     </div>
 
-                    <div class="option-group">
-                        <label>文档模板</label>
-                        <select id="templateSelect" class="select-input">
-                            <option value="article">Article（默认）</option>
-                            <option value="report">Report</option>
-                            <option value="book">Book</option>
-                            <option value="beamer">Beamer</option>
-                            <option value="cn-article">中文 Article</option>
-                        </select>
-                    </div>
-
-                    <div class="option-group">
-                        <label>质量模式</label>
-                        <select id="qualityModeSelect" class="select-input">
-                            <option value="standard">标准</option>
-                            <option value="high">高质量</option>
-                        </select>
-                    </div>
-
-                    <div class="option-group">
+                    <div class="option-group option-group-wide">
                         <label for="translationPromptInput">用户提示词 <span class="hint">（可选）</span></label>
                         <textarea id="translationPromptInput" class="text-input" rows="3" placeholder="术语替换、翻译风格或保留规则..."></textarea>
                     </div>
 
-                    <div class="option-group">
+                    <div class="option-group option-group-toggle">
                         <label class="checkbox-label">
-                            <input type="checkbox" id="asyncOption">
-                            <span>异步任务模式（可恢复）</span>
+                            <input type="checkbox" id="asyncOption" checked>
+                            <span>后台处理（推荐，可恢复）</span>
                         </label>
                         <button class="btn-secondary" style="margin-top:8px;width:100%" type="button" onclick="resumeLastAsyncTask()">恢复上次任务</button>
                     </div>
 
-                    <div class="option-group" id="ocrProviderGroup" style="display: none;">
-                        <label>OCR 识别引擎</label>
-                        <select id="ocrProviderSelect" class="select-input">
-                            <option value="mixed">混合方案（推荐）</option>
-                            <option value="vision">Vision API（适合数学公式）</option>
-                            <option value="tesseract">Tesseract OCR（本地免费）</option>
-                        </select>
-                    </div>
-
-                    <div class="option-group">
+                    <div class="option-group option-group-toggle">
                         <label class="checkbox-label">
                             <input type="checkbox" id="translateOption">
                             <span>翻译成中文</span>
                         </label>
                     </div>
 
-                    <div class="option-group">
+                    <div class="option-group option-group-toggle">
                         <label class="checkbox-label">
                             <input type="checkbox" id="wrapperOption" checked>
                             <span>添加文档结构</span>
                         </label>
                     </div>
 
-                    <div class="option-group">
+                    <div class="option-group option-group-wide">
                         <label>指定页码 <span class="hint">（可选）</span></label>
                         <input type="text" id="pagesInput" placeholder="例如: 1-3,5,7-9" class="text-input">
                     </div>
@@ -286,24 +135,6 @@
                         </div>
                     </div>
                     <p class="progress-detail" id="progressDetail"></p>
-
-                    <div class="token-stats" id="tokenStats" style="display: none;">
-                        <h4>Token 使用统计</h4>
-                        <div class="stats-grid">
-                            <div class="stat-item">
-                                <span class="stat-label">输入</span>
-                                <span class="stat-value" id="promptTokens">0</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label">输出</span>
-                                <span class="stat-value" id="completionTokens">0</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label">总计</span>
-                                <span class="stat-value" id="totalTokens">0</span>
-                            </div>
-                        </div>
-                    </div>
 
                     <div class="terminal-log" id="terminalLog" style="display: none;">
                         <div class="terminal-header">
@@ -343,8 +174,15 @@
                         <div class="stat-box">
                             <div class="stat-icon">Tok</div>
                             <div class="stat-info">
-                                <span class="stat-label">总 Tokens</span>
+                                <span class="stat-label">Tokens</span>
                                 <span class="stat-value" id="resultTokens">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">¥</div>
+                            <div class="stat-info">
+                                <span class="stat-label">实际费用</span>
+                                <span class="stat-value" id="resultCost">未配置</span>
                             </div>
                         </div>
                         <div class="stat-box">
@@ -356,6 +194,18 @@
                         </div>
                     </div>
                 </div>
+
+                <section class="page-quality-summary" id="pageQualitySummary" aria-live="polite" style="display: none;">
+                    <div class="page-quality-summary-header">
+                        <div>
+                            <span class="pane-label">交付前检查</span>
+                            <h4>页级质量摘要</h4>
+                        </div>
+                        <p id="pageQualityCounts"></p>
+                    </div>
+                    <p class="page-quality-summary-hint">有风险的页面可只重新转换该页，不会重跑整份文档。</p>
+                    <div class="page-quality-list" id="pageQualityList"></div>
+                </section>
 
                 <div class="result-actions">
                     <button class="btn-primary" id="downloadBtn">
@@ -382,24 +232,40 @@
                     </button>
                 </div>
 
-                <div class="code-preview" id="latexWorkspace">
+                <div class="review-workspace" id="reviewWorkspace">
+                    <section class="source-pdf-panel" id="sourcePdfPanel" style="display: none;">
+                        <div class="source-pdf-header">
+                            <div>
+                                <span class="pane-label">原始 PDF</span>
+                                <span class="source-pdf-name" id="sourcePdfName"></span>
+                            </div>
+                            <button class="source-pdf-open" id="openSourcePdfBtn" type="button">新窗口打开</button>
+                        </div>
+                        <iframe id="sourcePdfFrame" class="source-pdf-frame" title="原始 PDF 对照"></iframe>
+                    </section>
+
+                    <div class="code-preview" id="latexWorkspace">
                     <div class="code-header">
                         <span>LaTeX 代码</span>
                         <div class="code-header-right">
+                            <button class="compile-btn" id="compileLatexBtn" type="button">编译预览</button>
                             <span class="code-lines" id="codeLines">0 行</span>
-                            <span class="code-hint">实时预览</span>
+                            <span class="code-hint">双击源码定位预览</span>
                         </div>
                     </div>
+                    <div class="compile-status" id="compileStatus" aria-live="polite"></div>
                     <div class="code-workspace-body">
                         <div class="code-editor-pane">
                             <div class="pane-label">源码</div>
-                            <textarea id="latexEditor" class="latex-editor" spellcheck="false" placeholder="在这里编辑 LaTeX 代码"></textarea>
+                            <textarea id="latexEditor" class="latex-editor" spellcheck="false" aria-describedby="latexSyncHint" placeholder="在这里编辑 LaTeX 代码"></textarea>
                         </div>
                         <div class="code-preview-pane">
                             <div class="pane-label">预览</div>
                             <iframe id="latexRenderFrame" class="latex-render-frame" src="/render?embedded=1" title="LaTeX 预览"></iframe>
                         </div>
                     </div>
+                    <p class="latex-sync-hint" id="latexSyncHint">双击源码中的任意位置，右侧会定位并高亮对应的渲染段落。</p>
+                </div>
                 </div>
             </div>
 
@@ -420,8 +286,8 @@
                 <div class="history-header">
                     <h3>转换历史</h3>
                     <div class="history-header-actions">
-                        <button class="browse-btn" onclick="refreshHistory()">刷新</button>
-                        <button class="history-clear-btn" onclick="clearAllHistory()">清空</button>
+                        <button class="history-action-btn primary" onclick="refreshHistory()">刷新</button>
+                        <button class="history-action-btn danger" onclick="clearAllHistory()">清空</button>
                     </div>
                 </div>
                 <div class="history-list" id="historyList">
@@ -434,17 +300,6 @@
                 </div>
             </div>
 
-            <div class="history-section" id="taskCenterSection">
-                <div class="history-header">
-                    <h3>进行中的任务</h3>
-                    <div class="history-header-actions">
-                        <button class="browse-btn" onclick="loadTaskCenter()">刷新</button>
-                    </div>
-                </div>
-                <div class="history-list" id="taskCenterList">
-                    <div class="loading-history">加载中...</div>
-                </div>
-            </div>
         </main>
 
         <footer class="footer">
@@ -472,6 +327,31 @@
         </div>
     </aside>
     <div class="latex-sidebar-backdrop" id="latexSidebarBackdrop" aria-hidden="true"></div>
+
+    <div class="settings-backdrop" id="settingsBackdrop" hidden></div>
+    <section class="settings-dialog" id="appSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
+        <div class="settings-dialog-header">
+            <div><p class="section-kicker">WORKBENCH SETTINGS</p><h2 id="settingsTitle">设置</h2></div>
+            <button class="settings-close" id="closeAppSettings" type="button" aria-label="关闭设置">关闭</button>
+        </div>
+        <div class="settings-dialog-body">
+            <label for="modelSelect">模型名称</label>
+            <select id="modelSelect" class="select-input"><option value="">加载中...</option></select>
+            <label for="templateSelect">文档模板</label>
+            <select id="templateSelect" class="select-input"><option value="article">Article（默认）</option><option value="report">Report</option><option value="book">Book</option><option value="beamer">Beamer</option><option value="cn-article">中文 Article</option></select>
+            <label for="qualityModeSelect">质量模式</label>
+            <select id="qualityModeSelect" class="select-input"><option value="standard">标准（本地转换，低成本）</option><option value="high">高质量（调用 LLM）</option></select>
+            <label for="settingsApiKey">API Key <span class="hint">（仅本次浏览器与本次任务）</span></label>
+            <input id="settingsApiKey" class="text-input" type="password" autocomplete="off" placeholder="留空则使用服务器 .env 配置">
+            <label for="settingsReasoning">推理强度</label>
+            <select id="settingsReasoning" class="select-input"><option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select>
+            <label for="settingsTranslationStyle">翻译风格</label>
+            <select id="settingsTranslationStyle" class="select-input"><option value="">学术严谨（默认）</option><option value="简洁、自然，避免冗长句式。">简洁自然</option><option value="使用正式、严谨的论文中文表达。">正式论文</option><option value="尽量保留原句结构与术语表达。">贴近原文</option></select>
+            <label for="settingsTheme">主题颜色</label>
+            <select id="settingsTheme" class="select-input"><option value="warm">暖米金</option><option value="slate">石墨蓝灰</option><option value="forest">墨绿</option></select>
+        </div>
+        <div class="settings-dialog-actions"><button class="btn-secondary" id="resetAppSettings" type="button">恢复默认</button><button class="browse-btn" id="saveAppSettings" type="button">保存设置</button></div>
+    </section>
 
     <script src="{{ url_for('static', filename='script_enhanced.js') }}"></script>
 </body>

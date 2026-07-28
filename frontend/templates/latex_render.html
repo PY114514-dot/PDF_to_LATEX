@@ -13,23 +13,23 @@
     <style>
         :root {
             --bg-primary: #ffffff;
-            --bg-secondary: #f0fdfa;
-            --bg-tertiary: #ccfbf1;
-            --text-primary: #134e4a;
-            --text-secondary: #0f766e;
+            --bg-secondary: #fbfaf8;
+            --bg-tertiary: #f3f0ea;
+            --text-primary: #1a1a1a;
+            --text-secondary: #6b6b6b;
             --text-tertiary: #6b7280;
-            --border-color: #99f6e4;
-            --border-light: #e6fffa;
-            --hover-bg: #f0fdfa;
-            --accent-bg: #0d9488;
-            --accent-hover: #0f766e;
-            --accent-light: #14b8a6;
-            --radius: 8px;
+            --border-color: #e8e4df;
+            --border-light: #eeeae5;
+            --hover-bg: #f5f3f0;
+            --accent-bg: #b8860b;
+            --accent-hover: #946a08;
+            --accent-light: #d4a84b;
+            --radius: 12px;
             --radius-sm: 6px;
             --radius-lg: 12px;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+            --shadow-sm: 0 1px 2px rgba(26,26,26,0.04);
+            --shadow-md: 0 8px 24px rgba(26,26,26,0.07);
+            --shadow-lg: 0 18px 44px rgba(26,26,26,0.10);
             --transition-fast: 150ms ease-out;
             --transition-normal: 200ms ease-out;
         }
@@ -45,6 +45,21 @@
             background: var(--bg-secondary);
             min-height: 100vh;
             color: var(--text-primary);
+        }
+
+        [data-source-line] {
+            scroll-margin-block: 2rem;
+            border-radius: 4px;
+            transition: background-color 180ms ease-out, box-shadow 180ms ease-out;
+        }
+
+        .source-line-focus {
+            background: rgba(212, 168, 75, 0.18);
+            box-shadow: inset 3px 0 0 var(--accent-bg), 0 0 0 2px rgba(212, 168, 75, 0.24);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            [data-source-line] { transition: none; }
         }
 
         .header {
@@ -403,7 +418,7 @@
         }
 
         body.is-embedded {
-            background: #f7f7f8;
+            background: #fcfbf8;
             overflow: hidden;
         }
 
@@ -661,10 +676,43 @@
             renderTimer = setTimeout(renderLatex, 150);
         });
 
-        window.addEventListener('message', (event) => {
-            if (!event.data || event.data.type !== 'latex-preview-update') {
+        let pendingPreviewLine = null;
+
+        function focusPreviewLine(line) {
+            const requestedLine = Number(line);
+            if (!Number.isInteger(requestedLine) || requestedLine < 1) return;
+            const targets = [...document.querySelectorAll('[data-source-line]')];
+            if (!targets.length) {
+                pendingPreviewLine = requestedLine;
                 return;
             }
+            let target = targets[0];
+            for (const candidate of targets) {
+                if (Number(candidate.dataset.sourceLine) <= requestedLine) target = candidate;
+                else break;
+            }
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            target.classList.remove('source-line-focus');
+            void target.offsetWidth;
+            target.classList.add('source-line-focus');
+        }
+
+        function addSourceLineMarkers(content) {
+            let currentLine = 1;
+            return content.split(/(\n\s*\n)/).map(part => {
+                const startsAt = currentLine;
+                currentLine += (part.match(/\n/g) || []).length;
+                return part.trim() ? `<!--SOURCE_LINE:${startsAt}-->${part}` : part;
+            }).join('');
+        }
+
+        window.addEventListener('message', (event) => {
+            if (!event.data) return;
+            if (event.data.type === 'latex-preview-focus-line') {
+                focusPreviewLine(event.data.line);
+                return;
+            }
+            if (event.data.type !== 'latex-preview-update') return;
             latexContent = event.data.content || '';
             latexFilename = event.data.filename || latexFilename || '';
             sourceEditor.value = latexContent;
@@ -775,6 +823,8 @@
         }
         
         function processLatexContent(content) {
+            // LaTeX 经转换后字符偏移不再可靠，使用段落起始行作为稳定定位锚点。
+            content = addSourceLineMarkers(content);
             // 先保护数学公式，避免被其他替换破坏
             const mathBlocks = [];
             let mathIndex = 0;
@@ -976,6 +1026,11 @@
                 let para = paragraphs[i].trim();
                 if (!para) continue;
 
+                const sourceLineMatch = para.match(/<!--SOURCE_LINE:(\d+)-->/);
+                const sourceLineAttr = sourceLineMatch ? ` data-source-line="${sourceLineMatch[1]}"` : '';
+                para = para.replace(/<!--SOURCE_LINE:\d+-->/g, '').trim();
+                if (!para) continue;
+
                 // 检查是否是只有 \qquad (xxx) 或 (xxx) 的行（公式引用标签）
                 const isSoloRef = /^\s*\\qquad\s*\(.*\)\s*$/.test(para) || /^\s*\\qquad\s*\(\d+(?:\.\d+)?\)\s*$/.test(para)
                     || /^\s*\(\d+(?:\.\d+)?\)\s*$/.test(para);
@@ -998,7 +1053,7 @@
                     // 这个段落不包含公式，直接处理
                     const lines = para.split(/\n/);
                     const joined = lines.map(l => l.trim()).join('<br>');
-                    merged.push(`<p>${joined}</p>`);
+                    merged.push(`<p${sourceLineAttr}>${joined}</p>`);
                 } else {
                     // 段落包含公式或特殊内容
                     // 检查是否以 \qquad (xxx) 或 (xxx) 开头，后面跟着 \( 或 \[
@@ -1013,10 +1068,16 @@
                         para = mathDelim + rest + ' \\qquad (' + labelNum + ')';
                         console.log(`[render] 交换标签: "${labelNum}" 移到公式后面`);
                     }
-                    merged.push(para);
+                    merged.push(`<div class="render-source-block"${sourceLineAttr}>${para}</div>`);
                 }
             }
             content = merged.join('\n\n');
+
+            if (pendingPreviewLine !== null) {
+                const line = pendingPreviewLine;
+                pendingPreviewLine = null;
+                requestAnimationFrame(() => focusPreviewLine(line));
+            }
 
             return content;
         }
