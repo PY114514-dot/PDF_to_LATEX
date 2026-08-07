@@ -207,6 +207,19 @@
                     <div class="page-quality-list" id="pageQualityList"></div>
                 </section>
 
+                <section class="page-inspector" id="pageInspector" aria-labelledby="pageInspectorTitle" hidden>
+                    <div class="page-inspector-header">
+                        <div><span class="pane-label">页级审校</span><h4 id="pageInspectorTitle">选择一页开始核对</h4></div>
+                        <button class="settings-close" id="closePageInspector" type="button" aria-label="关闭页级审校">关闭</button>
+                    </div>
+                    <p class="page-inspector-diagnostics" id="pageInspectorDiagnostics"></p>
+                    <label for="pageInspectorExtract">本页提取文本（只读）</label>
+                    <textarea id="pageInspectorExtract" class="page-inspector-editor page-inspector-extract" readonly placeholder="选择页面后加载提取文本…"></textarea>
+                    <label for="pageInspectorLatex">当前页 LaTeX（仅替换该页）</label>
+                    <textarea id="pageInspectorLatex" class="page-inspector-editor" spellcheck="false"></textarea>
+                    <div class="page-inspector-actions"><button class="btn-secondary" id="copyPageInspector" type="button">复制页块</button><button class="browse-btn" id="applyPageInspector" type="button">应用本页修改</button></div>
+                </section>
+
                 <div class="result-actions">
                     <button class="btn-primary" id="downloadBtn">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">

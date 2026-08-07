@@ -848,6 +848,8 @@ textarea.text-input {
 
 .page-quality-item.has-error { border-left: 3px solid var(--error-color); }
 .page-quality-item.has-warning { border-left: 3px solid #d49b00; }
+.page-quality-item.is-success { border-left: 3px solid var(--success-color); }
+.page-quality-item.is-active { border-color: var(--accent-light); background: #fffaf0; box-shadow: 0 0 0 2px var(--accent-muted); }
 
 .page-quality-item-content h5,
 .page-quality-item-content p {
@@ -884,6 +886,19 @@ textarea.text-input {
     color: var(--accent-bg);
 }
 
+.page-inspect-btn {
+    min-height: 32px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.page-inspect-btn:hover { border-color: var(--accent-light); color: var(--accent-hover); background: var(--hover-bg); }
+
 .page-retry-btn:disabled {
     cursor: wait;
     opacity: .65;
@@ -894,6 +909,15 @@ textarea.text-input {
     color: var(--success-color);
     font-size: 13px;
 }
+
+.page-inspector { margin: 0 0 20px; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-primary); box-shadow: var(--shadow-sm); }
+.page-inspector-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+.page-inspector h4 { margin:4px 0 0; font-size:15px; }
+.page-inspector > label { display:block; margin:12px 0 6px; color:var(--text-secondary); font-size:12px; font-weight:600; }
+.page-inspector-diagnostics { margin:10px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.5; }
+.page-inspector-editor { width:100%; min-height:180px; padding:12px; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:#fffefc; color:var(--text-primary); font:13px/1.6 'SF Mono','Consolas',monospace; resize:vertical; }
+.page-inspector-extract { min-height:120px; background:var(--bg-secondary); color:var(--text-secondary); }
+.page-inspector-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
 
 /* Result Actions */
 .result-actions {

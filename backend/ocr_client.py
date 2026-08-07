@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 _paddle_engine = None
 _paddle_engine_lock = threading.Lock()
+_pix2text_engine = None
+_pix2text_engine_lock = threading.Lock()
 
 # OpenCV 是可选的，用于高级图像处理
 try:
@@ -298,6 +300,62 @@ class OCRClient:
             logger.warning("PaddleOCR failed: %s", exc)
             return "", 0.0
     
+    def _get_pix2text_engine(self):
+        """Load Pix2Text on demand so its ML runtime stays optional."""
+        global _pix2text_engine
+        if _pix2text_engine is not None:
+            return _pix2text_engine
+        with _pix2text_engine_lock:
+            if _pix2text_engine is not None:
+                return _pix2text_engine
+            try:
+                from pix2text import Pix2Text
+                factory = getattr(Pix2Text, 'from_config', None)
+                _pix2text_engine = factory() if callable(factory) else Pix2Text()
+            except Exception as exc:
+                logger.warning("Pix2Text is unavailable: %s", exc)
+                raise RuntimeError("Pix2Text is unavailable; install pix2text and its model dependencies.") from exc
+        return _pix2text_engine
+
+    @staticmethod
+    def _pix2text_result_to_text(result: Any) -> str:
+        """Normalize Pix2Text's version-dependent structured response."""
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            for key in ('text', 'latex', 'output'):
+                value = result.get(key)
+                if isinstance(value, str):
+                    return value
+            result = result.get('results') or result.get('elements') or []
+        if isinstance(result, (list, tuple)):
+            lines = []
+            for item in result:
+                if isinstance(item, str):
+                    lines.append(item)
+                elif isinstance(item, dict):
+                    value = item.get('text') or item.get('latex') or item.get('content')
+                    if value:
+                        lines.append(str(value))
+            return '\n'.join(lines)
+        return ''
+
+    def pix2text_ocr(self, image: Image.Image, layout_hint: Optional[str] = None) -> Tuple[str, float]:
+        """Recognize formula/mixed content with the optional Pix2Text provider."""
+        try:
+            engine = self._get_pix2text_engine()
+            processed = self.preprocess_image(image, enhance=False, layout_hint=layout_hint)
+            try:
+                result = engine.recognize(processed)
+            except (TypeError, AttributeError):
+                import numpy as np
+                result = engine.recognize(np.array(processed))
+            text = self._normalize_ocr_text(self._pix2text_result_to_text(result), layout_hint=layout_hint)
+            return text, self._estimate_vision_quality(text)
+        except Exception as exc:
+            logger.warning("Pix2Text OCR failed: %s", exc)
+            return '', 0.0
+
     def image_to_base64(self, image: Image.Image, format: str = 'PNG') -> str:
         """
         将PIL图片转换为Base64编码
@@ -538,9 +596,13 @@ class OCRClient:
             provider = 'vision'
         elif self.provider == 'paddle':
             provider = 'paddle'
+        elif self.provider == 'pix2text':
+            provider = 'pix2text'
         else:  # 'mixed' 混合方案
             # 根据内容类型智能选择
-            if content_type == 'formula' and settings.ENABLE_VISION_OCR_FALLBACK:
+            if content_type in {'formula', 'mixed'} and settings.ENABLE_PIX2TEXT_FORMULA_ROUTING:
+                provider = 'pix2text'
+            elif content_type == 'formula' and settings.ENABLE_VISION_OCR_FALLBACK:
                 # 数学公式优先用 Vision API
                 provider = 'vision' if self.has_vision_api else 'tesseract'
             else:
@@ -564,6 +626,16 @@ class OCRClient:
             text, quality = self.paddle_ocr(image, layout_hint=layout_hint)
             if not text and settings.ENABLE_PADDLEOCR_FALLBACK:
                 logger.info("PaddleOCR returned no text; falling back to Tesseract")
+                text, quality = self.tesseract_ocr(image, layout_hint=layout_hint)
+                provider = 'tesseract'
+        elif provider == 'pix2text':
+            text, quality = self.pix2text_ocr(image, layout_hint=layout_hint)
+            if not text and settings.ENABLE_PIX2TEXT_PADDLE_FALLBACK:
+                logger.info("Pix2Text returned no text; falling back to PaddleOCR")
+                text, quality = self.paddle_ocr(image, layout_hint=layout_hint)
+                provider = 'paddle'
+            if not text:
+                logger.info("Pix2Text fallback returned no text; falling back to Tesseract")
                 text, quality = self.tesseract_ocr(image, layout_hint=layout_hint)
                 provider = 'tesseract'
         else:

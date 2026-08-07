@@ -108,6 +108,8 @@ class Settings:
     # ==================== OCR 和图片识别设置 ====================
     
     # OCR 引擎选择: 'mixed' | 'vision' | 'tesseract' | 'paddle'；默认本地优先，降低云端成本
+    # Supported values: mixed | vision | tesseract | paddle | pix2text.
+    # Pix2Text is opt-in: normal born-digital text PDFs keep the lightweight path.
     OCR_PROVIDER: str = os.getenv("OCR_PROVIDER", "tesseract")
 
     # Tesseract 低质量时是否自动回退到 Vision API；成本较高，默认关闭
@@ -118,6 +120,11 @@ class Settings:
     PADDLEOCR_LANG: str = os.getenv("PADDLEOCR_LANG", "ch")
     PADDLEOCR_USE_GPU: bool = os.getenv("PADDLEOCR_USE_GPU", "false").lower() == "true"
     ENABLE_PADDLEOCR_FALLBACK: bool = os.getenv("ENABLE_PADDLEOCR_FALLBACK", "true").lower() == "true"
+
+    # Optional formula/mixed-layout provider.  In mixed mode, route only pages
+    # classified as formula or mixed; missing runtime falls back locally.
+    ENABLE_PIX2TEXT_FORMULA_ROUTING: bool = os.getenv("ENABLE_PIX2TEXT_FORMULA_ROUTING", "false").lower() == "true"
+    ENABLE_PIX2TEXT_PADDLE_FALLBACK: bool = os.getenv("ENABLE_PIX2TEXT_PADDLE_FALLBACK", "true").lower() == "true"
     
     # Tesseract 可执行文件路径（Windows需要配置）
     TESSERACT_CMD: str = os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")

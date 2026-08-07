@@ -1215,6 +1215,45 @@ def retry_pdf_page():
 
 
 
+@app.route('/api/review-page-source', methods=['POST'])
+def review_page_source():
+    """Extract one PDF page for review without invoking translation or LLM conversion."""
+    filepath = None
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': '请重新选择原始 PDF 后再查看提取文本。'}), 400
+        file = request.files['file']
+        if not file.filename or not allowed_file(file.filename):
+            return jsonify({'error': '审校时只支持原始 PDF 文件。'}), 400
+        try:
+            page_num = int(request.form.get('page', '0'))
+        except ValueError:
+            return jsonify({'error': '页码无效。'}), 400
+        if page_num < 1:
+            return jsonify({'error': '页码必须大于 0。'}), 400
+
+        filename = secure_filename(file.filename)
+        filepath = app.config['UPLOAD_FOLDER'] / f"review_{uuid.uuid4().hex}_{filename}"
+        file.save(filepath)
+        total_pages = _get_pdf_page_count(filepath)
+        if page_num > total_pages:
+            return jsonify({'error': f'第 {page_num} 页不存在；该 PDF 共 {total_pages} 页。'}), 400
+
+        converter = PDF2LaTeXEnhanced(model=settings.DEFAULT_MODEL)
+        text = converter.extract_text_from_pdf(str(filepath), [page_num - 1])[page_num - 1]
+        logger.info("Review source extracted page=%s chars=%s", page_num, len(text))
+        return jsonify({'success': True, 'page': page_num, 'extracted_text': text})
+    except Exception:
+        logger.exception("Review source extraction failed")
+        return jsonify({'error': '读取该页提取文本失败，请检查 PDF 或 OCR 配置。'}), 500
+    finally:
+        if filepath:
+            try:
+                filepath.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Failed to remove review upload %s: %s", filepath, exc)
+
+
 @app.route('/api/convert-async', methods=['POST'])
 def convert_pdf_async():
     """异步转换 PDF，可恢复任务。"""

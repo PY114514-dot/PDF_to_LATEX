@@ -17,6 +17,7 @@ let currentPhaseRank = 0;
 let translatePhaseProgress = 0;
 let convertPhaseProgress = 0;
 let currentPageDiagnostics = [];
+let currentReviewPage = null;
 let currentResultStats = {};
 let lastPolledProgressSignature = '';
 let sessionApiKey = '';
@@ -98,6 +99,11 @@ const resultCost = document.getElementById('resultCost');
 const pageQualitySummary = document.getElementById('pageQualitySummary');
 const pageQualityCounts = document.getElementById('pageQualityCounts');
 const pageQualityList = document.getElementById('pageQualityList');
+const pageInspector = document.getElementById('pageInspector');
+const pageInspectorTitle = document.getElementById('pageInspectorTitle');
+const pageInspectorDiagnostics = document.getElementById('pageInspectorDiagnostics');
+const pageInspectorLatex = document.getElementById('pageInspectorLatex');
+const pageInspectorExtract = document.getElementById('pageInspectorExtract');
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -107,6 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupBatchFileInput();
     setupConvertButton();
     setupResultEditor();
+    setupPageInspector();
     setupAppSettings();
     setupLatexCompiler();
     setupLatexSidebar();
@@ -1405,18 +1412,12 @@ function renderPageQualitySummary(pageDiagnostics = []) {
         return;
     }
 
-    const flagged = diagnostics.filter(page =>
-        (page.errors_count || 0) > 0 || (page.warnings_count || 0) > 0
-    );
-    if (!flagged.length) {
-        const complete = document.createElement('p');
-        complete.className = 'page-quality-empty';
-        complete.textContent = '所有已转换页面均通过基础 LaTeX 检查。';
-        pageQualityList.appendChild(complete);
-    } else {
-        flagged.forEach(page => {
+    diagnostics.forEach(page => {
             const row = document.createElement('article');
-            row.className = `page-quality-item ${page.errors_count ? 'has-error' : 'has-warning'}`;
+            const hasError = (page.errors_count || 0) > 0;
+            const hasWarning = !hasError && (page.warnings_count || 0) > 0;
+            row.className = `page-quality-item ${hasError ? 'has-error' : hasWarning ? 'has-warning' : 'is-success'}`;
+            row.dataset.reviewPage = String(page.page);
 
             const content = document.createElement('div');
             content.className = 'page-quality-item-content';
@@ -1426,11 +1427,18 @@ function renderPageQualitySummary(pageDiagnostics = []) {
             const items = Array.isArray(page.diagnostics) ? page.diagnostics : [];
             message.textContent = items.map(item =>
                 item.line ? `第 ${item.line} 行：${item.message}` : item.message
-            ).join('；') || '检测到 LaTeX 风险，请重新检查该页。';
+            ).join('；') || (hasError || hasWarning ? '检测到 LaTeX 风险，请重新检查该页。' : '基础 LaTeX 检查通过，可继续人工核对。');
             content.append(title, message);
 
             const actions = document.createElement('div');
             actions.className = 'page-quality-actions';
+            const inspect = document.createElement('button');
+            inspect.type = 'button';
+            inspect.className = 'page-inspect-btn';
+            inspect.textContent = '查看本页';
+            inspect.addEventListener('click', () => focusReviewPage(page.page));
+            actions.appendChild(inspect);
+            if (hasError || hasWarning) {
             const normalRetry = document.createElement('button');
             normalRetry.type = 'button';
             normalRetry.className = 'page-retry-btn';
@@ -1442,11 +1450,118 @@ function renderPageQualitySummary(pageDiagnostics = []) {
             highRetry.textContent = '高质量重试';
             highRetry.addEventListener('click', () => retryPage(page.page, 'high', highRetry));
             actions.append(normalRetry, highRetry);
+            }
             row.append(content, actions);
             pageQualityList.appendChild(row);
         });
-    }
     pageQualitySummary.style.display = 'block';
+}
+
+function focusReviewPage(pageNum) {
+    if (!Number.isInteger(pageNum) || pageNum < 1) return;
+    if (!latexEditor?.value) {
+        showToast('当前没有可定位的 LaTeX 内容。', 'error');
+        return;
+    }
+    const marker = new RegExp(`^% ===== 第 ${pageNum} 页 =====\\s*$`, 'm');
+    const match = marker.exec(latexEditor.value);
+    if (!match) {
+        showToast(`未找到第 ${pageNum} 页的 LaTeX 页标记，无法精确定位。`, 'error');
+        return;
+    }
+    const line = latexEditor.value.slice(0, match.index).split('\n').length;
+    focusLatexLine(line);
+    currentReviewPage = pageNum;
+    document.querySelectorAll('[data-review-page]').forEach(row => {
+        row.classList.toggle('is-active', Number(row.dataset.reviewPage) === pageNum);
+    });
+    if (sourcePdfObjectUrl && sourcePdfFrame) {
+        sourcePdfFrame.src = `${sourcePdfObjectUrl}#page=${pageNum}`;
+    }
+    populatePageInspector(pageNum);
+    document.getElementById('reviewWorkspace')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function getLatexPageBlock(pageNum, content = getCurrentLatexContent()) {
+    const marker = `% ===== 第 ${pageNum} 页 =====`;
+    const start = content.indexOf(marker);
+    if (start < 0) return null;
+    const bodyStart = start + marker.length;
+    const next = content.indexOf('% ===== 第 ', bodyStart);
+    const documentEnd = content.indexOf('\\end{document}', bodyStart);
+    const endCandidates = [next, documentEnd].filter(index => index >= 0);
+    const end = endCandidates.length ? Math.min(...endCandidates) : content.length;
+    return { start, bodyStart, end, body: content.slice(bodyStart, end).trim() };
+}
+
+function populatePageInspector(pageNum) {
+    const block = getLatexPageBlock(pageNum);
+    if (!block || !pageInspector || !pageInspectorLatex) return;
+    const diagnostic = currentPageDiagnostics.find(page => page.page === pageNum);
+    pageInspectorTitle.textContent = `第 ${pageNum} 页审校`;
+    const items = diagnostic?.diagnostics || [];
+    pageInspectorDiagnostics.textContent = items.length
+        ? items.map(item => item.line ? `第 ${item.line} 行：${item.message}` : item.message).join('；')
+        : '基础 LaTeX 检查通过；请继续与左侧原 PDF 人工核对。';
+    pageInspectorLatex.value = block.body;
+    pageInspector.dataset.page = String(pageNum);
+    loadPageExtract(pageNum);
+    pageInspector.hidden = false;
+}
+
+async function loadPageExtract(pageNum) {
+    if (!pageInspectorExtract) return;
+    if (!selectedFile || isBatchMode) {
+        pageInspectorExtract.value = '当前没有可用于单页审校的原始 PDF。';
+        return;
+    }
+    pageInspectorExtract.value = '正在读取本页提取文本…';
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('page', String(pageNum));
+    try {
+        const response = await fetch('/api/review-page-source', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || '提取文本读取失败');
+        if (Number(pageInspector?.dataset.page) === pageNum) {
+            pageInspectorExtract.value = data.extracted_text || '该页没有可提取文本。';
+        }
+    } catch (error) {
+        if (Number(pageInspector?.dataset.page) === pageNum) {
+            pageInspectorExtract.value = `无法读取提取文本：${error.message}`;
+        }
+    }
+}
+
+function setupPageInspector() {
+    const close = document.getElementById('closePageInspector');
+    const apply = document.getElementById('applyPageInspector');
+    const copy = document.getElementById('copyPageInspector');
+    close?.addEventListener('click', () => { if (pageInspector) pageInspector.hidden = true; });
+    copy?.addEventListener('click', () => {
+        if (!pageInspectorLatex?.value) return;
+        if (!navigator.clipboard?.writeText) {
+            pageInspectorLatex.focus();
+            pageInspectorLatex.select();
+            showToast('请使用 Ctrl+C 复制当前页内容。', 'info');
+            return;
+        }
+        navigator.clipboard.writeText(pageInspectorLatex.value)
+            .then(() => showToast('当前页 LaTeX 已复制。', 'success'))
+            .catch(() => showToast('复制失败，请手动选择内容。', 'error'));
+    });
+    apply?.addEventListener('click', () => {
+        const pageNum = Number(pageInspector?.dataset.page);
+        const block = getLatexPageBlock(pageNum);
+        if (!block || !pageInspectorLatex || !latexEditor) return;
+        const replacement = `\n${pageInspectorLatex.value.trim()}\n\n`;
+        latexContent = `${latexEditor.value.slice(0, block.bodyStart)}${replacement}${latexEditor.value.slice(block.end)}`;
+        latexEditor.value = latexContent;
+        updateLatexEditorStats(latexContent);
+        updateLatexEditorPreview(latexContent);
+        safeStorage.setItem('latexContent', latexContent);
+        showToast(`第 ${pageNum} 页修改已应用；请使用“编译预览”复核。`, 'success');
+    });
 }
 
 function formatCost(cost) {
