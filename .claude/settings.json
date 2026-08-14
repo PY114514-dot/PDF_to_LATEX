@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('d:/PDF2LATEX/backend/pdf2latex_enhanced.py'\\).read\\(\\)\\)\")",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(cmd /c \"cd d:\\\\PDF2LATEX && python -c \\\\\"print\\(1+1\\)\\\\\"\")",
+      "Bash(powershell -Command \"python d:/PDF2LATEX/check_syntax.py\")",
+      "Bash(powershell -Command \"python d:/PDF2LATEX/check_syntax.py 2>&1\")",
+      "Bash(powershell -Command \"& python d:/PDF2LATEX/check_syntax.py 2>&1 | Select-Object -First 10\")",
+      "Bash(cmd /c \"d:\\\\\\\\PDF2LATEX\\\\\\\\check_syntax.bat\")",
+      "Bash(powershell -Command \"python -m py_compile d:/PDF2LATEX/backend/pdf2latex_enhanced.py; Write-Host 'Done'\")",
+      "Bash(powershell -Command \"cd d:/PDF2LATEX; python tests/test_batch_translate.py\")",
+      "Bash(powershell -Command \"python -m py_compile d:/PDF2LATEX/backend/pdf2latex_enhanced.py; if \\($?\\) { Write-Host 'Syntax OK' } else { Write-Host 'Syntax Error' }\")",
+      "Bash(powershell -Command \"python -c \\\\\"import ast; ast.parse\\(open\\('d:/PDF2LATEX/backend/pdf2latex_enhanced.py'\\).read\\(\\)\\)\\\\\"\")",
+      "Bash(powershell -Command \"cd d:/PDF2LATEX/backend; python -c \\\\\"from pdf2latex_enhanced import PDF2LaTeXEnhanced; print\\('Import OK'\\)\\\\\" 2>&1\")",
+      "Bash(powershell -Command \"cd d:/PDF2LATEX; python test_import.py\")",
+      "Bash(Select-Object -First 20)",
+      "Bash(powershell -File \"d:/PDF2LATEX/test_import.py\")"
+    ]
+  }
+}

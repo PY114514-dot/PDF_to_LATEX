@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaTeX 渲染预览</title>
+    
+    <!-- KaTeX CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <!-- 备用 CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" media="none" onload="if(media!='all')media='all'">
+    
+    <style>
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #fbfaf8;
+            --bg-tertiary: #f3f0ea;
+            --text-primary: #1a1a1a;
+            --text-secondary: #6b6b6b;
+            --text-tertiary: #6b7280;
+            --border-color: #e8e4df;
+            --border-light: #eeeae5;
+            --hover-bg: #f5f3f0;
+            --accent-bg: #b8860b;
+            --accent-hover: #946a08;
+            --accent-light: #d4a84b;
+            --radius: 12px;
+            --radius-sm: 6px;
+            --radius-lg: 12px;
+            --shadow-sm: 0 1px 2px rgba(26,26,26,0.04);
+            --shadow-md: 0 8px 24px rgba(26,26,26,0.07);
+            --shadow-lg: 0 18px 44px rgba(26,26,26,0.10);
+            --transition-fast: 150ms ease-out;
+            --transition-normal: 200ms ease-out;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Atkinson Hyperlegible', 'Noto Sans SC', 'Segoe UI', sans-serif;
+            background: var(--bg-secondary);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+
+        [data-source-line] {
+            scroll-margin-block: 2rem;
+            border-radius: 4px;
+            transition: background-color 180ms ease-out, box-shadow 180ms ease-out;
+        }
+
+        .source-line-focus {
+            background: rgba(212, 168, 75, 0.18);
+            box-shadow: inset 3px 0 0 var(--accent-bg), 0 0 0 2px rgba(212, 168, 75, 0.24);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            [data-source-line] { transition: none; }
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header h1 {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            min-width: 44px;
+            padding: 0.5rem 1.25rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-sm);
+            background: var(--hover-bg);
+            border-color: var(--accent-light);
+            color: var(--accent-hover);
+        }
+
+        .btn-primary {
+            background: var(--accent-bg);
+            color: white;
+            border-color: var(--accent-bg);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+            opacity: 1;
+        }
+
+        .btn-secondary {
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--hover-bg);
+            color: var(--accent-hover);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            min-height: calc(100vh - 200px);
+        }
+
+        .panel {
+            background: var(--bg-primary);
+            border-radius: var(--radius);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            background: var(--bg-secondary);
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 500;
+            font-size: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-primary);
+        }
+
+        .source-editor {
+            flex: 1;
+            padding: 1.5rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            border: none;
+            resize: none;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .source-editor:focus {
+            outline: none;
+        }
+
+        .preview-area {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            background: var(--bg-primary);
+        }
+
+        .preview-area::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .preview-area::-webkit-scrollbar-track {
+            background: var(--bg-tertiary);
+        }
+
+        .preview-area::-webkit-scrollbar-thumb {
+            background: var(--text-tertiary, #94a3b8);
+            border-radius: 4px;
+        }
+
+        .preview-area::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+
+        /* LaTeX 渲染样式 */
+        .rendered-content {
+            max-width: 800px;
+            line-height: 1.8;
+            color: var(--text-primary);
+        }
+
+        .rendered-content h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 2rem 0 1.5rem;
+            line-height: 1.3;
+        }
+
+        .rendered-content h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            margin: 2rem 0 1rem;
+            line-height: 1.3;
+        }
+
+        .rendered-content h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin: 1.5rem 0 0.75rem;
+            line-height: 1.3;
+        }
+
+        .rendered-content h4 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin: 1rem 0 0.5rem;
+            line-height: 1.3;
+        }
+
+        /* 居中内容样式 - 让标题更突出 */
+        .preview-area div[style*="text-align: center"] {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            padding: 1.5rem 0;
+            border-bottom: 3px solid var(--border-color);
+            margin-bottom: 2rem;
+            line-height: 1.4;
+        }
+
+        .rendered-content p {
+            margin: 1rem 0;
+        }
+
+        .rendered-content ul,
+        .rendered-content ol {
+            margin: 1rem 0;
+            padding-left: 2rem;
+        }
+
+        .rendered-content li {
+            margin: 0.5rem 0;
+        }
+
+        .rendered-content strong {
+            font-weight: 700;
+            color: #1f2937;
+        }
+
+        .rendered-content em {
+            font-style: italic;
+            color: #374151;
+        }
+
+        .rendered-content .katex-display {
+            margin: 1.5rem 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        .rendered-content .katex {
+            font-size: 1.1em;
+        }
+
+        .rendered-content pre {
+            background: #f5f5f5;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            overflow-x: auto;
+        }
+
+        .rendered-content blockquote {
+            border-left: 4px solid #cbd5e1;
+            padding: 1rem;
+            margin: 1rem 0;
+            color: #666;
+            font-style: italic;
+            background: #f9fafb;
+        }
+
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin: 1rem 0;
+            border-left: 4px solid #c33;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--bg-tertiary);
+            border-top: 3px solid var(--accent-bg);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 1024px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+            
+            .panel {
+                min-height: 400px;
+            }
+        }
+
+        .stats-bar {
+            padding: 0.75rem 1.5rem;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 2rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .embed-toolbar {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 4000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .embed-tool-btn {
+            width: 44px;
+            height: 44px;
+            min-width: 44px;
+            min-height: 44px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-md);
+            transition: all var(--transition-fast);
+        }
+
+        .embed-tool-btn:hover {
+            transform: translateY(-2px);
+            background: var(--hover-bg);
+            color: var(--accent-bg);
+            border-color: var(--accent-light);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .embed-tool-btn svg {
+            width: 20px;
+            height: 20px;
+            stroke-width: 2;
+        }
+
+        body.is-embedded {
+            background: #fcfbf8;
+            overflow: hidden;
+        }
+
+        body.is-embedded .header,
+        body.is-embedded .source-panel {
+            display: none;
+        }
+
+        body.is-embedded .container {
+            max-width: none;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+        }
+
+        body.is-embedded .layout {
+            grid-template-columns: 1fr;
+            gap: 0;
+            min-height: 100vh;
+            height: 100vh;
+        }
+
+        body.is-embedded .preview-panel {
+            border-radius: 0;
+            border: none;
+            box-shadow: none;
+            height: 100vh;
+        }
+
+        body.is-embedded .preview-panel .panel-header {
+            display: none;
+        }
+
+        body.is-embedded .preview-area {
+            padding: 1.75rem;
+            height: 100vh;
+        }
+
+        body.is-embedded .rendered-content {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        body.is-embedded .rendered-content h1 {
+            margin-top: 0.5rem;
+        }
+
+        body.is-embedded .embed-toolbar {
+            display: flex;
+        }
+
+        @media (max-width: 760px) {
+            body.is-embedded .preview-area {
+                padding: 1rem;
+            }
+
+            .embed-toolbar {
+                top: 10px;
+                right: 10px;
+                gap: 8px;
+            }
+
+            .embed-tool-btn {
+                width: 38px;
+                height: 38px;
+                border-radius: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>LaTeX 渲染预览</h1>
+        <p>实时预览LaTeX文档效果</p>
+
+        <div class="header-controls">
+            <button class="btn btn-secondary" onclick="copySource()">
+                复制代码
+            </button>
+            <button class="btn btn-secondary" onclick="window.close()">
+                关闭
+            </button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="layout">
+            <!-- 源代码面板 -->
+            <div class="panel source-panel">
+                <div class="panel-header">
+                    <span>LaTeX 源代码</span>
+                </div>
+                <textarea class="source-editor" id="latexSource"></textarea>
+                <div class="stats-bar">
+                    <div class="stat-item">
+                        <span>行数:</span>
+                        <span id="lineCount">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span>字符:</span>
+                        <span id="charCount">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 预览面板 -->
+            <div class="panel preview-panel">
+                <div class="panel-header">
+                    <span>渲染预览</span>
+                </div>
+                <div class="preview-area" id="previewArea">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>正在渲染LaTeX...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="embed-toolbar" id="embedToolbar" style="display: none;">
+        <button class="embed-tool-btn" onclick="renderLatex()" title="重新渲染" aria-label="重新渲染">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                <polyline points="21 3 21 9 15 9"></polyline>
+            </svg>
+        </button>
+        <button class="embed-tool-btn" onclick="openStandalone()" title="弹出窗口" aria-label="弹出窗口">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M14 3h7v7"></path>
+                <path d="M10 14L21 3"></path>
+                <path d="M21 14v7h-7"></path>
+                <path d="M3 10V3h7"></path>
+                <path d="M3 21h7v-7"></path>
+            </svg>
+        </button>
+    </div>
+
+    <!-- KaTeX JS -->
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+    
+    <!-- 备用 CDN -->
+    <script>
+        // 检查 KaTeX 是否加载成功，失败则使用备用 CDN
+        setTimeout(() => {
+            if (typeof katex === 'undefined') {
+                console.log('主 CDN 失败，加载备用 CDN...');
+                const script1 = document.createElement('script');
+                script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js';
+                script1.crossOrigin = 'anonymous';
+                document.head.appendChild(script1);
+
+                script1.onload = () => {
+                    const script2 = document.createElement('script');
+                    script2.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js';
+                    script2.crossOrigin = 'anonymous';
+                    document.head.appendChild(script2);
+                };
+            }
+        }, 2000);
+    </script>
+
+    <script>
+        // 从URL参数、window.name、opener 或 localStorage 获取 LaTeX 内容
+        let latexContent = '';
+        let latexFilename = '';
+        const urlParams = new URLSearchParams(window.location.search);
+        const isEmbedded = urlParams.get('embedded') === '1';
+
+        if (isEmbedded) {
+            document.body.classList.add('is-embedded');
+            const embedToolbar = document.getElementById('embedToolbar');
+            if (embedToolbar) {
+                embedToolbar.style.display = 'flex';
+            }
+        }
+
+        function safeStorageGet(key) {
+            try {
+                return localStorage.getItem(key) || '';
+            } catch (error) {
+                console.warn('localStorage 不可用:', error.message);
+                return '';
+            }
+        }
+
+        function parseWindowNamePayload() {
+            if (!window.name) {
+                return null;
+            }
+            try {
+                const payload = JSON.parse(window.name);
+                if (payload && typeof payload === 'object') {
+                    return payload;
+                }
+            } catch (error) {
+                console.warn('window.name 解析失败:', error.message);
+            }
+            return null;
+        }
+        
+        // 尝试从URL参数获取
+        const contentParam = urlParams.get('content');
+        
+        if (contentParam) {
+            try {
+                latexContent = decodeURIComponent(contentParam);
+            } catch (e) {
+                console.error('解码失败:', e);
+            }
+        }
+
+        // 从 window.name 获取（由主页面打开新窗口时写入）
+        if (!latexContent) {
+            const payload = parseWindowNamePayload();
+            if (payload) {
+                latexContent = payload.latexContent || '';
+                latexFilename = payload.latexFilename || '';
+            }
+        }
+
+        // 从 opener 获取（最稳妥）
+        if (!latexContent && window.opener && window.opener.__latexRenderPayload) {
+            latexContent = window.opener.__latexRenderPayload.latexContent || '';
+            latexFilename = window.opener.__latexRenderPayload.latexFilename || '';
+        }
+        
+        // 如果没有URL参数，尝试从localStorage获取
+        if (!latexContent) {
+            latexContent = safeStorageGet('latexContent');
+            latexFilename = latexFilename || safeStorageGet('latexFilename');
+        }
+        
+        // 兼容旧逻辑：从 opener 全局变量读取
+        if (!latexContent && window.opener && window.opener.latexContent) {
+            latexContent = window.opener.latexContent;
+        }
+        
+        // 显示源代码
+        const sourceEditor = document.getElementById('latexSource');
+        sourceEditor.value = latexContent;
+
+        let renderTimer = null;
+        sourceEditor.addEventListener('input', () => {
+            latexContent = sourceEditor.value;
+            updateStats();
+            try {
+                localStorage.setItem('latexContent', latexContent);
+                localStorage.setItem('latexFilename', latexFilename || '');
+            } catch (error) {
+                console.warn('保存编辑内容失败:', error.message);
+            }
+            clearTimeout(renderTimer);
+            renderTimer = setTimeout(renderLatex, 150);
+        });
+
+        let pendingPreviewLine = null;
+
+        function focusPreviewLine(line) {
+            const requestedLine = Number(line);
+            if (!Number.isInteger(requestedLine) || requestedLine < 1) return;
+            const targets = [...document.querySelectorAll('[data-source-line]')];
+            if (!targets.length) {
+                pendingPreviewLine = requestedLine;
+                return;
+            }
+            let target = targets[0];
+            for (const candidate of targets) {
+                if (Number(candidate.dataset.sourceLine) <= requestedLine) target = candidate;
+                else break;
+            }
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            target.classList.remove('source-line-focus');
+            void target.offsetWidth;
+            target.classList.add('source-line-focus');
+        }
+
+        function addSourceLineMarkers(content) {
+            let currentLine = 1;
+            return content.split(/(\n\s*\n)/).map(part => {
+                const startsAt = currentLine;
+                currentLine += (part.match(/\n/g) || []).length;
+                return part.trim() ? `<!--SOURCE_LINE:${startsAt}-->${part}` : part;
+            }).join('');
+        }
+
+        window.addEventListener('message', (event) => {
+            if (!event.data) return;
+            if (event.data.type === 'latex-preview-focus-line') {
+                focusPreviewLine(event.data.line);
+                return;
+            }
+            if (event.data.type !== 'latex-preview-update') return;
+            latexContent = event.data.content || '';
+            latexFilename = event.data.filename || latexFilename || '';
+            sourceEditor.value = latexContent;
+            updateStats();
+            renderLatex();
+        });
+
+        if (latexFilename) {
+            document.title = `LaTeX 渲染预览 - ${latexFilename}`;
+        }
+        
+        // 更新统计
+        updateStats();
+        
+        // 等待 KaTeX 加载后自动渲染
+        function waitForKaTeX() {
+            if (typeof renderMathInElement !== 'undefined' && typeof katex !== 'undefined') {
+                renderLatex();
+            } else {
+                console.log('等待 KaTeX 加载...');
+                setTimeout(waitForKaTeX, 500);
+            }
+        }
+        
+        // 自动渲染
+        setTimeout(waitForKaTeX, 300);
+        
+        function updateStats() {
+            const content = sourceEditor.value;
+            const lines = content.split('\n').length;
+            const chars = content.length;
+            
+            document.getElementById('lineCount').textContent = lines;
+            document.getElementById('charCount').textContent = chars;
+        }
+        
+        function renderLatex() {
+            const content = sourceEditor.value;
+            const previewArea = document.getElementById('previewArea');
+            
+            // 显示加载状态
+            previewArea.innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>正在渲染LaTeX...</p>
+                </div>
+            `;
+            
+            setTimeout(() => {
+                try {
+                    // 简单的LaTeX到HTML转换
+                    let html = processLatexContent(content);
+                    
+                    previewArea.innerHTML = `<div class="rendered-content">${html}</div>`;
+                    
+                    // 检查 KaTeX 是否加载
+                    if (typeof renderMathInElement === 'undefined') {
+                        previewArea.innerHTML += `
+                            <div class="error-message">
+                                <strong>提示:</strong> KaTeX 库加载中，请稍候...
+                            </div>
+                        `;
+                        // 等待 KaTeX 加载后重试
+                        setTimeout(renderLatex, 1000);
+                        return;
+                    }
+                    
+                    // 使用KaTeX渲染数学公式
+                    try {
+                        renderMathInElement(previewArea, {
+                            delimiters: [
+                                {left: '$$', right: '$$', display: true},
+                                {left: '$', right: '$', display: false},
+                                {left: '\\[', right: '\\]', display: true},
+                                {left: '\\(', right: '\\)', display: false}
+                            ],
+                            throwOnError: false,
+                            errorColor: '#cc0000',
+                            strict: false,
+                            trust: false
+                        });
+                        console.log('[render] KaTeX渲染成功');
+
+                        // 检查是否有渲染失败的公式（会显示为 .katex-error）
+                        const errors = previewArea.querySelectorAll('.katex-error');
+                        if (errors.length > 0) {
+                            console.log(`[render] 有 ${errors.length} 个公式渲染失败`);
+                            errors.forEach((el, i) => {
+                                console.log(`[render] 失败公式 ${i+1}:`, el.textContent.substring(0, 100));
+                            });
+                        }
+                    } catch (e) {
+                        console.error('[render] KaTeX渲染失败:', e.message);
+                    }
+                    
+                } catch (error) {
+                    console.error('渲染错误:', error);
+                    previewArea.innerHTML = `
+                        <div class="error-message">
+                            <strong>渲染错误:</strong><br>
+                            ${error.message || '未知错误'}
+                            <br><br>
+                            <small>请检查 LaTeX 语法是否正确</small>
+                        </div>
+                    `;
+                }
+            }, 300);
+        }
+        
+        function processLatexContent(content) {
+            // LaTeX 经转换后字符偏移不再可靠，使用段落起始行作为稳定定位锚点。
+            content = addSourceLineMarkers(content);
+            // 先保护数学公式，避免被其他替换破坏
+            const mathBlocks = [];
+            let mathIndex = 0;
+            
+            // 保护display math $$...$$
+            content = content.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
+                mathBlocks[mathIndex] = match;
+                return `__MATH_${mathIndex++}__`;
+            });
+
+            // 保护inline math $...$
+            content = content.replace(/\$([^\$\n]+?)\$/g, (match) => {
+                mathBlocks[mathIndex] = match;
+                return `__MATH_${mathIndex++}__`;
+            });
+
+            // 将 equation/align/gather 环境转换为 \[...\] 格式供 KaTeX 渲染
+            const eqCount = (content.match(/\\begin\{equation\*?\}/g) || []).length;
+            const alignCount = (content.match(/\\begin\{align\*?\}/g) || []).length;
+            const gatherCount = (content.match(/\\begin\{gather\*?\}/g) || []).length;
+
+            // 将 \tag{xxx} 转换为可渲染的文本格式（在 equation 环境内）
+            // \tag{1.15} -> \qquad (1.15)
+            const tagCountBefore = (content.match(/\\tag\{/g) || []).length;
+            content = content.replace(/\\tag\{([^}]+)\}/g, '\\qquad ($1)');
+            const tagCountAfter = (content.match(/\\tag\{/g) || []).length;
+            console.log(`[render] \\tag转换: 转换前=${tagCountBefore}, 转换后=${tagCountAfter}`);
+
+            // 调试：检查 equation 环境是否在内容中
+            const hasEquation = content.includes('\\begin{equation}');
+            const hasEquationStar = content.includes('\\begin{equation*}');
+            console.log(`[render] 转换前检查: hasEquation=${hasEquation}, hasEquationStar=${hasEquationStar}`);
+
+            content = content.replace(/\\begin\{equation\*?\}([\s\S]*?)\\end\{equation\*?\}/g, (match, body) => {
+                console.log(`[render] 转换 equation: body前20字符="${body.substring(0, 20)}"`);
+                return `\\[${body}\\]`;
+            });
+            content = content.replace(/\\begin\{align\*?\}([\s\S]*?)\\end\{align\*?\}/g, (match, body) => {
+                return `\\[${body}\\]`;
+            });
+            content = content.replace(/\\begin\{gather\*?\}([\s\S]*?)\\end\{gather\*?\}/g, (match, body) => {
+                return `\\[${body}\\]`;
+            });
+            console.log(`[render] 环境转换: equation=${eqCount}, align=${alignCount}, gather=${gatherCount}`);
+
+            // 修复：equation环境中\tag在公式内容前面的情况
+            // 例如：\[\qquad (1.15)\n\partial_t ...\] -> \[\partial_t ...\qquad (1.15)\]
+            // 注意：允许 \qquad (...) 和公式内容之间有换行
+            const tagBeforeFix = (content.match(/\\\[\\qquad\s*\(\s*\d+/g) || []).length;
+            content = content.replace(/\\\[\\qquad\s*\(\s*(\d+(?:\.\d+)?)\s*\)[\r\n\s]*([\s\S]*?)\\\]/g, (match, tagNum, formulaContent) => {
+                return `\\[${formulaContent}\\qquad (${tagNum})\\]`;
+            });
+            const tagAfterFix = (content.match(/\\\[\\qquad\s*\(\s*\d+/g) || []).length;
+            if (tagBeforeFix > 0) {
+                console.log(`[render] 标签位置修复: 处理前=${tagBeforeFix}, 处理后=${tagAfterFix}`);
+            }
+
+            // 调试：检查转换后是否还有未转换的 equation
+            const stillHasEquation = content.includes('\\begin{equation}');
+            if (stillHasEquation) {
+                console.log(`[render] 警告: 转换后仍有 equation 环境！`);
+            }
+
+            // 移除文档类和导言区
+            content = content.replace(/\\documentclass(\[[^\]]*\])?\{[^}]+\}/g, '');
+            content = content.replace(/\\usepackage(\[[^\]]*\])?\{[^}]+\}/g, '');
+            content = content.replace(/\\geometry\{[^}]+\}/g, ''); // 移除geometry设置
+            content = content.replace(/\\begin\{document\}/g, '');
+            content = content.replace(/\\end\{document\}/g, '');
+            content = content.replace(/\\title\{[^}]+\}/g, '');
+            content = content.replace(/\\author\{[^}]+\}/g, '');
+            content = content.replace(/\\date\{[^}]+\}/g, '');
+            content = content.replace(/\\maketitle/g, '');
+            
+            // 移除 LaTeX 命令（不影响显示）
+            content = content.replace(/\\noindent\s*/g, '');
+            content = content.replace(/\\label\{[^}]+\}/g, '');
+            content = content.replace(/\\ref\{([^}]+)\}/g, '$1');
+            content = content.replace(/\\cite\{([^}]+)\}/g, '[$1]');
+            content = content.replace(/\\hfill/g, ' ');
+            content = content.replace(/\\dotfill/g, '...');
+            content = content.replace(/\\vspace\*?\{[^}]+\}/g, '');
+            content = content.replace(/\\hspace\*?\{[^}]+\}/g, ' ');
+            
+            // 转换环境
+            content = content.replace(/\\begin\{center\}([\s\S]*?)\\end\{center\}/g, '<div style="text-align: center; margin: 1.5rem 0;">$1</div>');
+            content = content.replace(/\\begin\{flushleft\}([\s\S]*?)\\end\{flushleft\}/g, '<div style="text-align: left; margin: 1rem 0;">$1</div>');
+            content = content.replace(/\\begin\{flushright\}([\s\S]*?)\\end\{flushright\}/g, '<div style="text-align: right; margin: 1rem 0;">$1</div>');
+
+            // 转换表格环境（table + tabular）
+            content = content.replace(/\\begin\{table\}[\s\S]*?\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}[\s\S]*?\\end\{table\}/g, (match, tableBody) => {
+                const captionMatch = match.match(/\\caption\{([^}]*)\}/);
+                const caption = captionMatch ? `<div style="font-weight: 600; margin-bottom: 0.5rem;">${captionMatch[1]}</div>` : '';
+                const cleaned = (tableBody || '')
+                    .replace(/\\hline/g, '')
+                    .replace(/\\cline\{[^}]*\}/g, '')
+                    .trim();
+
+                const rows = cleaned
+                    .split('\\\\')
+                    .map(row => row.trim())
+                    .filter(row => row.length > 0);
+
+                const htmlRows = rows.map((row, idx) => {
+                    const cols = row.split('&').map(c => c.trim());
+                    const tag = idx === 0 ? 'th' : 'td';
+                    const cells = cols.map(c => `<${tag} style="border: 1px solid #e5e7eb; padding: 0.45rem 0.6rem;">${c}</${tag}>`).join('');
+                    return `<tr>${cells}</tr>`;
+                }).join('');
+
+                return `<div style="margin: 1rem 0; overflow-x: auto;">${caption}<table style="border-collapse: collapse; min-width: 420px;">${htmlRows}</table></div>`;
+            });
+
+            content = content.replace(/\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/g, (match, tableBody) => {
+                const cleaned = (tableBody || '')
+                    .replace(/\\hline/g, '')
+                    .replace(/\\cline\{[^}]*\}/g, '')
+                    .trim();
+
+                const rows = cleaned
+                    .split('\\\\')
+                    .map(row => row.trim())
+                    .filter(row => row.length > 0);
+
+                const htmlRows = rows.map((row, idx) => {
+                    const cols = row.split('&').map(c => c.trim());
+                    const tag = idx === 0 ? 'th' : 'td';
+                    const cells = cols.map(c => `<${tag} style="border: 1px solid #e5e7eb; padding: 0.45rem 0.6rem;">${c}</${tag}>`).join('');
+                    return `<tr>${cells}</tr>`;
+                }).join('');
+
+                return `<div style="margin: 1rem 0; overflow-x: auto;"><table style="border-collapse: collapse; min-width: 420px;">${htmlRows}</table></div>`;
+            });
+            
+            // 转换定理环境
+            content = content.replace(/\\begin\{theorem\}([\s\S]*?)\\end\{theorem\}/g, '<div style="border-left: 4px solid #667eea; padding: 1rem; margin: 1rem 0; background: #f0f4ff;"><strong>定理:</strong> $1</div>');
+            content = content.replace(/\\begin\{definition\}([\s\S]*?)\\end\{definition\}/g, '<div style="border-left: 4px solid #10b981; padding: 1rem; margin: 1rem 0; background: #f0fdf4;"><strong>定义:</strong> $1</div>');
+            content = content.replace(/\\begin\{proof\}([\s\S]*?)\\end\{proof\}/g, '<div style="border-left: 4px solid #f59e0b; padding: 1rem; margin: 1rem 0; background: #fffbeb;"><strong>证明:</strong> $1</div>');
+            content = content.replace(/\\begin\{lemma\}([\s\S]*?)\\end\{lemma\}/g, '<div style="border-left: 4px solid #8b5cf6; padding: 1rem; margin: 1rem 0; background: #faf5ff;"><strong>引理:</strong> $1</div>');
+            
+            // 转换章节标题
+            content = content.replace(/\\section\*?\{([^}]+)\}/g, '<h2>$1</h2>');
+            content = content.replace(/\\subsection\*?\{([^}]+)\}/g, '<h3>$1</h3>');
+            content = content.replace(/\\subsubsection\*?\{([^}]+)\}/g, '<h4>$1</h4>');
+            
+            // 转换文本样式
+            content = content.replace(/\\textbf\{([^}]+)\}/g, '<strong>$1</strong>');
+            content = content.replace(/\\textit\{([^}]+)\}/g, '<em>$1</em>');
+            content = content.replace(/\\emph\{([^}]+)\}/g, '<em>$1</em>');
+            content = content.replace(/\\underline\{([^}]+)\}/g, '<u>$1</u>');
+            
+            // 转换列表
+            content = content.replace(/\\begin\{itemize\}/g, '<ul>');
+            content = content.replace(/\\end\{itemize\}/g, '</ul>');
+            content = content.replace(/\\begin\{enumerate\}/g, '<ol>');
+            content = content.replace(/\\end\{enumerate\}/g, '</ol>');
+            content = content.replace(/\\item\s+/g, '<li>');
+            
+            // 转换引用环境
+            content = content.replace(/\\begin\{quote\}([\s\S]*?)\\end\{quote\}/g, '<blockquote style="border-left: 4px solid #e5e7eb; padding: 1rem; margin: 1rem 0; color: #666; font-style: italic;">$1</blockquote>');
+            content = content.replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g, '<pre style="background: #f5f5f5; padding: 1rem; border-radius: 0.375rem; overflow-x: auto;"><code>$1</code></pre>');
+            
+            // 清理注释
+            content = content.replace(/(?:^|[^\\])%.*$/gm, '');
+
+            // 恢复数学公式
+            for (let i = 0; i < mathBlocks.length; i++) {
+                content = content.replace(`__MATH_${i}__`, mathBlocks[i]);
+            }
+
+            // 修复数学公式兼容性问题（在恢复数学公式之后处理）
+            // 1. hat 符号兼容性：KaTeX 更支持 \widehat 而不是 \hat
+            content = content.replace(/\\hat\{([^}]+)\}/g, '\\widehat{$1}');
+            // 2. 将残留的 \tag 转换为可渲染文本
+            content = content.replace(/\\tag\{([^}]+)\}/g, '\\qquad ($1)');
+            // 修复公式前面的 equation 引用标签（如 \qquad (1.13) 在 \[ 或 \( 前面），移到后面
+            // 匹配 \qquad (xxx) 后面跟着 \[ 或 \( 的情况，交换位置（允许换行）
+            content = content.replace(/\\qquad\s*\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\[([\s\S]*?)\\\]/g, '\\[$2\\qquad ($1)]');
+            content = content.replace(/\\qquad\s*\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\(([\s\S]*?)\\\)/g, '\\($2\\qquad ($1)\\)');
+            // 匹配裸 (xxx) 后面跟着 \[ 或 \( 的情况（允许换行）
+            content = content.replace(/\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\[([\s\S]*?)\\\]/g, '\\[$2\\qquad ($1)]');
+            content = content.replace(/\(\s*(\d+(?:\.\d+)?)\s*\)\s*\\\(([\s\S]*?)\\\)/g, '\\($2\\qquad ($1)\\)');
+            // 4. 修复其他常见兼容性问题
+            content = content.replace(/\\underset\{([^}]*)\}\{([^}]*)\}/g, '$2_{$1}');
+            content = content.replace(/\\xrightarrow\{([^}]*)\}/g, '\\rightarrow^{$1}');
+            // 5. 修复 \widehat{phi} 这种单个字符被 \widehat 包裹的情况
+            content = content.replace(/\\widehat\{([a-zA-Z])\}/g, '\\hat{$1}');
+            // 6. 移除单独一行的 \tag（已在上方转换过，这里只是安全检查）
+            content = content.replace(/^\s*\\tag\{[^}]*\}\s*$/gm, '');
+
+            // 转换段落（数学公式已恢复）
+            // 1. 按空行分割段落
+            // 2. 将只有 \qquad (xxx) 或 (xxx) 的段落合并到前一个以 \[ 或 \( 开头或结尾的段落
+            // 3. 如果段落内同时有标签和公式（同一段落内），将标签移到公式后面
+            const paragraphs = content.split(/\n\s*\n/);
+            console.log(`[render] 段落数量: ${paragraphs.length}`);
+            const merged = [];
+            for (let i = 0; i < paragraphs.length; i++) {
+                let para = paragraphs[i].trim();
+                if (!para) continue;
+
+                const sourceLineMatch = para.match(/<!--SOURCE_LINE:(\d+)-->/);
+                const sourceLineAttr = sourceLineMatch ? ` data-source-line="${sourceLineMatch[1]}"` : '';
+                para = para.replace(/<!--SOURCE_LINE:\d+-->/g, '').trim();
+                if (!para) continue;
+
+                // 检查是否是只有 \qquad (xxx) 或 (xxx) 的行（公式引用标签）
+                const isSoloRef = /^\s*\\qquad\s*\(.*\)\s*$/.test(para) || /^\s*\\qquad\s*\(\d+(?:\.\d+)?\)\s*$/.test(para)
+                    || /^\s*\(\d+(?:\.\d+)?\)\s*$/.test(para);
+                if (isSoloRef) {
+                    console.log(`[render] 发现单独标签段落: "${para.substring(0, 50)}"`);
+                }
+
+                if (isSoloRef && merged.length > 0) {
+                    const prev = merged[merged.length - 1];
+                    // 如果前一段以 \[ 或 \( 结尾（或包含 display math），将这个引用合并进去
+                    if (/\\\[\s*$/.test(prev) || /\\\(\s*$/.test(prev) || prev.includes('\\[') || prev.includes('\\(')) {
+                        merged[merged.length - 1] = prev + ' ' + para;
+                        console.log(`[render] 合并标签到: "${prev.substring(0, 50)}"`);
+                        continue;
+                    }
+                }
+
+                // 正常段落处理：检查段落内是否有标签在公式前面的情况
+                if (!para.startsWith('<') && !para.includes('$$') && !para.includes('$') && !para.includes('\\[') && !para.includes('\\(') && !para.match(/^\\begin|^\\end/)) {
+                    // 这个段落不包含公式，直接处理
+                    const lines = para.split(/\n/);
+                    const joined = lines.map(l => l.trim()).join('<br>');
+                    merged.push(`<p${sourceLineAttr}>${joined}</p>`);
+                } else {
+                    // 段落包含公式或特殊内容
+                    // 检查是否以 \qquad (xxx) 或 (xxx) 开头，后面跟着 \( 或 \[
+                    // 匹配模式：开头是标签，后面跟着 \( 或 \[
+                    const labelBeforeMath = para.match(/^(\s*\\qquad\s*\((\d+(?:\.\d+)?)\))\s*(\\\(|\\\[)/);
+                    if (labelBeforeMath) {
+                        const fullMatch = labelBeforeMath[0];
+                        const labelNum = labelBeforeMath[2];
+                        const mathDelim = labelBeforeMath[3];
+                        const rest = para.substring(fullMatch.length);
+                        // 将标签移到公式后面：\( ... \) -> \( ... \) \qquad (xxx)
+                        para = mathDelim + rest + ' \\qquad (' + labelNum + ')';
+                        console.log(`[render] 交换标签: "${labelNum}" 移到公式后面`);
+                    }
+                    merged.push(`<div class="render-source-block"${sourceLineAttr}>${para}</div>`);
+                }
+            }
+            content = merged.join('\n\n');
+
+            if (pendingPreviewLine !== null) {
+                const line = pendingPreviewLine;
+                pendingPreviewLine = null;
+                requestAnimationFrame(() => focusPreviewLine(line));
+            }
+
+            return content;
+        }
+        
+        function copySource() {
+            sourceEditor.select();
+            document.execCommand('copy');
+            alert('源代码已复制到剪贴板');
+        }
+        
+        function toggleFullscreen() {
+            const previewArea = document.getElementById('previewArea').parentElement;
+            if (!document.fullscreenElement) {
+                previewArea.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        function openStandalone() {
+            const payload = {
+                latexContent: sourceEditor.value || '',
+                latexFilename: latexFilename || ''
+            };
+            try {
+                localStorage.setItem('latexContent', payload.latexContent);
+                localStorage.setItem('latexFilename', payload.latexFilename);
+            } catch (error) {
+                console.warn('写入本地存储失败:', error.message);
+            }
+            const win = window.open('/render', '_blank', 'width=1400,height=900');
+            if (win) {
+                try {
+                    win.name = JSON.stringify(payload);
+                } catch (error) {
+                    console.warn('写入窗口 payload 失败:', error.message);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

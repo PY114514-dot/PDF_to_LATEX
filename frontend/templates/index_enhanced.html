@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF2LaTeX - PDF 转 LaTeX 工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+SC:wght@400;500;600&family=Playfair+Display:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style_enhanced.css') }}">
+    <!-- KaTeX for LaTeX rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        if (typeof io === 'undefined') {
+            document.write('<script src="/socket.io/socket.io.js"><\/script>');
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <button class="app-settings-btn" id="openAppSettings" type="button" aria-haspopup="dialog" aria-controls="appSettingsDialog">设置</button>
+            <p class="eyebrow">PDF TO LATEX WORKBENCH</p>
+            <h1>PDF2LaTeX</h1>
+            <p class="subtitle">将论文 PDF 转为可编辑、可预览、可下载的 LaTeX 文稿。</p>
+        </header>
+
+        <main class="main-content">
+            <div class="upload-section">
+                <div id="dropZone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="drop-text">拖拽 PDF 到这里</p>
+                        <p class="drop-text-subtitle">支持单个 PDF 或最多 5 个 PDF 批量转换</p>
+                        <p class="drop-text-or">或</p>
+                        <div class="button-group">
+                            <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                </svg>
+                                选择 PDF
+                            </button>
+                            <button class="browse-btn-image" onclick="document.getElementById('batchFileInput').click()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <rect x="3" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="14" width="7" height="7"></rect>
+                                    <rect x="3" y="14" width="7" height="7"></rect>
+                                </svg>
+                                批量 PDF
+                            </button>
+                        </div>
+                        <input type="file" id="fileInput" accept=".pdf" style="display: none;">
+                        <input type="file" id="batchFileInput" accept=".pdf" multiple style="display: none;">
+                        <p class="file-hint">单文件可指定页码；批量模式会逐个生成 LaTeX 输出。</p>
+                    </div>
+                </div>
+
+                <div class="options-section" id="optionsSection" style="display: none;">
+                    <div class="options-heading">
+                        <div>
+                            <p class="section-kicker">CONVERSION SETTINGS</p>
+                            <h3>转换设置</h3>
+                        </div>
+                        <p>设置输出格式与处理方式，然后开始转换。</p>
+                    </div>
+
+                    <div class="option-group option-group-wide">
+                        <label for="translationPromptInput">用户提示词 <span class="hint">（可选）</span></label>
+                        <textarea id="translationPromptInput" class="text-input" rows="3" placeholder="术语替换、翻译风格或保留规则..."></textarea>
+                    </div>
+
+                    <div class="option-group option-group-toggle">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="asyncOption" checked>
+                            <span>后台处理（推荐，可恢复）</span>
+                        </label>
+                        <button class="btn-secondary" style="margin-top:8px;width:100%" type="button" onclick="resumeLastAsyncTask()">恢复上次任务</button>
+                    </div>
+
+                    <div class="option-group option-group-toggle">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="translateOption">
+                            <span>翻译成中文</span>
+                        </label>
+                    </div>
+
+                    <div class="option-group option-group-toggle">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="wrapperOption" checked>
+                            <span>添加文档结构</span>
+                        </label>
+                    </div>
+
+                    <div class="option-group option-group-wide">
+                        <label>指定页码 <span class="hint">（可选）</span></label>
+                        <input type="text" id="pagesInput" placeholder="例如: 1-3,5,7-9" class="text-input">
+                    </div>
+
+                    <button class="convert-btn" id="convertBtn">开始转换</button>
+                </div>
+            </div>
+
+            <div class="progress-section" id="progressSection" style="display: none;">
+                <div class="progress-content">
+                    <div class="spinner"></div>
+                    <p class="progress-text" id="progressText">准备开始...</p>
+                    <div class="stage-progress-group">
+                        <div class="stage-progress-item">
+                            <div class="stage-progress-header">
+                                <span>翻译进度</span>
+                                <span id="translateProgressLabel">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-bar-fill" id="translateProgressFill"></div>
+                            </div>
+                        </div>
+                        <div class="stage-progress-item">
+                            <div class="stage-progress-header">
+                                <span>转换进度</span>
+                                <span id="convertProgressLabel">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-bar-fill" id="convertProgressFill"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="progress-detail" id="progressDetail"></p>
+
+                    <div class="terminal-log" id="terminalLog" style="display: none;">
+                        <div class="terminal-header">
+                            <span>处理日志</span>
+                            <button class="terminal-clear-btn" onclick="clearTerminalLog()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="terminal-body" id="terminalBody">
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">$</span>
+                                <span class="terminal-text">等待开始...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="result-section" id="resultSection" style="display: none;">
+                <div class="result-header">
+                    <h3>转换完成</h3>
+                    <button class="btn-secondary" onclick="resetApp()">转换新文件</button>
+                </div>
+
+                <div class="stats-card">
+                    <h4>转换统计</h4>
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-icon">页</div>
+                            <div class="stat-info">
+                                <span class="stat-label">处理页数</span>
+                                <span class="stat-value" id="resultPages">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">Tok</div>
+                            <div class="stat-info">
+                                <span class="stat-label">Tokens</span>
+                                <span class="stat-value" id="resultTokens">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">¥</div>
+                            <div class="stat-info">
+                                <span class="stat-label">实际费用</span>
+                                <span class="stat-value" id="resultCost">未配置</span>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-icon">时</div>
+                            <div class="stat-info">
+                                <span class="stat-label">处理时间</span>
+                                <span class="stat-value" id="resultTime">0s</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <section class="page-quality-summary" id="pageQualitySummary" aria-live="polite" style="display: none;">
+                    <div class="page-quality-summary-header">
+                        <div>
+                            <span class="pane-label">交付前检查</span>
+                            <h4>页级质量摘要</h4>
+                        </div>
+                        <p id="pageQualityCounts"></p>
+                    </div>
+                    <p class="page-quality-summary-hint">有风险的页面可只重新转换该页，不会重跑整份文档。</p>
+                    <div class="page-quality-list" id="pageQualityList"></div>
+                </section>
+
+                <div class="result-actions">
+                    <button class="btn-primary" id="downloadBtn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        下载 .tex
+                    </button>
+                    <button class="btn-secondary" onclick="copyToClipboard(event)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
+                        </svg>
+                        复制代码
+                    </button>
+                    <button class="btn-primary" onclick="renderLatex()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                        </svg>
+                        在线渲染
+                    </button>
+                </div>
+
+                <div class="review-workspace" id="reviewWorkspace">
+                    <section class="source-pdf-panel" id="sourcePdfPanel" style="display: none;">
+                        <div class="source-pdf-header">
+                            <div>
+                                <span class="pane-label">原始 PDF</span>
+                                <span class="source-pdf-name" id="sourcePdfName"></span>
+                            </div>
+                            <button class="source-pdf-open" id="openSourcePdfBtn" type="button">新窗口打开</button>
+                        </div>
+                        <iframe id="sourcePdfFrame" class="source-pdf-frame" title="原始 PDF 对照"></iframe>
+                    </section>
+
+                    <div class="code-preview" id="latexWorkspace">
+                    <div class="code-header">
+                        <span>LaTeX 代码</span>
+                        <div class="code-header-right">
+                            <button class="compile-btn" id="compileLatexBtn" type="button">编译预览</button>
+                            <span class="code-lines" id="codeLines">0 行</span>
+                            <span class="code-hint">双击源码定位预览</span>
+                        </div>
+                    </div>
+                    <div class="compile-status" id="compileStatus" aria-live="polite"></div>
+                    <div class="code-workspace-body">
+                        <div class="code-editor-pane">
+                            <div class="pane-label">源码</div>
+                            <textarea id="latexEditor" class="latex-editor" spellcheck="false" aria-describedby="latexSyncHint" placeholder="在这里编辑 LaTeX 代码"></textarea>
+                        </div>
+                        <div class="code-preview-pane">
+                            <div class="pane-label">预览</div>
+                            <iframe id="latexRenderFrame" class="latex-render-frame" src="/render?embedded=1" title="LaTeX 预览"></iframe>
+                        </div>
+                    </div>
+                    <p class="latex-sync-hint" id="latexSyncHint">双击源码中的任意位置，右侧会定位并高亮对应的渲染段落。</p>
+                </div>
+                </div>
+            </div>
+
+            <div class="error-section" id="errorSection" style="display: none;">
+                <div class="error-content">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <h3>转换失败</h3>
+                    <p id="errorMessage"></p>
+                    <button class="btn-secondary" onclick="resetApp()">重试</button>
+                </div>
+            </div>
+
+            <div class="history-section" id="historySection">
+                <div class="history-header">
+                    <h3>转换历史</h3>
+                    <div class="history-header-actions">
+                        <button class="history-action-btn primary" onclick="refreshHistory()">刷新</button>
+                        <button class="history-action-btn danger" onclick="clearAllHistory()">清空</button>
+                    </div>
+                </div>
+                <div class="history-list" id="historyList">
+                    <div class="loading-history">加载中...</div>
+                </div>
+                <div class="history-pagination" id="historyPagination" style="display: none;">
+                    <button class="history-page-btn" id="historyPrevBtn">上一页</button>
+                    <span class="history-page-info" id="historyPageInfo">1 / 1</span>
+                    <button class="history-page-btn" id="historyNextBtn">下一页</button>
+                </div>
+            </div>
+
+        </main>
+
+        <footer class="footer">
+            <a href="https://platform.deepseek.com/" target="_blank">DeepSeek API</a> 提供支持
+        </footer>
+    </div>
+
+    <aside class="latex-modal" id="latexSidebar" aria-hidden="true">
+        <div class="latex-sidebar-header">
+            <div class="latex-sidebar-title">
+                <span>实时 LaTeX 渲染</span>
+                <span class="latex-sidebar-subtitle">支持 $...$、$$...$$、\(...\)、\[...\]</span>
+            </div>
+            <button class="latex-sidebar-close" id="closeLatexSidebar" type="button">关闭</button>
+        </div>
+        <div class="latex-sidebar-body">
+            <label class="latex-sidebar-label" for="latexInput">输入 LaTeX</label>
+            <textarea class="latex-sidebar-input" id="latexInput" rows="6" placeholder="例如: $E=mc^2$"></textarea>
+            <div class="latex-sidebar-actions">
+                <button class="latex-sidebar-render" id="renderLatexBtn" type="button">渲染</button>
+                <button class="latex-sidebar-clear" id="clearLatexBtn" type="button">清空</button>
+            </div>
+            <div class="latex-sidebar-hint">拖动右下角可调整窗口大小</div>
+            <div class="latex-sidebar-preview" id="latexPreview"></div>
+        </div>
+    </aside>
+    <div class="latex-sidebar-backdrop" id="latexSidebarBackdrop" aria-hidden="true"></div>
+
+    <div class="settings-backdrop" id="settingsBackdrop" hidden></div>
+    <section class="settings-dialog" id="appSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
+        <div class="settings-dialog-header">
+            <div><p class="section-kicker">WORKBENCH SETTINGS</p><h2 id="settingsTitle">设置</h2></div>
+            <button class="settings-close" id="closeAppSettings" type="button" aria-label="关闭设置">关闭</button>
+        </div>
+        <div class="settings-dialog-body">
+            <label for="modelSelect">模型名称</label>
+            <select id="modelSelect" class="select-input"><option value="">加载中...</option></select>
+            <label for="templateSelect">文档模板</label>
+            <select id="templateSelect" class="select-input"><option value="article">Article（默认）</option><option value="report">Report</option><option value="book">Book</option><option value="beamer">Beamer</option><option value="cn-article">中文 Article</option></select>
+            <label for="qualityModeSelect">质量模式</label>
+            <select id="qualityModeSelect" class="select-input"><option value="standard">标准（本地转换，低成本）</option><option value="high">高质量（调用 LLM）</option></select>
+            <label for="settingsApiKey">API Key <span class="hint">（仅本次浏览器与本次任务）</span></label>
+            <input id="settingsApiKey" class="text-input" type="password" autocomplete="off" placeholder="留空则使用服务器 .env 配置">
+            <label for="settingsReasoning">推理强度</label>
+            <select id="settingsReasoning" class="select-input"><option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select>
+            <label for="settingsTranslationStyle">翻译风格</label>
+            <select id="settingsTranslationStyle" class="select-input"><option value="">学术严谨（默认）</option><option value="简洁、自然，避免冗长句式。">简洁自然</option><option value="使用正式、严谨的论文中文表达。">正式论文</option><option value="尽量保留原句结构与术语表达。">贴近原文</option></select>
+            <label for="settingsTheme">主题颜色</label>
+            <select id="settingsTheme" class="select-input"><option value="warm">暖米金</option><option value="slate">石墨蓝灰</option><option value="forest">墨绿</option></select>
+        </div>
+        <div class="settings-dialog-actions"><button class="btn-secondary" id="resetAppSettings" type="button">恢复默认</button><button class="browse-btn" id="saveAppSettings" type="button">保存设置</button></div>
+    </section>
+
+    <script src="{{ url_for('static', filename='script_enhanced.js') }}"></script>
+</body>
+</html>
